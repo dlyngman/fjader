@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
 	activityReads,
-	colorActivityWGSL,
+	connectedActivityWGSL,
 	markActivityWGSL,
 	readsFor,
 	ruleHasExtent,
@@ -16,21 +16,23 @@ const ARGS = { color: 'cm, ci, cv', x: 'x', y: 'y', group: 'g' };
 describe('activity reads', () => {
 	it('reads colour and both band axes for dots, rects and text', () => {
 		for (const r of ['dots', 'rects', 'text'] as const) {
-			expect(activityReads(r)).toEqual({ color: true, x: true, y: true });
+			expect(activityReads(r)).toEqual({ color: true, x: true, y: true, series: false });
 		}
 	});
 
-	it('reads only colour for lines, areas and parallel coordinates', () => {
-		for (const r of ['lines', 'areas', 'parallel'] as const) {
-			expect(activityReads(r)).toEqual({ color: true, x: false, y: false });
+	it('reads colour and series for lines and areas, colour only for parallel coordinates', () => {
+		for (const r of ['lines', 'areas'] as const) {
+			expect(activityReads(r)).toEqual({ color: true, x: false, y: false, series: true });
 		}
+		expect(activityReads('parallel')).toEqual({ color: true, x: false, y: false, series: false });
 	});
 
 	it('reads a rule’s cross axis only when the rule has an extent', () => {
-		expect(activityReads('rulex')).toEqual({ color: true, x: true, y: false });
-		expect(activityReads('rulex', true)).toEqual({ color: true, x: true, y: true });
-		expect(activityReads('ruley')).toEqual({ color: true, x: false, y: true });
-		expect(activityReads('ruley', true)).toEqual({ color: true, x: true, y: true });
+		const rule = (x: boolean, y: boolean) => ({ color: true, x, y, series: false });
+		expect(activityReads('rulex')).toEqual(rule(true, false));
+		expect(activityReads('rulex', true)).toEqual(rule(true, true));
+		expect(activityReads('ruley')).toEqual(rule(false, true));
+		expect(activityReads('ruley', true)).toEqual(rule(true, true));
 	});
 
 	it('maps every mark type to the renderer that draws it', () => {
@@ -99,12 +101,30 @@ describe('activity reads', () => {
 		expect(readsFor(activityReads('lines'), { color: 'c', x: 'a', y: 'b' })).toEqual(['c']);
 	});
 
-	it('builds a colour-only renderer’s activity, and refuses one that reads a band axis', () => {
+	it('reads a line’s or area’s own z, once when it is also the colour field', () => {
+		const keys = { color: 'industry', x: null, y: null, series: 'region' };
+		expect(readsFor(activityReads('lines'), keys)).toEqual(['industry', 'region']);
+		expect(readsFor(activityReads('areas'), keys)).toEqual(['industry', 'region']);
+		expect(readsFor(activityReads('lines'), { ...keys, series: 'industry' })).toEqual(['industry']);
+		// Only connected renderers read a series: a dot handed one ignores it.
+		expect(readsFor(activityReads('dots'), keys)).toEqual(['industry']);
+		expect(readsFor(activityReads('parallel'), keys)).toEqual(['industry']);
+	});
+
+	it('builds a connected renderer’s activity: colour, and the least active with series', () => {
 		const args = { color: 'cm, ci, cv', group: 'g' };
-		expect(colorActivityWGSL(activityReads('lines'), args)).toBe(
+		expect(connectedActivityWGSL(activityReads('parallel'), args)).toBe(
 			'markColorActivity(cm, ci, cv, g)'
 		);
-		expect(() => colorActivityWGSL(activityReads('dots'), args)).toThrow();
+		expect(connectedActivityWGSL(activityReads('lines'), { ...args, series: 'sm, si, sv' })).toBe(
+			'min(markColorActivity(cm, ci, cv, g), markColorActivity(sm, si, sv, g))'
+		);
+	});
+
+	it('refuses a renderer that reads a band axis, or a series without its arguments', () => {
+		const args = { color: 'cm, ci, cv', group: 'g' };
+		expect(() => connectedActivityWGSL(activityReads('dots'), args)).toThrow();
+		expect(() => connectedActivityWGSL(activityReads('lines'), args)).toThrow();
 	});
 
 	it("'filter' reads nothing and has no group; 'auto' keeps both", () => {

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { activityReads, colorActivityWGSL } from './activity-reads';
+	import { activityReads, connectedActivityWGSL } from './activity-reads';
 	import { UNIFORM_BYTES } from './uniform-sizes';
 	import { getContext, onMount, onDestroy } from 'svelte';
 	import { RendererHost } from './RendererHost.svelte';
@@ -38,7 +38,9 @@
 		DOT_RADIUS: 36, // f32
 		SHOW_BOTTOM_DOTS: 40, // u32 (0 or 1)
 		FULL_DOMAIN_SPAN: 44, // f32
-		GROUP_INDEX: 48 // u32
+		GROUP_INDEX: 48, // u32
+		ACTIVITY_SERIES_MODE: 52, // u32
+		ACTIVITY_SERIES_SCALE_INDEX: 56 // u32
 	};
 
 	interface Props {
@@ -60,6 +62,13 @@
 		colorScaleIndex?: number;
 		/** The page-wide index of this mark's filter group: which run of a field's activity block it reads. */
 		groupIndex?: number;
+		/**
+		 * The series scale selection activity is also read through, from
+		 * `seriesData`: mode 1 and its index when the mark groups by a `z` of
+		 * its own, mode 0 (no read) otherwise. MarkSeries decides.
+		 */
+		activitySeriesMode?: number;
+		activitySeriesScaleIndex?: number;
 		constantColor?: [number, number, number, number];
 		markId?: string;
 	}
@@ -82,6 +91,8 @@
 		colorMode = 0,
 		colorScaleIndex = 0,
 		groupIndex = 0,
+		activitySeriesMode = 0,
+		activitySeriesScaleIndex = 0,
 		constantColor = DEFAULT_FILL_COLOR,
 		markId = ''
 	}: Props = $props();
@@ -152,9 +163,11 @@
     showBottomDots: u32,
     fullDomainSpan: f32,
     groupIndex: u32, // Page-wide filter group index, for activity reads
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32
+    // The series scale selection activity is also read through, for a z of
+    // its own; mode 0 reads nothing.
+    activitySeriesMode: u32,
+    activitySeriesScaleIndex: u32,
+    _pad0: u32
   };
   @group(1) @binding(5) var<uniform> markConstants: MarkConstants;
 
@@ -255,8 +268,10 @@
       output.position = pixelsToClip(pos);
       output.colorValue = colorValues[instanceIdx];
       output.alpha = selectionDim(
-        ${colorActivityWGSL(ACTIVITY_READS, {
+        ${connectedActivityWGSL(ACTIVITY_READS, {
 					color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValues[instanceIdx]',
+					series:
+						'markConstants.activitySeriesMode, markConstants.activitySeriesScaleIndex, seriesValues[instanceIdx]',
 					group: 'markConstants.groupIndex'
 				})}
       );
@@ -360,8 +375,10 @@
     output.position = pixelsToClip(finalPos);
     output.colorValue = colorValues[currIdx];
     output.alpha = markConstants.fillOpacity * selectionDim(
-      ${colorActivityWGSL(ACTIVITY_READS, {
+      ${connectedActivityWGSL(ACTIVITY_READS, {
 				color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValues[currIdx]',
+				series:
+					'markConstants.activitySeriesMode, markConstants.activitySeriesScaleIndex, seriesValues[currIdx]',
 				group: 'markConstants.groupIndex'
 			})}
     );
@@ -471,6 +488,8 @@
 			view.setUint32(UNIFORM_OFFSETS.COLOR_MODE, colorMode, LE);
 			view.setUint32(UNIFORM_OFFSETS.COLOR_SCALE_INDEX, colorScaleIndex, LE);
 			view.setUint32(UNIFORM_OFFSETS.GROUP_INDEX, groupIndex, LE);
+			view.setUint32(UNIFORM_OFFSETS.ACTIVITY_SERIES_MODE, activitySeriesMode, LE);
+			view.setUint32(UNIFORM_OFFSETS.ACTIVITY_SERIES_SCALE_INDEX, activitySeriesScaleIndex, LE);
 			view.setUint32(UNIFORM_OFFSETS.ORIENTATION, orientation === 'horizontal' ? 1 : 0, LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 0, constantColor[0], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 4, constantColor[1], LE);

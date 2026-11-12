@@ -1769,9 +1769,10 @@ export class MarkLifecycleV2 {
 
 	/**
 	 * The identity keys of the categorical fields this mark's renderer reads
-	 * selection activity for, sorted: its ordinal colour and its band axes, as
-	 * activity-reads.ts says the renderer reads them. A categorical selection on
-	 * one of these dims the mark; on any other field it filters it.
+	 * selection activity for, sorted: its ordinal colour, its band axes and a
+	 * line's or area's own `z`, as activity-reads.ts says the renderer reads
+	 * them. A categorical selection on one of these dims the mark; on any other
+	 * field it filters it.
 	 */
 	#reads: readonly string[] = $derived.by(() => {
 		const renderer = rendererForMark(this.#config.markType);
@@ -1783,12 +1784,17 @@ export class MarkLifecycleV2 {
 			const band = this.#chartContext[`${axis}ScaleState`] as BandScaleState | null;
 			return band?.identityKey ?? null;
 		};
+		// The series is a field of its own only on a separate channel (`z`);
+		// without one, the series channel is the colour channel, read above.
+		const seriesChannel = this.#config._orderConfig?.seriesChannel ?? null;
+		const ownSeries = !!seriesChannel && seriesChannel !== (this.#config.colorChannel || 'fill');
 		return readsForResponse(
 			this.#reactiveConfig.selectionResponse,
 			readsFor(activityReads(renderer, this.#config.ruleExtent ?? false), {
 				color: color?.isOrdinal ? color.identityKey : null,
 				x: bandKey('x'),
-				y: bandKey('y')
+				y: bandKey('y'),
+				series: ownSeries ? (this.#seriesScaleState?.identityKey ?? null) : null
 			})
 		);
 	});

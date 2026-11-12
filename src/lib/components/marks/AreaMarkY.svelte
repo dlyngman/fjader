@@ -148,7 +148,8 @@
 		seriesChannelKey,
 		() => setup,
 		scaleRegistry,
-		chartContext
+		chartContext,
+		() => markColor.scaleState
 	);
 
 	// Color: fill determines area color — reads from entry
@@ -375,6 +376,8 @@
 			colorMode={markColor.colorMode}
 			colorScaleIndex={markColor.colorScaleIndex}
 			groupIndex={setup?.groupIndex ?? 0}
+			activitySeriesMode={markSeries.activityMode}
+			activitySeriesScaleIndex={markSeries.activityScaleIndex}
 			constantColor={markColor.constantColor}
 			fillOpacity={entry.fillOpacity ?? 0.5}
 			dotRadius={effectiveDotRadius}
@@ -396,6 +399,8 @@
 				activityColorMode={outline.activityColorMode}
 				activityColorScaleIndex={outline.activityColorScaleIndex}
 				groupIndex={setup?.groupIndex ?? 0}
+				activitySeriesMode={markSeries.activityMode}
+				activitySeriesScaleIndex={markSeries.activityScaleIndex}
 				constantColor={strokeConstantColor}
 				strokeWidth={entry.strokeWidth ?? 0}
 				zIndex={1}
@@ -414,6 +419,8 @@
 					activityColorMode={outline.activityColorMode}
 					activityColorScaleIndex={outline.activityColorScaleIndex}
 					groupIndex={setup?.groupIndex ?? 0}
+					activitySeriesMode={markSeries.activityMode}
+					activitySeriesScaleIndex={markSeries.activityScaleIndex}
 					constantColor={strokeConstantColor}
 					strokeWidth={entry.strokeWidth ?? 0}
 					zIndex={1}

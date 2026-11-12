@@ -1,6 +1,7 @@
 /**
  * Which selection activities a mark reads: its ordinal colour, its band x,
- * its band y. One answer per renderer, used twice:
+ * its band y, and a line's or area's series. One answer per renderer, used
+ * twice:
  *
  * - The renderer builds its shader's `markActivity` call from it, so a read
  *   the table does not list is passed as 1.0 and cannot happen.
@@ -37,21 +38,19 @@ export interface ActivityReads {
 	readonly color: boolean;
 	readonly x: boolean;
 	readonly y: boolean;
+	/** A line's or area's `z`: the series field when it is not the colour field. */
+	readonly series: boolean;
 }
 
-const ALL: ActivityReads = { color: true, x: true, y: true };
-const COLOR_ONLY: ActivityReads = { color: true, x: false, y: false };
+const ALL: ActivityReads = { color: true, x: true, y: true, series: false };
+const CONNECTED: ActivityReads = { color: true, x: false, y: false, series: true };
+const COLOR_ONLY: ActivityReads = { color: true, x: false, y: false, series: false };
 
 /**
  * What a renderer reads. `hasExtent` is a rule's: RuleX with y1/y2, RuleY with
- * x1/x2. Lines, areas and parallel coordinates dim by colour only: a line over
- * a band axis spans its categories.
- *
- * Not yet supported: a line or area grouped by `z` that is not its colour
- * field. Its series ids reach the shader, but only to break the line between
- * series; no activity is read through them, and the series field is not among
- * the mark's reads. So a selection on that field filters the mark in other
- * charts and does nothing in its own, instead of dimming the other series.
+ * x1/x2. Lines and areas dim by colour and by series (`z`), never by a band
+ * axis: a line over a band axis spans its categories. Parallel coordinates
+ * have no `z` and dim by colour only.
  */
 export function activityReads(renderer: ActivityRenderer, hasExtent = false): ActivityReads {
 	switch (renderer) {
@@ -60,11 +59,12 @@ export function activityReads(renderer: ActivityRenderer, hasExtent = false): Ac
 		case 'text':
 			return ALL;
 		case 'rulex':
-			return { color: true, x: true, y: hasExtent };
+			return { color: true, x: true, y: hasExtent, series: false };
 		case 'ruley':
-			return { color: true, x: hasExtent, y: true };
+			return { color: true, x: hasExtent, y: true, series: false };
 		case 'lines':
 		case 'areas':
+			return CONNECTED;
 		case 'parallel':
 			return COLOR_ONLY;
 	}
@@ -114,16 +114,18 @@ export function rendererForMark(markType: string): ActivityRenderer | null {
  * sorted, from what its renderer reads and the identity key of each of its
  * categorical scales (null for a channel with no such scale, or a scale with
  * no identity: a field with no identity has no activity to dim by, so a
- * selection on it filters the mark).
+ * selection on it filters the mark). `series` is null unless the mark has a
+ * `z` of its own; a series that is the colour field is already in `color`.
  */
 export function readsFor(
 	reads: ActivityReads,
-	keys: { color: string | null; x: string | null; y: string | null }
+	keys: { color: string | null; x: string | null; y: string | null; series?: string | null }
 ): readonly string[] {
 	const out: string[] = [];
 	if (reads.color && keys.color) out.push(keys.color);
 	if (reads.x && keys.x) out.push(keys.x);
 	if (reads.y && keys.y) out.push(keys.y);
+	if (reads.series && keys.series) out.push(keys.series);
 	if (out.length === 0) return NO_READS;
 	return [...new Set(out)].sort();
 }
@@ -159,17 +161,31 @@ export function groupIndexForResponse(
 }
 
 /**
- * The WGSL activity of a renderer that reads colour only (lines, areas,
- * parallel coordinates): `markColorActivity(...)`, or 1.0 if the table says
- * it reads nothing. Throws for a renderer that reads a band axis, whose call
- * is markActivityWGSL.
+ * The WGSL activity of a renderer that reads no band axis (lines, areas,
+ * parallel coordinates): its colour activity and, for lines and areas, its
+ * series activity, 1.0 for each the table says it does not read.
+ *
+ * `series` is markColorActivity's first three arguments for the series scale,
+ * the same lookup as colour on another scale and buffer. The mark passes mode
+ * 0 when it has no `z` of its own, so the read returns 1.0 before loading
+ * anything. The two combine by `min`, the least active wins, as in
+ * markActivity: a series on the colour field cannot dim twice.
+ *
+ * Throws for a renderer that reads a band axis, whose call is
+ * markActivityWGSL, and for one that reads a series it was given no
+ * arguments for.
  */
-export function colorActivityWGSL(
+export function connectedActivityWGSL(
 	reads: ActivityReads,
-	args: { color: string; group: string }
+	args: { color: string; series?: string; group: string }
 ): string {
-	if (reads.x || reads.y) throw new Error('colorActivityWGSL: this renderer reads a band axis');
-	return reads.color ? `markColorActivity(${args.color}, ${args.group})` : '1.0';
+	if (reads.x || reads.y) throw new Error('connectedActivityWGSL: this renderer reads a band axis');
+	if (reads.series && !args.series) {
+		throw new Error('connectedActivityWGSL: this renderer reads a series; pass its arguments');
+	}
+	const color = reads.color ? `markColorActivity(${args.color}, ${args.group})` : '1.0';
+	if (!reads.series) return color;
+	return `min(${color}, markColorActivity(${args.series}, ${args.group}))`;
 }
 
 /**

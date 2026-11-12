@@ -11,8 +11,10 @@
 		Crosshair,
 		WebGPUCanvas,
 		LineMark,
+		AreaMarkY,
 		Legend
 	} from '$lib/components';
+	import { stackY } from '$lib';
 	import { Grid } from '$lib/components/guides';
 	import Toggle from '$lib/interactors/Toggle.svelte';
 
@@ -81,10 +83,8 @@
 			</div>
 
 			<div class="chart-wrapper">
-				<h3>z="industry" (group only, constant color)</h3>
-				<!-- Selections do not dim lines grouped by z alone yet: dimming reads the
-				     stroke colour, which is constant here. -->
-				<p class="note">No click-to-dim yet: lines dim by stroke colour, not by z.</p>
+				<h3>z="industry" (group only, constant color), click a line</h3>
+				<p class="note">Dims by z: a selection here or in the other charts dims the other lines.</p>
 				<ChartContainer>
 					{#snippet background()}
 						<Frame />
@@ -110,6 +110,44 @@
 					{/snippet}
 					{#snippet foreground()}
 						<Crosshair />
+					{/snippet}
+					{#snippet interactors()}
+						<Toggle field="industry" />
+					{/snippet}
+				</ChartContainer>
+			</div>
+
+			<div class="chart-wrapper">
+				<h3>stacked area, z="industry" (constant fill), click a band</h3>
+				<p class="note">Each band and its outline dim with the selection.</p>
+				<!-- A label of its own gives it its own y scale: the stacked totals would
+				     otherwise stretch the line charts' shared "unemployed" domain. -->
+				<ChartContainer yLabel="unemployed, stacked">
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<AreaMarkY
+									table="unemployment"
+									x="date"
+									y="unemployed"
+									z="industry"
+									fill="#4269d0"
+									fillOpacity={0.6}
+									strokeWidth={1}
+									transforms={[stackY()]}
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+					{#snippet interactors()}
+						<Toggle field="industry" />
 					{/snippet}
 				</ChartContainer>
 			</div>

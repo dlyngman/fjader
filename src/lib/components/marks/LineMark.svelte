@@ -148,16 +148,16 @@
 		inferMarkScaleType(entry.y, entry.table, entry.preferredYScaleType)
 	);
 
-	// Series grouping: z overrides stroke for grouping. A selection dims a line
-	// by its stroke colour only; dimming by a separate z field is not supported
-	// yet (see activityReads in activity-reads.ts).
+	// Series grouping: z overrides stroke for grouping. A selection on either
+	// field dims the line (see activityReads in activity-reads.ts).
 	const seriesChannelKey = entry.z != null ? 'z' : 'stroke';
 	const markSeries = new MarkSeries(
 		() => entry.z ?? entry.stroke,
 		seriesChannelKey,
 		() => setup,
 		scaleRegistry,
-		chartContext
+		chartContext,
+		() => markColor.scaleState
 	);
 
 	// Color: stroke determines line color — reads from entry
@@ -577,6 +577,8 @@
 			colorMode={markColor.colorMode}
 			colorScaleIndex={markColor.colorScaleIndex}
 			groupIndex={setup?.groupIndex ?? 0}
+			activitySeriesMode={markSeries.activityMode}
+			activitySeriesScaleIndex={markSeries.activityScaleIndex}
 			constantColor={markColor.constantColor}
 			strokeWidth={entry.strokeWidth ?? 2}
 			dotRadius={effectiveDotRadius}
