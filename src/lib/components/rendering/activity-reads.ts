@@ -46,6 +46,12 @@ const COLOR_ONLY: ActivityReads = { color: true, x: false, y: false };
  * What a renderer reads. `hasExtent` is a rule's: RuleX with y1/y2, RuleY with
  * x1/x2. Lines, areas and parallel coordinates dim by colour only: a line over
  * a band axis spans its categories.
+ *
+ * Not yet supported: a line or area grouped by `z` that is not its colour
+ * field. Its series ids reach the shader, but only to break the line between
+ * series; no activity is read through them, and the series field is not among
+ * the mark's reads. So a selection on that field filters the mark in other
+ * charts and does nothing in its own, instead of dimming the other series.
  */
 export function activityReads(renderer: ActivityRenderer, hasExtent = false): ActivityReads {
 	switch (renderer) {
