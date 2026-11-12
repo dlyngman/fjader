@@ -9,14 +9,9 @@
  */
 
 import { QueryEngine } from '$lib/query-engine/QueryEngine';
-import type { DuckDBConnection } from '$lib/query-engine/QueryEngine';
+import { initDuckDB } from '$lib/query-engine/duckdb';
 import type { DataSpec } from './types';
 
-// ---------------------------------------------------------------------------
-// Configuration (must be set before first getOrCreateQueryEngine call)
-// ---------------------------------------------------------------------------
-
-/** Inline WASM bytes + worker code (for environments where separate assets can't be served). */
 // ---------------------------------------------------------------------------
 // Singleton QueryEngine
 // ---------------------------------------------------------------------------
@@ -41,26 +36,8 @@ export async function getOrCreateQueryEngine(userEngine?: QueryEngine): Promise<
 }
 
 async function initEngine(): Promise<QueryEngine> {
-	_engine = new QueryEngine(await initFromWasm());
+	_engine = new QueryEngine(await initDuckDB());
 	return _engine;
-}
-
-// ---------------------------------------------------------------------------
-// WASM init (standard CDN bundles)
-// ---------------------------------------------------------------------------
-
-async function initFromWasm(): Promise<DuckDBConnection> {
-	const duckdb = await import('@duckdb/duckdb-wasm');
-	const bundles = duckdb.getJsDelivrBundles();
-	const bundle = await duckdb.selectBundle(bundles);
-	const workerUrl = URL.createObjectURL(
-		new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' })
-	);
-	const worker = new Worker(workerUrl);
-	const db = new duckdb.AsyncDuckDB(new duckdb.VoidLogger(), worker);
-	await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-	URL.revokeObjectURL(workerUrl);
-	return (await db.connect()) as unknown as DuckDBConnection;
 }
 
 // ---------------------------------------------------------------------------

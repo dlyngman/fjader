@@ -47,7 +47,8 @@ export function getFilterGroups(): FilterGroupRegistry {
 }
 
 // Re-exports
-export { initDuckDB } from './duckdb';
+export { initDuckDB, connectionFrom } from './duckdb';
+export type { InitDuckDBOptions } from './duckdb';
 export { QueryEngine } from './QueryEngine';
 export type {
 	DuckDBConnection,
