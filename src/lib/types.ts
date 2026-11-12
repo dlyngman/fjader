@@ -335,6 +335,27 @@ export interface BaseMarkProps {
 	 *   extent then keeps the axis still while the part changes. A click on its
 	 *   Other bar toggles, as under `'auto'`.
 	 *
+	 * Background totals are two layers of the same mark: an `'ignore'` one
+	 * drawn faintly behind, the whole, and an `'auto'` one in front, the part a
+	 * brush or click elsewhere leaves. Each bar shrinks over its total instead
+	 * of losing it, and the y axis keeps the total's extent:
+	 *
+	 * ```svelte
+	 * <BarMarkY table="flights" x="carrier" y={count()} selectionResponse="ignore" fillOpacity={0.2} />
+	 * <BarMarkY table="flights" x="carrier" y={count()} />
+	 * ```
+	 *
+	 * With a top N, choose which layer ranks; the other gets
+	 * `contributeDomain={false}` and follows the axis:
+	 *
+	 * - the back layer, to rank once over the whole: the same N categories
+	 *   stay while the front bars shrink;
+	 * - the front layer, to re-rank within the selection: the N categories
+	 *   change with it, and the whole is drawn for whichever are shown.
+	 *
+	 * Not with `includeOthers`: the follower has no Other row (see
+	 * `contributeDomain`).
+	 *
 	 * A `'filter'` mark never dims. A legend, Toggle or band label filters it
 	 * in its own chart too: every such control on the same fields shares one
 	 * selection, so any chart with one would otherwise ignore it, and this

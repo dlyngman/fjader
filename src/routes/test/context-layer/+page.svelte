@@ -8,6 +8,12 @@
 	// - Click a carrier bar or a legend entry: the front bars dim to the
 	//   selection, the faint whole does not dim, and "Distance" filters its front
 	//   layer while its whole stays.
+	// - "Top 4, ranked over the whole": the back layer ranks, the front follows
+	//   the axis (contributeDomain={false}). Brush delays: the same four
+	//   carriers stay, in the same order, and their front bars shrink.
+	// - "Top 4, re-ranked within the selection": the front ranks, the whole
+	//   follows the axis. Brush delays: the four carriers can change, and the
+	//   grey totals are those of whichever four are shown.
 	// - "Top 4 + Other" is a single ignore layer: clicking its Other bar selects
 	//   the other carriers everywhere else, a second click deselects them, and
 	//   the bars themselves never change.
@@ -169,6 +175,80 @@
 									y={count()}
 									inset={0.5}
 									fill="steelblue"
+									selection="brush"
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+				</ChartContainer>
+			</div>
+
+			<div class="panel">
+				<h3>Top 4, ranked over the whole (front follows the axis)</h3>
+				<ChartContainer xLabel="carrier, top 4 whole" yLabel="flights, top 4 whole">
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<BarMarkY
+									table="context_flights"
+									x="carrier"
+									y={count()}
+									fill="#999"
+									fillOpacity={0.25}
+									transforms={[topN(4)]}
+									selection="brush"
+									selectionResponse="ignore"
+								/>
+								<BarMarkY
+									table="context_flights"
+									x="carrier"
+									y={count()}
+									fill="carrier"
+									contributeDomain={false}
+									selection="brush"
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
+				</ChartContainer>
+			</div>
+
+			<div class="panel">
+				<h3>Top 4, re-ranked within the selection (whole follows the axis)</h3>
+				<ChartContainer xLabel="carrier, top 4 part" yLabel="flights, top 4 part">
+					{#snippet background()}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+					{/snippet}
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<BarMarkY
+									table="context_flights"
+									x="carrier"
+									y={count()}
+									fill="#999"
+									fillOpacity={0.25}
+									contributeDomain={false}
+									selection="brush"
+									selectionResponse="ignore"
+								/>
+								<BarMarkY
+									table="context_flights"
+									x="carrier"
+									y={count()}
+									fill="carrier"
+									transforms={[topN(4)]}
 									selection="brush"
 								/>
 							{/snippet}
