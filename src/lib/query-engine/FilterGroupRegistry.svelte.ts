@@ -11,24 +11,20 @@
  */
 
 import type { ClockLoop } from '$lib/animation';
+import { untrack } from 'svelte';
+import { SvelteMap } from 'svelte/reactivity';
 import { FilterGroup } from './FilterGroup.svelte';
 import { FieldActivity, type FieldActivityHost } from './FieldActivity.svelte';
 import type { QueryEngine } from './QueryEngine';
 
 export class FilterGroupRegistry {
-	#groups = new Map<string, FilterGroup>();
-
 	/**
-	 * The groups in creation order, as a reactive reader sees them: the names and
-	 * the groups, each a new array when a group is created (never mutated), so a
-	 * reader re-renders. Written in a microtask, not by `get`: templates and
-	 * deriveds call `get`, where writing state throws (`state_unsafe_mutation`). A
-	 * reader of `has`, `isActive`, `names` or `groups` re-runs one microtask after a
-	 * group appears; the plain `#groups` is current at once.
+	 * The groups by name, in creation order. Reactive, so `has`, `find`, `isActive`,
+	 * `names` and `groups` re-run when a group is created. `get` reads and writes it
+	 * untracked: templates and deriveds call `get`, and a tracked write there throws
+	 * (`state_unsafe_mutation`) or re-runs the reader on its own write.
 	 */
-	#names = $state.raw<readonly string[]>([]);
-	#all = $state.raw<readonly FilterGroup[]>([]);
-	#announcing = false;
+	#groups = new SvelteMap<string, FilterGroup>();
 	#engine: QueryEngine | null = null;
 
 	#fields = new Map<string, FieldActivity>();
@@ -77,39 +73,40 @@ export class FilterGroupRegistry {
 		this.#chartsFor = chartsFor;
 	}
 
-	/** Get or create a FilterGroup by name. Undefined/null → "default". */
+	/**
+	 * Get or create a FilterGroup by name. Undefined/null → "default".
+	 *
+	 * Untracked: a reader does not re-run because it called `get`. For a reactive
+	 * read use `find`, `has` or `isActive`, which create nothing: a group created
+	 * inside the derived that reads it is state that derived cannot track, so
+	 * `$derived(get('brush').activeCount)` before any chart made the group never
+	 * updates. Create groups from init, effects and handlers.
+	 */
 	get(name?: string | null): FilterGroup {
 		const key = name ?? 'default';
-		let g = this.#groups.get(key);
-		if (!g) {
-			// Indices are never reused or compacted: a mark keeps its group's
-			// index from mount, so renumbering would point it at another group.
-			g = new FilterGroup(this.#groups.size, (field) => this.field(field));
-			if (this.#engine) g.setEngine(this.#engine);
-			this.#groups.set(key, g);
-			this.#announce();
-		}
-		return g;
-	}
-
-	/** Publish the groups to reactive readers, once per microtask however many were created. */
-	#announce(): void {
-		if (this.#announcing) return;
-		this.#announcing = true;
-		queueMicrotask(() => {
-			this.#announcing = false;
-			this.#names = [...this.#groups.keys()];
-			this.#all = [...this.#groups.values()];
+		return untrack(() => {
+			let g = this.#groups.get(key);
+			if (!g) {
+				// Indices are never reused or compacted: a mark keeps its group's
+				// index from mount, so renumbering would point it at another group.
+				g = new FilterGroup(this.#groups.size, (field) => this.field(field));
+				if (this.#engine) g.setEngine(this.#engine);
+				this.#groups.set(key, g);
+			}
+			return g;
 		});
 	}
 
 	/**
-	 * Whether a named group exists, without creating it. Reactive: a reader re-runs
-	 * when the group is created. (`get` creates, and a group created inside the
-	 * reading derived is state that derived cannot track.)
+	 * The named group, or undefined if no chart has made it yet. Creates nothing.
+	 * Reactive: a reader re-runs when the group is created.
 	 */
+	find(name?: string | null): FilterGroup | undefined {
+		return this.#groups.get(name ?? 'default');
+	}
+
+	/** Whether a named group exists, without creating it. Reactive, as `find`. */
 	has(name?: string | null): boolean {
-		void this.#names;
 		return this.#groups.has(name ?? 'default');
 	}
 
@@ -120,28 +117,27 @@ export class FilterGroupRegistry {
 	 * is safe before any chart exists.
 	 */
 	isActive(name?: string | null): boolean {
-		void this.#names;
-		const group = this.#groups.get(name ?? 'default');
+		const group = this.find(name);
 		return group ? group.activeCount > 0 : false;
 	}
 
 	/**
-	 * The names of the groups, in creation order. Reactive; a new array when a
-	 * group is created. For app code that must reach every group the page's marks
+	 * The names of the groups, in creation order. Reactive: a reader re-runs when a
+	 * group is created. A new array on each read. For app code that must reach every group the page's marks
 	 * use, such as a clause that applies to the whole page.
 	 */
 	get names(): readonly string[] {
-		return this.#names;
+		return [...this.#groups.keys()];
 	}
 
 	/** The groups, in the order of `names`. Reactive in the same way. */
 	get groups(): readonly FilterGroup[] {
-		return this.#all;
+		return [...this.#groups.values()];
 	}
 
 	/** How many groups the page has: the packer writes one activity half per group. */
 	get groupCount(): number {
-		return this.#groups.size;
+		return untrack(() => this.#groups.size);
 	}
 
 	/**
