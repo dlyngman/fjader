@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, ClassVar
 from ._base import Mark
 
 if TYPE_CHECKING:
-    from ..fields import FieldSpec
+    from ..fields import ColorChannel, FieldSpec
     from .._types import CurveType, ScaleType
 
 
@@ -16,7 +16,7 @@ class LineMark(Mark):
 
     x: FieldSpec | None = None
     y: FieldSpec | None = None
-    stroke: FieldSpec | None = None
+    stroke: ColorChannel | None = None
     """Data-driven stroke color — column name for color scale, or None."""
     z: FieldSpec | None = None
     """Explicit series grouping (overrides implicit grouping from stroke)."""

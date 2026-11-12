@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, ClassVar
 from ._base import Mark
 
 if TYPE_CHECKING:
-    from ..fields import FieldSpec
+    from ..fields import ColorChannel, FieldSpec
 
 
 @dataclass
@@ -17,7 +17,7 @@ class BarXMark(Mark):
     x1: FieldSpec | None = None
     x2: FieldSpec | None = None
     y: FieldSpec | None = None
-    fill: FieldSpec | None = None
+    fill: ColorChannel | None = None
     opacity: float | None = None
     padding: float | None = None
     padding_inner: float | None = None
@@ -39,7 +39,7 @@ class BarYMark(Mark):
     y: FieldSpec | None = None
     y1: FieldSpec | None = None
     y2: FieldSpec | None = None
-    fill: FieldSpec | None = None
+    fill: ColorChannel | None = None
     opacity: float | None = None
     padding: float | None = None
     padding_inner: float | None = None

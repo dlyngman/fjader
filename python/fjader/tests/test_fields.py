@@ -135,3 +135,35 @@ class TestFieldSpecSerialization:
 
         result = serialize_value(fj.bin("x", steps=20))
         assert result == {"bin": "x", "steps": 20}
+
+
+class TestColors:
+    def test_dict_pins_values_to_colours(self):
+        assert fj.colors("won", {0: "#d62728", 1: "#2ca02c"}).to_dict() == {
+            "field": "won",
+            "domain": [0, 1],
+            "range": ["#d62728", "#2ca02c"],
+        }
+
+    def test_list_is_a_palette(self):
+        assert fj.colors("species", ["red", "blue"]).to_dict() == {
+            "field": "species",
+            "range": ["red", "blue"],
+        }
+
+    def test_list_with_domain(self):
+        assert fj.colors("s", ["red", "blue"], domain=["b", "a"]).to_dict() == {
+            "field": "s",
+            "domain": ["b", "a"],
+            "range": ["red", "blue"],
+        }
+
+    def test_dict_with_domain_is_an_error(self):
+        import pytest
+
+        with pytest.raises(ValueError):
+            fj.colors("s", {"a": "red"}, domain=["a"])
+
+    def test_serializes_as_a_mark_fill(self):
+        mark = fj.bar_y(table="t", x="team", y=fj.count(), fill=fj.colors("won", {0: "red", 1: "green"}))
+        assert mark.to_mark_dict()["fill"] == {"field": "won", "domain": [0, 1], "range": ["red", "green"]}

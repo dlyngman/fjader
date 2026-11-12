@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, ClassVar
 from ._base import Mark
 
 if TYPE_CHECKING:
-    from ..fields import FieldSpec
+    from ..fields import ColorChannel, FieldSpec
     from .._types import ScaleType
 
 
@@ -16,7 +16,7 @@ class DotMark(Mark):
 
     x: FieldSpec | None = None
     y: FieldSpec | None = None
-    fill: FieldSpec | None = None
+    fill: ColorChannel | None = None
     opacity: float | None = None
     r: float | FieldSpec | None = None
     radius_range: list[float] | tuple[float, float] | None = None
