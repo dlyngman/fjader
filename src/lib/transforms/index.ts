@@ -980,7 +980,9 @@ export function stackX(options: StackXOptions = {}): SqlTransform | JsTransform 
 function resolveStackColumns(
 	aliases: string[],
 	config: MarkConfig | undefined,
-	direction: 'y' | 'x'
+	direction: 'y' | 'x',
+	/** Called when there is no series column; the caller decides whether that is worth saying. */
+	onNoSeries: (aliases: string[]) => void
 ): { band: string; value: string; series: string | null } {
 	const bandAxis = direction === 'y' ? 'x' : 'y';
 	const band = config?.[bandAxis] as string | undefined;
@@ -1001,24 +1003,37 @@ function resolveStackColumns(
 	const fill = config?.fill;
 	const series = typeof fill === 'string' && aliases.includes(fill) ? fill : null;
 
-	// With no series column there is one row per band, so the cumulative sum equals
-	// that row's own value and the stack is arithmetically a no-op — the output is
-	// identical to an unstacked mark. That is the correct result, but it is
-	// indistinguishable from a broken stack to anyone looking at the chart, so say
-	// what is missing rather than silently drawing an ordinary bar.
-	if (!series) {
+	if (!series) onNoSeries(aliases);
+
+	return { band, value, series };
+}
+
+/**
+ * `implicit`: added by the mark (withImplicitStack), not written by the user.
+ *
+ * With no series column there is one row per band, so the cumulative sum equals
+ * that row's own value and the stack is arithmetically a no-op. For a stack the
+ * user wrote, that is indistinguishable from a broken one on screen, so it says
+ * what is missing, once per transform rather than on every query assembled. An
+ * implicit stack says nothing: every bar mark without a fill gets one, and it is
+ * the ordinary bar it draws, not a mistake.
+ */
+function stackSQL(
+	direction: 'y' | 'x',
+	options: StackYOptions | StackXOptions,
+	implicit = false
+): SqlTransform {
+	const [loName, hiName] = direction === 'y' ? ['y0', 'y1'] : ['x0', 'x1'];
+	let warned = implicit;
+	const onNoSeries = (aliases: string[]) => {
+		if (warned) return;
+		warned = true;
 		console.warn(
 			`stack${direction === 'y' ? 'Y' : 'X'}: no series column, so stacking has no effect ` +
 				`(one row per band). Stacking groups rows within a band by the ordinal ` +
 				`fill channel — add fill="<field>" to the mark. Select list: [${aliases.join(', ')}].`
 		);
-	}
-
-	return { band, value, series };
-}
-
-function stackSQL(direction: 'y' | 'x', options: StackYOptions | StackXOptions): SqlTransform {
-	const [loName, hiName] = direction === 'y' ? ['y0', 'y1'] : ['x0', 'x1'];
+	};
 
 	return {
 		stage: 'sql',
@@ -1030,7 +1045,7 @@ function stackSQL(direction: 'y' | 'x', options: StackYOptions | StackXOptions):
 		channels: [loName, hiName],
 		apply(query: SelectQuery, config?: MarkConfig) {
 			const aliases = getSelectAliases(query);
-			const { band, value, series } = resolveStackColumns(aliases, config, direction);
+			const { band, value, series } = resolveStackColumns(aliases, config, direction, onNoSeries);
 
 			const valueCol = column(value);
 			const bandCol = column(band);
@@ -1451,9 +1466,7 @@ export function withImplicitStack(
 		? direction === 'y'
 			? stackY({ engine: 'js' })
 			: stackX({ engine: 'js' })
-		: direction === 'y'
-			? stackY()
-			: stackX();
+		: stackSQL(direction, {}, true);
 	return [...transforms, implicitStack];
 }
 
