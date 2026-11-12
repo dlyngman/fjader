@@ -285,11 +285,8 @@ export function registerDataDerivedDomains(
 				// order the ranked query had. See RANK_COLUMN.
 				const ranked = data.getColumn(RANK_COLUMN) != null;
 				const ids = extractIdsRankedFromData(data, axis, RANK_COLUMN);
-				// A y band axis puts slot 0 at the bottom and a ranking is read
-				// from the top. Reversed here, once, for every ranked axis —
-				// topN's and the sort's alike — rather than by whichever transform
-				// produced the rank.
-				if (ranked && axis === 'y') ids.reverse();
+				// Used as ranked on both axes: slot 0 is at the left of x and the
+				// top of y, where a ranking is read from.
 				if (ids.length === 0) continue;
 				// `sorted` says this list is a ranking the axis should prefer over
 				// first-appearance order from other marks on the same scale.

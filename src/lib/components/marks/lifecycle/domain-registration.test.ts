@@ -54,11 +54,10 @@ describe('registerDataDerivedDomains on a band axis', () => {
 		expect(s.effectiveDomain).toEqual(['C', 'A', 'D', 'B']);
 	});
 
-	it('reverses a y axis, so rank 1 is at the top', () => {
+	it('ranks a y axis as an x axis, rank 1 first: slot 0 is the top', () => {
 		const s = scale();
 		register('y', rows('y', [0, 1, 2, 3], [2, 4, 1, 3]), s);
-		// Slot 0 is the bottom of a y axis.
-		expect(s.effectiveDomain).toEqual(['B', 'D', 'A', 'C']);
+		expect(s.effectiveDomain).toEqual(['C', 'A', 'D', 'B']);
 	});
 
 	it('leaves a NaN-ranked row off the axis', () => {

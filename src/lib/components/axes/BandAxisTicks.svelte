@@ -105,7 +105,7 @@
 </script>
 
 {#each ticks as tick (tick.key)}
-	{@const pos = scale.tickPosition(tick.key, rangeSize, axis)}
+	{@const pos = scale.tickPosition(tick.key, rangeSize)}
 	<g opacity={opacityOf(tick)}>
 		{#if axis === 'x'}
 			<line x1={pos} x2={pos} y1={base} y2={tickEnd} />

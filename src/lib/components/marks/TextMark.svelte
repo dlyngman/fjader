@@ -391,17 +391,12 @@
 		// range: a label off the left edge, or below the axis, where the shader
 		// discards the bar it belongs to. The GPU states this discard explicitly
 		// rather than leaving it to the scissor rect, and so does this.
-		const slotted = (
-			band: BandScaleState,
-			raw: string | number,
-			range: number,
-			axis: 'x' | 'y'
-		) => {
+		const slotted = (band: BandScaleState, raw: string | number, range: number) => {
 			const key = bandSlotKey(band, raw);
 			if (key == null) return null;
 			// Asked once and handed on: tickPosition would look it up again.
 			const slot = band.tickSlot(key);
-			return slot < 0 ? null : band.slotPosition(slot, range, axis);
+			return slot < 0 ? null : band.slotPosition(slot, range);
 		};
 
 		const newPos = new Array(items.length);
@@ -410,13 +405,13 @@
 			let px, py;
 
 			if (xBand) {
-				px = slotted(xBand, xRaw[dataIdx], rangeX, 'x');
+				px = slotted(xBand, xRaw[dataIdx], rangeX);
 			} else {
 				px = xScale(xRaw[dataIdx]);
 			}
 
 			if (yBand) {
-				py = slotted(yBand, yRaw[dataIdx], rangeY, 'y');
+				py = slotted(yBand, yRaw[dataIdx], rangeY);
 			} else {
 				py = yScale(yRaw[dataIdx]);
 			}

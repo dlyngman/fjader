@@ -249,10 +249,10 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
 					rangeMax
 				);
 				
-				// Return center of band
-				// X: left to right (index 0 at left)
-				// Y: bottom to top (index 0 at bottom, matching D3 convention)
-				${axis === 'y' ? 'return rangeMax - bandLayout.x - bandLayout.y * 0.5;' : 'return rangeMin + bandLayout.x + bandLayout.y * 0.5;'}
+				// Return center of band, slot 0 at the start of the range on both
+				// axes: the left on x, the top on y, so a y band axis reads top-down
+				// like a list and its exit (one past the last slot) is the list's end.
+				return rangeMin + bandLayout.x + bandLayout.y * 0.5;
 			}
   	`,
 

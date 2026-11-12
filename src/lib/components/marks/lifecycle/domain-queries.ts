@@ -148,9 +148,8 @@ export async function fetchCategoricalDomains(
 		if (skipBandFetch) {
 			// Registered from the data.
 		} else if (explicitDomain?.y && yScaleState) {
-			// Y band scale maps index 0 → bottom, so reverse the user's
-			// top-to-bottom array to match GPU rendering order.
-			deferredExplicitY = [...explicitDomain.y].reverse();
+			// Slot 0 is at the top of a y band axis, so the list is used as given.
+			deferredExplicitY = explicitDomain.y;
 		} else {
 			setupFetch('y', select.y, yScaleState);
 		}

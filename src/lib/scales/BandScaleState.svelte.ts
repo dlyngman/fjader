@@ -742,8 +742,10 @@ export class BandScaleState {
 	/**
 	 * Get D3 band scale configured for rendering
 	 */
-	getBaseScale(axis: string, innerWidthOrHeight: number): ScaleBand<DimValue> {
-		this.#sharedScale.range(axis === 'x' ? [0, innerWidthOrHeight] : [innerWidthOrHeight, 0]);
+	getBaseScale(_axis: string, innerWidthOrHeight: number): ScaleBand<DimValue> {
+		// The same on both axes, not reversed on y: slot 0 is at the top, as in
+		// the shader (slotPosition).
+		this.#sharedScale.range([0, innerWidthOrHeight]);
 
 		if (this.#paddingInner !== null && this.#paddingOuter !== null) {
 			this.#sharedScale.paddingInner(this.#paddingInner).paddingOuter(this.#paddingOuter);
@@ -888,11 +890,11 @@ export class BandScaleState {
 	/**
 	 * Where a tick's label sits now, in pixels along the axis: the centre of its
 	 * category's current slot, so it travels with the bar. Slot 0 is at the start
-	 * of the range on x and at the bottom on y, as in the shader and d3's
-	 * reversed range. Per frame, O(1).
+	 * of the range on both axes: the left on x, the top on y, as in the shader
+	 * and d3's range. Per frame, O(1).
 	 */
-	tickPosition(key: number, rangeSize: number, axis: 'x' | 'y'): number {
-		return this.slotPosition(this.tickSlot(key), rangeSize, axis);
+	tickPosition(key: number, rangeSize: number): number {
+		return this.slotPosition(this.tickSlot(key), rangeSize);
 	}
 
 	/**
@@ -900,12 +902,14 @@ export class BandScaleState {
 	 *
 	 * A consumer that has to test the slot first — an SVG label, which must not
 	 * draw a category the axis is not displaying — would otherwise ask for it
-	 * twice per item per frame. The axis flip lives here rather than being
-	 * re-derived by such a caller.
+	 * twice per item per frame.
+	 *
+	 * The same on both axes. A y band axis reads top-down, like a list: slot 0
+	 * at the top, so a ranking and an explicit domain need no reversing, and
+	 * the exit one past the last slot is the end of the list on either axis.
 	 */
-	slotPosition(slot: number, rangeSize: number, axis: 'x' | 'y'): number {
-		const centre = this.slotCenter(slot, rangeSize);
-		return axis === 'y' ? rangeSize - centre : centre;
+	slotPosition(slot: number, rangeSize: number): number {
+		return this.slotCenter(slot, rangeSize);
 	}
 
 	/**
@@ -993,7 +997,8 @@ export class BandScaleState {
 	invertScreenToData(
 		screenVal: number,
 		rangeSize: number,
-		isYAxis: boolean = false
+		// Band slots run from the start of the range on both axes (slotPosition).
+		_isYAxis: boolean = false
 	): number | null {
 		const config = this.getConfig();
 		const n = config.categoryCount;
@@ -1004,11 +1009,7 @@ export class BandScaleState {
 
 		const offset = config.paddingOuter * stepSize;
 
-		// GPU band scale renders Y categories bottom-to-top (matching D3),
-		// so flip screen coordinate for Y axis inversion.
-		const pos = isYAxis ? rangeSize - screenVal : screenVal;
-
-		const bandIndex = Math.floor((pos - offset) / stepSize);
+		const bandIndex = Math.floor((screenVal - offset) / stepSize);
 
 		// Clamped to a WHOLE slot. Mid-transition the count is fractional, so a
 		// bare `n - 1` hands back a fraction for a pointer past the last band —
