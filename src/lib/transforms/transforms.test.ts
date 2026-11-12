@@ -527,8 +527,8 @@ describe('dense().alignment on a binned axis', () => {
 	// min + alpha * (k + offset), and a rect carries the same bins twice, its
 	// upper edge at offset 1.
 	const bins = (count = 40) => ({
-		x1: { kind: 'number' as const, min: 0, alpha: 50, count, offset: 0 },
-		x2: { kind: 'number' as const, min: 0, alpha: 50, count, offset: 1 }
+		x1: { kind: 'number' as const, source: '"x"', min: 0, alpha: 50, count, offset: 0 },
+		x2: { kind: 'number' as const, source: '"x"', min: 0, alpha: 50, count, offset: 1 }
 	});
 	const histogram = {
 		markType: 'recty',
@@ -560,7 +560,10 @@ describe('dense().alignment on a binned axis', () => {
 		const twoD = {
 			...histogram,
 			groupKeys: ['x1', 'x2', 'y1', 'y2'],
-			bins: { ...bins(), y1: { kind: 'number' as const, min: 0, alpha: 1, count: 30, offset: 0 } }
+			bins: {
+				...bins(),
+				y1: { kind: 'number' as const, source: '"x"', min: 0, alpha: 1, count: 30, offset: 0 }
+			}
 		} as MarkConfig;
 		expect(dense().alignment!(['x1', 'x2', 'y1', 'y2', 'fill'], twoD)).toBeNull();
 		const beside = {
@@ -581,6 +584,7 @@ describe('dense().alignment on a binned axis', () => {
 	it('aligns time buckets like numeric bins, and counts their estimate against the limit', () => {
 		const months = (count: number, offset: number) => ({
 			kind: 'time' as const,
+			source: '"d"',
 			interval: 'INTERVAL 1 month',
 			minMs: 0,
 			maxMs: 1,
@@ -600,6 +604,42 @@ describe('dense().alignment on a binned axis', () => {
 	it('pads nothing for a bin channel that is not a group key, or a select without one', () => {
 		expect(dense().alignment!(['x', 'y'], { ...histogram, groupKeys: ['x'] })).toBeNull();
 		expect(dense().alignment!(ALIASES, { ...histogram, groupKeys: null })).toBeNull();
+	});
+});
+
+describe('TransformCompiler.padRows', () => {
+	// What a preagg table may hold in place of padding its reads: only when
+	// nothing before padding would see the extra rows.
+	const config = {
+		markType: 'recty',
+		table: 't',
+		groupKeys: ['x1', 'x2'],
+		bins: {
+			x1: { kind: 'number' as const, source: '"x"', min: 0, alpha: 50, count: 20, offset: 0 },
+			x2: { kind: 'number' as const, source: '"x"', min: 0, alpha: 50, count: 20, offset: 1 }
+		}
+	} as MarkConfig;
+	const ALIASES = ['x1', 'x2', 'y'];
+
+	it('gives the zero rows padding would add, as a SELECT of every channel', () => {
+		const rows = new TransformCompiler([dense()], config).padRows(ALIASES);
+		expect(rows).toMatch(/range\(0, 20\)/);
+		expect(rows).toMatch(/AS "x1".*AS "x2".*AS "y"/s);
+	});
+
+	it('gives none past a topN, whose ranking would see them, or with nothing to pad', () => {
+		const ranked = { ...config, identity: {} } as MarkConfig;
+		expect(new TransformCompiler([topN(3), dense()], ranked).padRows(ALIASES)).toBeNull();
+		expect(new TransformCompiler([], config).padRows(ALIASES)).toBeNull();
+		expect(new TransformCompiler([dense({ enabled: false })], config).padRows(ALIASES)).toBeNull();
+	});
+
+	it('leaves a read of a padded table as it is, apart from its order', () => {
+		const query = Query.from('t').select({ x1: column('x1'), x2: column('x2'), y: column('y') });
+		const padded = new TransformCompiler([dense()], config).applyToQuery(query as SelectQuery, {
+			padded: true
+		});
+		expect(String(padded)).toBe(String(query));
 	});
 });
 

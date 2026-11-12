@@ -55,6 +55,8 @@ export interface QueryParts {
 	 * histogram to every bin; preagg reads copy them, so both paths pad alike.
 	 */
 	bins?: Record<string, BinPadding> | null;
+	/** The query reads a preagg table that already holds its padding rows. */
+	padded?: boolean;
 	orderChannels: string[] | null;
 	aliasMap: Map<string, string>;
 	/** Channels whose raw config value was a column-name passthrough (string
@@ -459,7 +461,7 @@ export function assembleQuery(opts: AssembleOptions): Query {
 	if (hasSQLTransforms) {
 		result = transformCompiler.applyToQuery(
 			q,
-			{ groupKeys: parts.groupKeys, bins: parts.bins ?? null },
+			{ groupKeys: parts.groupKeys, bins: parts.bins ?? null, padded: parts.padded ?? false },
 			{ skipRowFilters }
 		);
 	}

@@ -1,5 +1,13 @@
 import type { ExprNode, ExprValue, BinHistogramOptions, BinDateOptions } from '@uwdata/mosaic-sql';
-import { binDate, binHistogram, binSpec, column, interval, timeInterval } from '@uwdata/mosaic-sql';
+import {
+	binDate,
+	binHistogram,
+	binSpec,
+	column,
+	interval,
+	sql,
+	timeInterval
+} from '@uwdata/mosaic-sql';
 import { isTemporalScale } from '$lib/scales/scale-categories';
 import type { BinPadding } from '$lib/types';
 
@@ -14,6 +22,45 @@ interface FieldInfo {
 	min?: number;
 	max?: number;
 	type?: string;
+}
+
+/**
+ * Numeric bins over [min, max]: binHistogram's own derivation (binSpec, with
+ * the linear transform it is given), as the first edge and the width.
+ */
+function numericBins(
+	min: number,
+	max: number,
+	options: BinOptions
+): { min: number; alpha: number } {
+	const b = binSpec(min, max, options);
+	return { min: b.min, alpha: (b.max - b.min) / b.steps || 1 };
+}
+
+/**
+ * The edge of numeric bin `index` (SQL), `min + alpha * (index + offset)`, in
+ * DOUBLE arithmetic. The one formula both `bin()` and `dense()`'s padding
+ * write, so a bin's edge is the same bits whichever produced it: a padded row
+ * then merges with a real one, and a mark's rows are the same bits whether
+ * they came from the base table or a preagg table.
+ */
+export function numericBinEdgeSQL(
+	min: number,
+	alpha: number,
+	offset: number,
+	index: string
+): string {
+	return `(${sqlDouble(min)} + ${sqlDouble(alpha)} * (${index} + ${offset}))`;
+}
+
+/** A JS number as a DOUBLE literal: a bare 0.1 would be read as a DECIMAL. */
+function sqlDouble(n: number): string {
+	return `CAST(${JSON.stringify(n)} AS DOUBLE)`;
+}
+
+/** Engine-built SQL text as an expression node. Never user input. */
+function sqlFragment(text: string): ExprNode {
+	return sql([text] as unknown as TemplateStringsArray);
 }
 
 /** A time unit's typical length, for estimating a bucket count. */
@@ -64,9 +111,15 @@ export class AutoBinNode {
 			currentDomain,
 			binStepMultiplier
 		);
-		return isTemporal
-			? binDate(col, [min, max], binOptions)
-			: binHistogram(col, [min, max], binOptions);
+		if (isTemporal) return binDate(col, [min, max], binOptions);
+		// A single value: binHistogram floors it rather than binning.
+		if (max === min) return binHistogram(col, [min, max], binOptions);
+		// binHistogram's bins, written with the formula dense() pads with, so a
+		// real row's edge and a padded row's are the same bits (see
+		// numericBinEdgeSQL).
+		const { min: lo, alpha } = numericBins(min, max, binOptions);
+		const index = `floor((CAST(${col} AS DOUBLE) - ${sqlDouble(lo)}) / ${sqlDouble(alpha)})`;
+		return sqlFragment(numericBinEdgeSQL(lo, alpha, binOptions.offset ?? 0, index));
 	}
 
 	/**
@@ -90,13 +143,14 @@ export class AutoBinNode {
 		binStepMultiplier: number = 1.0,
 		t0: number | null = null
 	): BinPadding | null {
-		const { min, max, isTemporal, binOptions } = this.#plan(
+		const { col, min, max, isTemporal, binOptions } = this.#plan(
 			fieldInfo,
 			scaleType,
 			currentDomain,
 			binStepMultiplier
 		);
 		const offset = binOptions.offset ?? 0;
+		const source = String(col);
 		if (isTemporal) {
 			if (t0 === null) return null;
 			// binDate's own choice of unit and step.
@@ -106,6 +160,7 @@ export class AutoBinNode {
 			const width = (UNIT_MS[unit] ?? UNIT_MS.day) * step;
 			return {
 				kind: 'time',
+				source,
 				interval: String(interval(unit, step)),
 				minMs: min,
 				maxMs: max,
@@ -115,14 +170,13 @@ export class AutoBinNode {
 			};
 		}
 		if (max === min) return null;
-		// binHistogram's own derivation, with the linear transform it is given.
-		const b = binSpec(min, max, binOptions);
-		const alpha = (b.max - b.min) / b.steps || 1;
+		const { min: lo, alpha } = numericBins(min, max, binOptions);
 		return {
 			kind: 'number',
-			min: b.min,
+			source,
+			min: lo,
 			alpha,
-			count: Math.floor((max - b.min) / alpha) + 1,
+			count: Math.floor((max - lo) / alpha) + 1,
 			offset
 		};
 	}
