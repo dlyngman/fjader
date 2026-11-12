@@ -11,7 +11,7 @@ import { SizeScaleState } from './SizeScaleState.svelte';
 import { scaleOrdinal } from 'd3-scale';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import { MAX_COLOR_SLOTS } from '$lib/gpu/ColorScaleShaderLib';
-import type { ColorScaleType } from '$lib/types';
+import type { ColorDomainValue, ColorScaleType } from '$lib/types';
 import { isTransformType } from './color-utils';
 
 export type AnyScaleState =
@@ -370,7 +370,9 @@ export class ScaleRegistry {
 								reverse: (config.reverse as boolean | undefined) ?? false,
 								midpoint: config.midpoint as number | undefined,
 								constant: config.constant as number | undefined,
-								exponent: config.exponent as number | undefined
+								exponent: config.exponent as number | undefined,
+								range: config.range as readonly string[] | undefined,
+								pinnedDomain: config.pinnedDomain as readonly ColorDomainValue[] | undefined
 							},
 							this,
 							this.#gpuCoordinator

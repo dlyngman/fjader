@@ -60,7 +60,20 @@ export type FieldRef = string | ExprNode;
  */
 export type ChannelRef = FieldRef | AutoBinNode | RollingAvgNode;
 
-/** Color prop: CSS constant, column name, object wrapper {field, scheme?, type?}, SQL node, or null. */
+/** A category value a colour can be pinned to. */
+export type ColorDomainValue = string | number | boolean | null;
+
+/**
+ * Color prop: CSS constant, column name, object wrapper, SQL node, or null.
+ *
+ * The object wrapper takes a scheme and type, or explicit ordinal colours:
+ *
+ *   { field: 'won', domain: [0, 1], range: ['#d62728', '#2ca02c'] }
+ *
+ * `range` replaces the scheme's colours, which go to the values in sorted
+ * order. `domain` pins values to them instead: domain[i] draws range[i], and
+ * values outside it draw the null colour. Either one makes the scale ordinal.
+ */
 export type ColorProp =
 	| FieldRef
 	| {
@@ -69,6 +82,8 @@ export type ColorProp =
 			type?: ColorScaleType;
 			constant?: number;
 			exponent?: number;
+			domain?: readonly ColorDomainValue[];
+			range?: readonly string[];
 	  }
 	| null;
 
