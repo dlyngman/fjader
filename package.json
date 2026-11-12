@@ -18,7 +18,7 @@
 		"type": "git",
 		"url": "git+https://github.com/dlyngman/fjader.git"
 	},
-	"version": "0.2.3",
+	"version": "0.2.4",
 	"type": "module",
 	"svelte": "./dist/index.js",
 	"exports": {
