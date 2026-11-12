@@ -882,11 +882,8 @@ describe('BandScaleState identity <-> display translation', () => {
 					>;
 					for (const tick of s.bandTicks()) {
 						const expected = d3(tick.value!)! + d3.bandwidth() / 2;
-						const actual =
-							axis === 'x'
-								? s.slotCenter(s.tickSlot(tick.key), size)
-								: size - s.slotCenter(s.tickSlot(tick.key), size);
-						expect(actual).toBeCloseTo(expected, 3);
+						// From the start of the range on both axes: slot 0 is the top of y.
+						expect(s.slotCenter(s.tickSlot(tick.key), size)).toBeCloseTo(expected, 3);
 					}
 				}
 			});
@@ -1685,20 +1682,22 @@ describe('BandScaleState tick placement', () => {
 		return scale;
 	}
 
-	it('puts a tick at the centre of its band, as d3 does, from the start on x and the end on y', () => {
+	it('puts a tick at the centre of its band, as d3 does, from the start of the range on both axes', () => {
 		const scale = scaleOf(['a', 'b', 'c']);
 		const d3x = scale.getBaseScale('x', 300);
 		scale.updateScaleDomain(d3x as never);
 		// The first category, not the middle one: a middle band sits in the same
-		// place counted from either end, so it could not tell x from y.
+		// place counted from either end, so it could not tell the start from the end.
 		const centreX = (d3x('a') ?? NaN) + d3x.bandwidth() / 2;
-		expect(scale.tickPosition(0, 300, 'x')).toBeCloseTo(centreX, 6);
+		expect(scale.tickPosition(0, 300)).toBeCloseTo(centreX, 6);
+		expect(centreX).toBeLessThan(150);
 
-		const d3y = scale.getBaseScale('y', 300);
+		// A y band axis reads top-down: the first category at the top, near 0.
+		const d3y = scale.getBaseScale('y', 200);
 		scale.updateScaleDomain(d3y as never);
 		const centreY = (d3y('a') ?? NaN) + d3y.bandwidth() / 2;
-		expect(scale.tickPosition(0, 300, 'y')).toBeCloseTo(centreY, 6);
-		expect(centreY).not.toBeCloseTo(centreX, 0);
+		expect(scale.tickPosition(0, 200)).toBeCloseTo(centreY, 6);
+		expect(centreY).toBeLessThan(100);
 	});
 });
 
@@ -1830,7 +1829,7 @@ describe('BandScaleState tick placement for an id it is not showing', () => {
 		expect(scale.tickSlot(0)).toBe(0);
 		expect(scale.tickSlot(2)).toBe(-1);
 		// The trap, stated so it stays stated: this is a plausible number.
-		expect(scale.tickPosition(2, 300, 'x')).toBeLessThan(0);
+		expect(scale.tickPosition(2, 300)).toBeLessThan(0);
 	});
 });
 

@@ -352,6 +352,91 @@
 					</ChartContainer>
 				</div>
 			</div>
+			<!-- Chart 6b: Horizontal selection + topN(5), filtered -->
+			<div class="chart-panel">
+				<h3>6b. Horizontal selection + topN(5), filtered</h3>
+				<p class="desc">
+					Chart 6 on its side. Largest at the top. Toggle a region here or in chart 5: categories
+					dropping out of the top 5 leave at the bottom and new ones enter there, without crossing
+					the other bars.
+				</p>
+				<div class="chart-wrapper">
+					<ChartContainer xLabel="Revenue" yLabel="Category" legendPosition="top">
+						{#snippet legend()}
+							<Legend color="region" selection="brush" />
+						{/snippet}
+						{#snippet background()}
+							<Frame />
+							<AxisLeft />
+							<AxisBottom />
+							<MarginLabel />
+						{/snippet}
+						{#snippet canvas()}
+							<WebGPUCanvas>
+								{#snippet canvasComponents()}
+									<Grid />
+									<BarMarkX
+										table="top_n_by_region"
+										x={sum('revenue')}
+										y="category"
+										fill="region"
+										sort={{ y: 'x', order: 'desc' }}
+										selection="brush"
+										selectionResponse="filter"
+										transforms={[topN(5)]}
+										tooltip
+									/>
+								{/snippet}
+							</WebGPUCanvas>
+						{/snippet}
+						{#snippet interactors()}
+							<Toggle selection="brush" field="region" />
+						{/snippet}
+					</ChartContainer>
+				</div>
+			</div>
+			<!-- Chart 7b: Horizontal selection + topN(5, includeOthers), filtered -->
+			<div class="chart-panel">
+				<h3>7b. Horizontal selection + topN(5, includeOthers), filtered</h3>
+				<p class="desc">
+					Chart 7 on its side. Other stays at the bottom; categories leaving the top 5 travel into
+					it and entering ones come out of it.
+				</p>
+				<div class="chart-wrapper">
+					<ChartContainer xLabel="Revenue" yLabel="Category" legendPosition="top">
+						{#snippet legend()}
+							<Legend color="region" selection="brush" />
+						{/snippet}
+						{#snippet background()}
+							<Frame />
+							<AxisLeft />
+							<AxisBottom />
+							<MarginLabel />
+						{/snippet}
+						{#snippet canvas()}
+							<WebGPUCanvas>
+								{#snippet canvasComponents()}
+									<Grid />
+									<BarMarkX
+										table="top_n_by_region"
+										x={sum('revenue')}
+										y="category"
+										fill="region"
+										sort={{ y: 'x', order: 'desc' }}
+										selection="brush"
+										selectionResponse="filter"
+										transforms={[topN(5, { includeOthers: true })]}
+										tooltip
+									/>
+								{/snippet}
+							</WebGPUCanvas>
+						{/snippet}
+						{#snippet interactors()}
+							<Toggle selection="brush" field="region" />
+						{/snippet}
+					</ChartContainer>
+				</div>
+			</div>
 			<!-- Chart 8: NULL as a category -->
 			<div class="chart-panel">
 				<h3>8. NULL as a category — topN(5, includeOthers), coloured by category</h3>
