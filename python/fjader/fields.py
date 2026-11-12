@@ -103,6 +103,48 @@ class RawSqlField:
 FieldSpec = str | AggregateField | BinField | WindowField | RawSqlField
 
 
+@dataclass(frozen=True)
+class ColorField:
+    """A colour channel with explicit ordinal colours. Build it with :func:`colors`."""
+
+    field: str
+    domain: tuple[Any, ...] | None = None
+    range: tuple[str, ...] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {"field": self.field}
+        if self.domain is not None:
+            result["domain"] = list(self.domain)
+        if self.range is not None:
+            result["range"] = list(self.range)
+        return result
+
+
+ColorChannel = FieldSpec | ColorField
+
+
+def colors(
+    field: str,
+    mapping: dict[Any, str] | list[str] | tuple[str, ...],
+    domain: list[Any] | tuple[Any, ...] | None = None,
+) -> ColorField:
+    """Colour ``field``'s categories with explicit colours.
+
+    A dict pins each value to its colour; values not in it draw the null colour.
+    A list is a palette, assigned in sorted value order, or in ``domain`` order
+    when given. Either makes the scale ordinal, so
+    a 0/1 integer column works too::
+
+        fj.bar_y(x="team", y=fj.count(), fill=fj.colors("won", {0: "#d62728", 1: "#2ca02c"}))
+        fj.dot(x="a", y="b", fill=fj.colors("species", ["#1b9e77", "#d95f02", "#7570b3"]))
+    """
+    if isinstance(mapping, dict):
+        if domain is not None:
+            raise ValueError("colors(): pass domain only with a list of colours, not a dict")
+        return ColorField(field, tuple(mapping.keys()), tuple(mapping.values()))
+    return ColorField(field, tuple(domain) if domain is not None else None, tuple(mapping))
+
+
 def count() -> AggregateField:
     """count() aggregate."""
     return AggregateField(aggregate="count")

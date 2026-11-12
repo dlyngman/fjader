@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, ClassVar
 from ._base import Mark
 
 if TYPE_CHECKING:
-    from ..fields import FieldSpec
+    from ..fields import ColorChannel, FieldSpec
     from .._types import CurveType, ScaleType
 
 
@@ -18,7 +18,7 @@ class AreaYMark(Mark):
     y: FieldSpec | None = None
     y1: FieldSpec | None = None
     y2: FieldSpec | None = None
-    fill: FieldSpec | None = None
+    fill: ColorChannel | None = None
     z: FieldSpec | None = None
     """Explicit series grouping (overrides implicit grouping from fill)."""
     fill_opacity: float | None = None
@@ -40,7 +40,7 @@ class AreaXMark(Mark):
     x: FieldSpec | None = None
     x1: FieldSpec | None = None
     x2: FieldSpec | None = None
-    fill: FieldSpec | None = None
+    fill: ColorChannel | None = None
     z: FieldSpec | None = None
     """Explicit series grouping (overrides implicit grouping from fill)."""
     fill_opacity: float | None = None

@@ -5,7 +5,7 @@ import { isNode } from '@uwdata/mosaic-sql';
 import { tableSchemaService } from '$lib/data/TableSchemaService.svelte';
 import { inferScaleType } from '$lib/scales/scale-inference';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
-import type { ColorProp, ColorScaleType, ChartContext } from '$lib/types';
+import type { ColorDomainValue, ColorProp, ColorScaleType, ChartContext } from '$lib/types';
 import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 import type { MarkSetupState } from './mark-types';
 
@@ -18,6 +18,8 @@ interface ColorConfig {
 	explicitType?: string; // User-specified color scale type (log/symlog/sqrt/pow)
 	constant?: number; // symlog constant C
 	exponent?: number; // pow exponent
+	range?: readonly string[]; // explicit ordinal colours
+	pinnedDomain?: readonly ColorDomainValue[]; // values pinned to those colours
 }
 
 export class MarkColor {
@@ -73,7 +75,9 @@ export class MarkColor {
 							type: type,
 							scheme: this.config.scheme,
 							constant: this.config.constant,
-							exponent: this.config.exponent
+							exponent: this.config.exponent,
+							range: this.config.range,
+							pinnedDomain: this.config.pinnedDomain
 						},
 						this.#chartContext.chartId
 					) as ColorScaleState;
@@ -97,6 +101,20 @@ export class MarkColor {
 			if (this.scaleState && scheme) {
 				this.scaleState.setScheme(scheme);
 			}
+		});
+
+		// 2a. Lifecycle: Update explicit colours (Fast Path - no scale recreation)
+		// Like the scheme, a mark without them leaves a shared scale's alone; one
+		// that drops them (an edited prop) clears what it set.
+		let hadRange = false;
+		$effect(() => {
+			const range = this.config.range;
+			const pinned = this.config.pinnedDomain;
+			const scale = this.scaleState;
+			if (!scale?.isOrdinal) return;
+			const has = !!(range?.length || pinned?.length);
+			if (has || hadRange) scale.setRange(range ?? null, pinned ?? null);
+			hadRange = has;
 		});
 
 		// 2b. Lifecycle: Update Transform (Fast Path - no scale recreation)
@@ -193,6 +211,8 @@ export class MarkColor {
 
 		let constant: number | undefined;
 		let exponent: number | undefined;
+		let range: readonly string[] | undefined;
+		let pinnedDomain: readonly ColorDomainValue[] | undefined;
 
 		// Handle object wrapper format { field: "species", scheme: "dark2", type: "symlog" }
 		if (typeof c === 'object' && 'field' in c && !isNode(c)) {
@@ -201,11 +221,17 @@ export class MarkColor {
 			explicitType = c.type;
 			constant = c.constant;
 			exponent = c.exponent;
+			range = c.range;
+			pinnedDomain = c.domain;
 		}
 
 		// 1. Determine Type from field semantics + schema (may return null if waiting for schema)
 		// If an explicit type is given (log/symlog/sqrt/pow), use it directly.
-		const scaleType = explicitType || this.#resolveScaleType(field);
+		// Explicit colours or pinned values mean categories, whatever the column
+		// type: a 0/1 integer column would otherwise read as continuous.
+		const scaleType =
+			explicitType ||
+			(range?.length || pinnedDomain?.length ? 'ordinal' : this.#resolveScaleType(field));
 
 		// 2. Pass explicit scheme if provided, otherwise undefined (registry will apply default)
 		return {
@@ -215,7 +241,9 @@ export class MarkColor {
 			scheme: explicitScheme, // undefined if not specified
 			explicitType,
 			constant,
-			exponent
+			exponent,
+			range,
+			pinnedDomain
 		};
 	});
 

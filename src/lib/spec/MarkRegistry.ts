@@ -16,7 +16,7 @@ import RectYMark from '$lib/components/marks/RectYMark.svelte';
 import TextMark from '$lib/components/marks/TextMark.svelte';
 import { resolveFieldSpec } from './ExpressionParser';
 import { parseTransforms } from './TransformParser';
-import type { MarkSpec, FieldSpec } from './types';
+import type { MarkSpec, FieldSpec, ColorFieldSpec } from './types';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const MARK_REGISTRY: Record<string, Component<any>> = {
@@ -52,6 +52,16 @@ export const SPEC_MARK_TYPES: Record<string, string> = {
 	text: 'text'
 };
 
+/** A colour channel with explicit `domain`/`range`, which is not a FieldSpec. */
+export function isColorFieldSpec(value: unknown): value is ColorFieldSpec {
+	return (
+		typeof value === 'object' &&
+		value !== null &&
+		typeof (value as ColorFieldSpec).field === 'string' &&
+		('domain' in value || 'range' in value)
+	);
+}
+
 /**
  * Convert a MarkSpec into { component, props } for svelte:component rendering.
  * Resolves FieldSpecs, transforms, and selection references.
@@ -76,12 +86,18 @@ export function resolveMarkEntry(markSpec: MarkSpec): {
 		if (key in props && props[key] != null) {
 			// Numbers are constants (e.g. r=3), not field references — skip resolution
 			if (typeof props[key] === 'number') continue;
+			// Explicit colours pass through as the colour prop's object form
+			if (isColorFieldSpec(props[key])) continue;
 			props[key] = resolveFieldSpec(props[key] as FieldSpec);
 		}
 	}
 
 	// stroke is data-driven (FieldSpec) on lines, but a CSS constant on areas
-	if (STROKE_AS_FIELD_MARKS.has(markSpec.mark) && props.stroke != null) {
+	if (
+		STROKE_AS_FIELD_MARKS.has(markSpec.mark) &&
+		props.stroke != null &&
+		!isColorFieldSpec(props.stroke)
+	) {
 		props.stroke = resolveFieldSpec(props.stroke as FieldSpec);
 	}
 

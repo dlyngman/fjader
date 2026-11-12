@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, ClassVar
 from ._base import Mark
 
 if TYPE_CHECKING:
-    from ..fields import FieldSpec
+    from ..fields import ColorChannel, FieldSpec
     from .._types import LineAnchor, ScaleType, TextAnchor
 
 
@@ -17,7 +17,7 @@ class TextMark(Mark):
     x: FieldSpec | None = None
     y: FieldSpec | None = None
     text: FieldSpec | None = None
-    fill: FieldSpec | None = None
+    fill: ColorChannel | None = None
     font_size: float | None = None
     font_weight: str | None = None
     font_family: str | None = None

@@ -16,8 +16,8 @@ import {
 	colorScaleTicks
 } from './color-utils';
 import type { RGBA, D3ColorScale } from './color-utils';
-import type { FieldIdentity } from '$lib/query-engine/categorical-identity';
-import type { ColorScaleType, ColorTransformType } from '$lib/types';
+import type { DimValue, FieldIdentity } from '$lib/query-engine/categorical-identity';
+import type { ColorDomainValue, ColorScaleType, ColorTransformType } from '$lib/types';
 import type { ScaleRegistry } from './ScaleRegistry.svelte';
 import { COLOR_RAMP_RESOLUTION, type GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import {
@@ -37,6 +37,10 @@ interface ColorScaleConfig {
 	midpoint?: number;
 	constant?: number; // symlog constant C (default 1)
 	exponent?: number; // pow exponent (default 1)
+	/** Explicit palette colours, in place of the scheme's. */
+	range?: readonly string[] | null;
+	/** Values pinned to palette positions: pinnedDomain[i] draws range[i]. */
+	pinnedDomain?: readonly ColorDomainValue[] | null;
 }
 
 interface ColorConfigParams {
@@ -133,6 +137,17 @@ export class ColorScaleState {
 	 * stop meaning anything and holding colours to them would be wrong.
 	 */
 	#paletteRank: Map<number, number> = new Map();
+	/**
+	 * Explicit palette colours (`range` on the colour prop), or null for the
+	 * scheme's. Ordinal only.
+	 */
+	#range: readonly string[] | null = null;
+	/**
+	 * Values pinned to palette positions (`domain` on the colour prop): value i
+	 * takes rank i, in place of its position in the sorted domain. Values outside
+	 * it draw the null colour. Null when ranks follow the domain, the default.
+	 */
+	#pinned: readonly ColorDomainValue[] | null = null;
 	#nextRank = 0;
 	/**
 	 * id -> rank as a dense array, packed into the shared identity slot table so
@@ -242,6 +257,8 @@ export class ColorScaleState {
 		this.#midpoint = config.midpoint;
 		this.#constant = config.constant ?? 1;
 		this.#exponent = config.exponent ?? 1;
+		this.#range = config.range?.length ? [...config.range] : null;
+		this.#pinned = config.pinnedDomain?.length ? [...config.pinnedDomain] : null;
 		this.#registry = registry;
 		this.#gpuCoordinator = gpuCoordinator;
 
@@ -467,7 +484,9 @@ export class ColorScaleState {
 			this.#refreshRanks();
 			this.#d3Scale = this.#hasRanks()
 				? this.#buildRankedOrdinalScale()
-				: createD3Scale(this.#scheme, this.domain as number[], { reverse: this.#reverse });
+				: this.#range || this.#pinned
+					? this.#buildExplicitOrdinalScale()
+					: createD3Scale(this.#scheme, this.domain as number[], { reverse: this.#reverse });
 			this.#uploadOrdinal();
 		} else {
 			const effectiveDomain = this.#effectiveDomain();
@@ -582,7 +601,9 @@ export class ColorScaleState {
 	#categoryPositions(): Map<string | number, number> {
 		if (this.#categoryMap && this.#categoryMapFor === this.domain) return this.#categoryMap;
 		const map = new Map<string | number, number>();
-		this.domain.forEach((cat, i) => map.set(cat, i));
+		// Pinned values index the palette directly; anything else maps to -1.
+		const positions = (this.#pinned as (string | number)[] | null) ?? this.domain;
+		positions.forEach((cat, i) => map.set(cat, i));
 		this.#categoryMap = map;
 		this.#categoryMapFor = this.domain;
 		return map;
@@ -593,12 +614,24 @@ export class ColorScaleState {
 		if (!identity?.present) return;
 		this.#ranksVersion = identity.version;
 
-		for (const value of this.domain) {
-			const id = identity.ids.get(value as never);
-			if (id === undefined || this.#paletteRank.has(id)) continue;
-			// The NULL category takes no palette slot (see below).
-			if (id === identity.nullId) continue;
-			this.#paletteRank.set(id, this.#nextRank++);
+		const pinned = this.#pinned;
+		if (pinned) {
+			// Pinned: value i takes rank i. Values that have not appeared yet keep
+			// their rank reserved, the same way a filtered-out category does. A
+			// pinned null is the one way the NULL category takes a palette colour.
+			pinned.forEach((value, rank) => {
+				const id = ColorScaleState.#idOf(identity, value);
+				if (id !== undefined && !this.#paletteRank.has(id)) this.#paletteRank.set(id, rank);
+			});
+			this.#nextRank = Math.max(this.#nextRank, pinned.length);
+		} else {
+			for (const value of this.domain) {
+				const id = identity.ids.get(value as never);
+				if (id === undefined || this.#paletteRank.has(id)) continue;
+				// The NULL category takes no palette slot (see below).
+				if (id === identity.nullId) continue;
+				this.#paletteRank.set(id, this.#nextRank++);
+			}
 		}
 
 		const table = new Float32Array(identity.values.length);
@@ -609,8 +642,17 @@ export class ColorScaleState {
 		// The NULL category and the Other buckets draw the null colour: no palette
 		// slot, so they read as missing data or "the rest" and shift no category's
 		// colour. Not -1, which the shader draws transparent: a category outside
-		// this scale's domain.
-		if (identity.nullId !== null) table[identity.nullId] = NULL_COLOR_RANK;
+		// this scale's domain. With a pinned domain, so does every category the
+		// pin leaves out: drawn, but plainly not one of the named ones.
+		if (pinned) {
+			for (const value of this.domain) {
+				const id = identity.ids.get(value as never);
+				if (id !== undefined && table[id] === -1) table[id] = NULL_COLOR_RANK;
+			}
+		}
+		if (identity.nullId !== null && !this.#paletteRank.has(identity.nullId)) {
+			table[identity.nullId] = NULL_COLOR_RANK;
+		}
 		for (const id of identity.synthetic) if (id < table.length) table[id] = NULL_COLOR_RANK;
 		this.#ranksRevision++;
 		const slots = this.#slots;
@@ -625,6 +667,40 @@ export class ColorScaleState {
 	}
 
 	/**
+	 * The dim id of a pinned value. Dim values keep the driver's type (an
+	 * INTEGER column's are numbers, a BIGINT's may be bigints), while a pinned
+	 * domain is whatever the author wrote, or JSON produced: `0` against `0n`,
+	 * `'1'` against `1`. An exact match wins; failing that, the first value with
+	 * the same string form.
+	 */
+	static #idOf(identity: FieldIdentity, value: ColorDomainValue): number | undefined {
+		const exact = identity.ids.get(value as DimValue);
+		if (exact !== undefined) return exact;
+		if (value === null) return identity.nullId ?? undefined;
+		const key = String(value);
+		const i = identity.values.findIndex((v) => v !== null && String(v) === key);
+		return i < 0 ? undefined : i;
+	}
+
+	/** The palette's colours: the explicit range, else the scheme's. */
+	#colors(): readonly string[] {
+		const colors = this.#range ?? getOrdinalColors(this.#scheme) ?? [];
+		return this.#reverse ? [...colors].reverse() : colors;
+	}
+
+	/**
+	 * The CPU scale for an explicit range or pinned domain before identity has
+	 * landed, indexed the way #categoryPositions indexes the GPU's palette.
+	 */
+	#buildExplicitOrdinalScale(): ScaleOrdinal<string, string> {
+		const colors = this.#colors();
+		const positions = this.#pinned ?? this.domain;
+		return scaleOrdinal<string, string>()
+			.domain(positions.map(String))
+			.range(positions.map((_, i) => colors[i % colors.length]));
+	}
+
+	/**
 	 * An ordinal scale whose range is permuted to match the palette ranks, so
 	 * `getColor(value)` returns the colour the GPU actually draws.
 	 *
@@ -634,8 +710,7 @@ export class ColorScaleState {
 	 * happening to be domain order.
 	 */
 	#buildRankedOrdinalScale(): ScaleOrdinal<string, string> {
-		let colors = getOrdinalColors(this.#scheme) ?? [];
-		if (this.#reverse) colors = [...colors].reverse();
+		const colors = this.#colors();
 		const identity = this.#identity!;
 
 		const range = this.domain.map((value) => {
@@ -665,7 +740,7 @@ export class ColorScaleState {
 	/** Called from #uploadToGPU only, which has refreshed the ranks. */
 	#uploadOrdinal(): void {
 		// Bake and upload palette
-		const paletteData = bakePalette(this.#scheme, { reverse: this.#reverse });
+		const paletteData = bakePalette(this.#range ?? this.#scheme, { reverse: this.#reverse });
 		this.#gpuCoordinator.writeColorPalette(
 			this.#paletteSlot,
 			paletteData as Float32Array<ArrayBuffer>
@@ -681,7 +756,9 @@ export class ColorScaleState {
 		// Capped at 32, the palette's size, so a chart with more categories than
 		// that wraps as it always has. Floored at 1: this is a u32 modulus and 0
 		// is undefined behaviour in WGSL.
-		const rankSpace = this.hasIdentity ? this.#nextRank : this.domain.length;
+		const rankSpace = this.hasIdentity
+			? this.#nextRank
+			: (this.#pinned?.length ?? this.domain.length);
 		const config = this.#buildColorConfig({
 			type: 0, // ORDINAL
 			paletteOffset: this.#paletteSlot * 32,
@@ -796,6 +873,47 @@ export class ColorScaleState {
 	}
 
 	/**
+	 * Set explicit palette colours and pinned values, or clear them with nulls.
+	 * Triggers GPU re-upload.
+	 *
+	 * The ranks are cleared: they were handed out under the old mapping, and a
+	 * new pin means the author has just said which value takes which colour.
+	 */
+	setRange(
+		range: readonly string[] | null,
+		pinnedDomain: readonly ColorDomainValue[] | null
+	): void {
+		const nextRange = range?.length ? [...range] : null;
+		const nextPinned = pinnedDomain?.length ? [...pinnedDomain] : null;
+		if (sameList(nextRange, this.#range) && sameList(nextPinned, this.#pinned)) return;
+
+		this.#range = nextRange;
+		this.#pinned = nextPinned;
+		this.#paletteRank.clear();
+		this.#nextRank = 0;
+		this.#categoryMap = null;
+		this._version++;
+		// CPU state, rebuilt here rather than left to the upload, which needs a
+		// coordinator: a legend reads the ranks too.
+		this.#refreshRanks();
+
+		if (this.domain.length > 0) {
+			this.#uploadToGPU();
+			this.#registry.invalidateChartsUsingScale(this);
+		}
+	}
+
+	/** The explicit palette colours, or null for the scheme's. */
+	get range(): readonly string[] | null {
+		return this.#range;
+	}
+
+	/** The pinned values, or null when ranks follow the domain's sorted order. */
+	get pinnedDomain(): readonly ColorDomainValue[] | null {
+		return this.#pinned;
+	}
+
+	/**
 	 * Update the normalization transform. Triggers GPU re-upload.
 	 * Called when the user changes the color scale type (e.g., linear → symlog)
 	 * while keeping the same field.
@@ -895,8 +1013,7 @@ export class ColorScaleState {
 		const id = identity.ids.get(value as never);
 		const rank = id === undefined ? undefined : this.#paletteRank.get(id);
 		if (rank === undefined) return ColorScaleState.NULL_COLOR;
-		let colors = getOrdinalColors(this.#scheme) ?? [];
-		if (this.#reverse) colors = [...colors].reverse();
+		const colors = this.#colors();
 		// Same wrap the shader applies, so an over-32 palette agrees too.
 		return colors.length ? colors[rank % colors.length] : ColorScaleState.NULL_COLOR;
 	}
@@ -962,4 +1079,10 @@ export class ColorScaleState {
 				`now belong to another scale. Register the holder's chart id.`
 		);
 	}
+}
+
+function sameList<T>(a: readonly T[] | null, b: readonly T[] | null): boolean {
+	if (a === b) return true;
+	if (!a || !b || a.length !== b.length) return false;
+	return a.every((v, i) => v === b[i]);
 }

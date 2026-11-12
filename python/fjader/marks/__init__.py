@@ -16,7 +16,7 @@ from .rect import RectMark, RectXMark, RectYMark
 from .text import TextMark
 
 if TYPE_CHECKING:
-    from ..fields import FieldSpec
+    from ..fields import ColorChannel, FieldSpec
     from .._types import (
         ColorScheme,
         CurveType,
@@ -35,7 +35,7 @@ def dot(
     table: str | None = None,
     x: FieldSpec | None = None,
     y: FieldSpec | None = None,
-    fill: FieldSpec | None = None,
+    fill: ColorChannel | None = None,
     opacity: float | None = None,
     r: float | FieldSpec | None = None,
     radius_range: list[float] | tuple[float, float] | None = None,
@@ -60,7 +60,7 @@ def dot(
         table: Table name in DuckDB.
         x: X position — column name, aggregate (``fj.count()``), or bin (``fj.bin('col')``).
         y: Y position — column name, aggregate, or bin.
-        fill: Fill color — column name for color scale, aggregate, or bin.
+        fill: Fill color — column name for color scale, aggregate, or bin; ``fj.colors()`` for explicit colours.
         opacity: Constant opacity (0–1).
         r: Dot radius — constant ``float`` or data-driven ``FieldSpec`` for size scale.
         radius_range: Min/max radius in pixels when ``r`` is data-driven, e.g. ``[2, 12]``.
@@ -110,7 +110,7 @@ def bar_x(
     x1: FieldSpec | None = None,
     x2: FieldSpec | None = None,
     y: FieldSpec | None = None,
-    fill: FieldSpec | None = None,
+    fill: ColorChannel | None = None,
     opacity: float | None = None,
     padding: float | None = None,
     padding_inner: float | None = None,
@@ -140,7 +140,7 @@ def bar_x(
         x1: Bar start position (for ranged bars).
         x2: Bar end position (for ranged bars).
         y: Category axis — column name.
-        fill: Fill color — column name for color scale.
+        fill: Fill color — column name for color scale; ``fj.colors()`` for explicit colours.
         opacity: Constant opacity (0–1).
         padding: Band scale padding (0–1), shorthand for inner + outer.
         padding_inner: Space between bars within a group (0–1).
@@ -201,7 +201,7 @@ def bar_y(
     y: FieldSpec | None = None,
     y1: FieldSpec | None = None,
     y2: FieldSpec | None = None,
-    fill: FieldSpec | None = None,
+    fill: ColorChannel | None = None,
     opacity: float | None = None,
     padding: float | None = None,
     padding_inner: float | None = None,
@@ -231,7 +231,7 @@ def bar_y(
         y: Bar height — column name, aggregate (e.g. ``fj.count()``), or bin.
         y1: Bar start position (for ranged/stacked bars).
         y2: Bar end position (for ranged/stacked bars).
-        fill: Fill color — column name for color scale.
+        fill: Fill color — column name for color scale; ``fj.colors()`` for explicit colours.
         opacity: Constant opacity (0–1).
         padding: Band scale padding (0–1), shorthand for inner + outer.
         padding_inner: Space between bars within a group (0–1).
@@ -290,7 +290,7 @@ def line(
     table: str | None = None,
     x: FieldSpec | None = None,
     y: FieldSpec | None = None,
-    stroke: FieldSpec | None = None,
+    stroke: ColorChannel | None = None,
     z: FieldSpec | None = None,
     stroke_width: float | None = None,
     dot_radius: float | None = None,
@@ -372,7 +372,7 @@ def area_y(
     y: FieldSpec | None = None,
     y1: FieldSpec | None = None,
     y2: FieldSpec | None = None,
-    fill: FieldSpec | None = None,
+    fill: ColorChannel | None = None,
     z: FieldSpec | None = None,
     fill_opacity: float | None = None,
     stroke: str | None = None,
@@ -403,7 +403,7 @@ def area_y(
         y: Y position (shorthand for y2 with y1=0).
         y1: Lower y boundary.
         y2: Upper y boundary.
-        fill: Fill color — column name for color scale (also groups into series).
+        fill: Fill color — column name for color scale (also groups into series); ``fj.colors()`` for explicit colours.
         z: Explicit series grouping (overrides implicit grouping from ``fill``).
         fill_opacity: Fill opacity (0–1).
         stroke: CSS color for area outline (e.g. ``'#333'``). Not data-driven.
@@ -458,7 +458,7 @@ def area_x(
     x: FieldSpec | None = None,
     x1: FieldSpec | None = None,
     x2: FieldSpec | None = None,
-    fill: FieldSpec | None = None,
+    fill: ColorChannel | None = None,
     z: FieldSpec | None = None,
     fill_opacity: float | None = None,
     stroke: str | None = None,
@@ -489,7 +489,7 @@ def area_x(
         x: X position (shorthand for x2 with x1=0).
         x1: Left x boundary.
         x2: Right x boundary.
-        fill: Fill color — column name for color scale (also groups into series).
+        fill: Fill color — column name for color scale (also groups into series); ``fj.colors()`` for explicit colours.
         z: Explicit series grouping (overrides implicit grouping from ``fill``).
         fill_opacity: Fill opacity (0–1).
         stroke: CSS color for area outline (e.g. ``'#333'``). Not data-driven.
@@ -546,7 +546,7 @@ def rect(
     y: FieldSpec | None = None,
     y1: FieldSpec | None = None,
     y2: FieldSpec | None = None,
-    fill: FieldSpec | None = None,
+    fill: ColorChannel | None = None,
     opacity: float | None = None,
     preferred_x_scale_type: ScaleType | None = None,
     preferred_y_scale_type: ScaleType | None = None,
@@ -579,7 +579,7 @@ def rect(
         y: Y position — column name.
         y1: Bottom y boundary.
         y2: Top y boundary.
-        fill: Fill color — column name for color scale.
+        fill: Fill color — column name for color scale; ``fj.colors()`` for explicit colours.
         opacity: Constant opacity (0–1).
         preferred_x_scale_type: Force x-axis scale type.
         preferred_y_scale_type: Force y-axis scale type.
@@ -637,7 +637,7 @@ def rect_x(
     y: FieldSpec | None = None,
     y1: FieldSpec | None = None,
     y2: FieldSpec | None = None,
-    fill: FieldSpec | None = None,
+    fill: ColorChannel | None = None,
     opacity: float | None = None,
     inset: float | None = None,
     dx: float | None = None,
@@ -666,7 +666,7 @@ def rect_x(
         y: Y position.
         y1: Bottom y boundary.
         y2: Top y boundary.
-        fill: Fill color — column name for color scale.
+        fill: Fill color — column name for color scale; ``fj.colors()`` for explicit colours.
         opacity: Constant opacity (0–1).
         inset: Pixel inset.
         dx: Horizontal pixel offset.
@@ -717,7 +717,7 @@ def rect_y(
     y: FieldSpec | None = None,
     y1: FieldSpec | None = None,
     y2: FieldSpec | None = None,
-    fill: FieldSpec | None = None,
+    fill: ColorChannel | None = None,
     opacity: float | None = None,
     inset: float | None = None,
     dx: float | None = None,
@@ -746,7 +746,7 @@ def rect_y(
         y: Y position — column name or aggregate.
         y1: Bottom y boundary.
         y2: Top y boundary.
-        fill: Fill color — column name for color scale.
+        fill: Fill color — column name for color scale; ``fj.colors()`` for explicit colours.
         opacity: Constant opacity (0–1).
         inset: Pixel inset.
         dx: Horizontal pixel offset.
@@ -794,7 +794,7 @@ def text(
     x: FieldSpec | None = None,
     y: FieldSpec | None = None,
     text: FieldSpec | None = None,
-    fill: FieldSpec | None = None,
+    fill: ColorChannel | None = None,
     font_size: float | None = None,
     font_weight: str | None = None,
     font_family: str | None = None,

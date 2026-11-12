@@ -3,7 +3,7 @@
  * between spec producers (Python wrapper, JS API) and the spec renderer.
  */
 
-import type { ColorScheme, CurveType, ScaleType, SortConfig } from '$lib/types';
+import type { ColorDomainValue, ColorScheme, CurveType, ScaleType, SortConfig } from '$lib/types';
 import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 
 // =============================================================================
@@ -135,6 +135,19 @@ export type FieldSpec =
 	| WindowFieldSpec
 	| RawSqlFieldSpec;
 
+/**
+ * A colour channel with explicit ordinal colours, as on the Svelte colour prop:
+ * `{ "field": "won", "domain": [0, 1], "range": ["#d62728", "#2ca02c"] }`.
+ */
+export interface ColorFieldSpec {
+	field: string;
+	domain?: ColorDomainValue[];
+	range?: string[];
+}
+
+/** What a colour channel (fill, a line's stroke) accepts. */
+export type ColorChannelSpec = FieldSpec | ColorFieldSpec;
+
 export interface AggregateFieldSpec {
 	aggregate: 'count' | 'sum' | 'avg' | 'min' | 'max' | 'median';
 	field?: string;
@@ -215,7 +228,7 @@ export interface DotMarkSpec extends BaseMarkSpec, ContinuousScaleTypeSpec {
 	mark: 'dot';
 	x: FieldSpec;
 	y: FieldSpec;
-	fill?: FieldSpec | null;
+	fill?: ColorChannelSpec | null;
 	opacity?: number;
 	r?: number | FieldSpec;
 	radiusRange?: [number, number];
@@ -227,7 +240,7 @@ export interface BarXMarkSpec extends BaseMarkSpec {
 	x1?: FieldSpec;
 	x2?: FieldSpec;
 	y: FieldSpec;
-	fill?: FieldSpec | null;
+	fill?: ColorChannelSpec | null;
 	opacity?: number;
 	padding?: number;
 	paddingInner?: number;
@@ -248,7 +261,7 @@ export interface BarYMarkSpec extends BaseMarkSpec {
 	y: FieldSpec;
 	y1?: FieldSpec;
 	y2?: FieldSpec;
-	fill?: FieldSpec | null;
+	fill?: ColorChannelSpec | null;
 	opacity?: number;
 	padding?: number;
 	paddingInner?: number;
@@ -267,7 +280,7 @@ export interface LineMarkSpec extends BaseMarkSpec, ContinuousScaleTypeSpec {
 	mark: 'line';
 	x: FieldSpec;
 	y: FieldSpec;
-	stroke?: FieldSpec | null;
+	stroke?: ColorChannelSpec | null;
 	z?: FieldSpec | null;
 	strokeWidth?: number;
 	dotRadius?: number;
@@ -289,7 +302,7 @@ export interface AreaYMarkSpec extends BaseMarkSpec, ContinuousScaleTypeSpec {
 	y: FieldSpec;
 	y1?: FieldSpec;
 	y2?: FieldSpec;
-	fill?: FieldSpec | null;
+	fill?: ColorChannelSpec | null;
 	z?: FieldSpec | null;
 	fillOpacity?: number;
 	stroke?: string | null; // CSS constant
@@ -305,7 +318,7 @@ export interface AreaXMarkSpec extends BaseMarkSpec, ContinuousScaleTypeSpec {
 	x: FieldSpec;
 	x1?: FieldSpec;
 	x2?: FieldSpec;
-	fill?: FieldSpec | null;
+	fill?: ColorChannelSpec | null;
 	z?: FieldSpec | null;
 	fillOpacity?: number;
 	stroke?: string | null; // CSS constant
@@ -323,7 +336,7 @@ export interface RectMarkSpec extends BaseMarkSpec, ContinuousScaleTypeSpec {
 	y?: FieldSpec | null;
 	y1?: FieldSpec | null;
 	y2?: FieldSpec | null;
-	fill?: FieldSpec | null;
+	fill?: ColorChannelSpec | null;
 	opacity?: number;
 	padding?: number;
 	paddingInner?: number;
@@ -341,7 +354,7 @@ export interface RectXMarkSpec extends BaseMarkSpec {
 	y?: FieldSpec | null;
 	y1?: FieldSpec | null;
 	y2?: FieldSpec | null;
-	fill?: FieldSpec | null;
+	fill?: ColorChannelSpec | null;
 	opacity?: number;
 	inset?: number;
 	dx?: number;
@@ -358,7 +371,7 @@ export interface RectYMarkSpec extends BaseMarkSpec {
 	y: FieldSpec;
 	y1?: FieldSpec;
 	y2?: FieldSpec;
-	fill?: FieldSpec | null;
+	fill?: ColorChannelSpec | null;
 	opacity?: number;
 	inset?: number;
 	dx?: number;
@@ -372,7 +385,7 @@ export interface TextMarkSpec extends BaseMarkSpec, ContinuousScaleTypeSpec {
 	x: FieldSpec;
 	y: FieldSpec;
 	text: FieldSpec;
-	fill?: FieldSpec | null;
+	fill?: ColorChannelSpec | null;
 	fontSize?: number;
 	fontWeight?: string;
 	fontFamily?: string | null;
