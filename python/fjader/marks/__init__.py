@@ -118,6 +118,7 @@ def bar_x(
     inset: float | None = None,
     dx: float | None = None,
     dy: float | None = None,
+    contribute_domain: bool | None = None,
     selection: str | None = None,
     selection_response: Literal["auto", "filter", "ignore"] | None = None,
     nulls: Literal["keep", "drop"] | None = None,
@@ -147,6 +148,16 @@ def bar_x(
         inset: Pixel inset within each band.
         dx: Horizontal pixel offset.
         dy: Vertical pixel offset.
+        contribute_domain: ``False`` makes this mark follow the band axis the
+            other marks on it decide (their categories and their order) instead
+            of adding its own; rows of categories the axis does not show are not
+            drawn. For a layer that gives context to another. It cannot rank or
+            reduce its own categories, so ``topN``, ``sort`` and ``domain`` are
+            refused with it. With a top N in background totals, rank on one layer
+            and give the other ``contribute_domain=False``: ranking on the faint
+            whole keeps the same N categories under a selection, ranking on the
+            front part re-ranks within it. Not with ``includeOthers``: the
+            follower has no Other row.
         selection: Selection parameter name for linked interactors.
         selection_response: "filter" makes every selection filter this mark, even on
             a field it draws by (top N within the selected region), and it never
@@ -173,7 +184,7 @@ def bar_x(
     return BarXMark(
         data=data, table=table, x=x, x1=x1, x2=x2, y=y, fill=fill, opacity=opacity,
         padding=padding, padding_inner=padding_inner, padding_outer=padding_outer,
-        inset=inset, dx=dx, dy=dy,
+        inset=inset, dx=dx, dy=dy, contribute_domain=contribute_domain,
         selection=selection, selection_response=selection_response, nulls=nulls, scheme=scheme, limit=limit,
         transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,
@@ -198,6 +209,7 @@ def bar_y(
     inset: float | None = None,
     dx: float | None = None,
     dy: float | None = None,
+    contribute_domain: bool | None = None,
     selection: str | None = None,
     selection_response: Literal["auto", "filter", "ignore"] | None = None,
     nulls: Literal["keep", "drop"] | None = None,
@@ -227,6 +239,16 @@ def bar_y(
         inset: Pixel inset within each band.
         dx: Horizontal pixel offset.
         dy: Vertical pixel offset.
+        contribute_domain: ``False`` makes this mark follow the band axis the
+            other marks on it decide (their categories and their order) instead
+            of adding its own; rows of categories the axis does not show are not
+            drawn. For a layer that gives context to another. It cannot rank or
+            reduce its own categories, so ``topN``, ``sort`` and ``domain`` are
+            refused with it. With a top N in background totals, rank on one layer
+            and give the other ``contribute_domain=False``: ranking on the faint
+            whole keeps the same N categories under a selection, ranking on the
+            front part re-ranks within it. Not with ``includeOthers``: the
+            follower has no Other row.
         selection: Selection parameter name for linked interactors.
         selection_response: "filter" makes every selection filter this mark, even on
             a field it draws by (top N within the selected region), and it never
@@ -253,7 +275,7 @@ def bar_y(
     return BarYMark(
         data=data, table=table, x=x, y=y, y1=y1, y2=y2, fill=fill, opacity=opacity,
         padding=padding, padding_inner=padding_inner, padding_outer=padding_outer,
-        inset=inset, dx=dx, dy=dy,
+        inset=inset, dx=dx, dy=dy, contribute_domain=contribute_domain,
         selection=selection, selection_response=selection_response, nulls=nulls, scheme=scheme, limit=limit,
         transforms=transforms,
         sort=sort, domain=domain, tooltip=tooltip,

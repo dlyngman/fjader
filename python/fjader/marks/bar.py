@@ -25,6 +25,10 @@ class BarXMark(Mark):
     inset: float | None = None
     dx: float | None = None
     dy: float | None = None
+    # False: follow the band axis the other marks on it decide (their
+    # categories and order), adding none. For a layer that gives context to
+    # another. Refuses topN, sort and an explicit domain.
+    contribute_domain: bool | None = None
 
 
 @dataclass
@@ -43,3 +47,7 @@ class BarYMark(Mark):
     inset: float | None = None
     dx: float | None = None
     dy: float | None = None
+    # False: follow the band axis the other marks on it decide (their
+    # categories and order), adding none. For a layer that gives context to
+    # another. Refuses topN, sort and an explicit domain.
+    contribute_domain: bool | None = None
