@@ -78,6 +78,13 @@
 		clipPadding?: number;
 		useXSelection?: boolean;
 		useYSelection?: boolean;
+		/**
+		 * The tooltip's colours against the color-scheme the chart inherits:
+		 * `contrast` is the opposite scheme (dark on a light page), `follow` the
+		 * same. Unset, the nearest `data-fjader-tooltip` ancestor decides, else
+		 * contrast. `--fjader-tooltip-bg`/`-text` set by the app override both.
+		 */
+		tooltipScheme?: 'contrast' | 'follow';
 	}
 
 	let {
@@ -108,7 +115,8 @@
 		margin: marginOverride = {},
 		clipPadding = 0,
 		useXSelection = false,
-		useYSelection = false
+		useYSelection = false,
+		tooltipScheme = undefined
 	}: Props = $props();
 
 	const defaultMargin = { top: 30, right: 50, bottom: 35, left: 75 };
@@ -452,7 +460,7 @@
 	setContext('legend-position', () => legendPosition);
 </script>
 
-<div class="figure-container" bind:clientWidth={layout.width}>
+<div class="figure-container" bind:clientWidth={layout.width} data-fjader-tooltip={tooltipScheme}>
 	{#if legend && legendPosition === 'top'}
 		<div
 			class="legend-container legend-top"

@@ -234,8 +234,14 @@
 		margin: 0;
 		border: 0;
 		overflow: visible;
-		background: var(--fjader-tooltip-bg, rgba(0, 0, 0, 0.88));
-		color: var(--fjader-tooltip-text, #ffffff);
+		/* Colours, highest first: the app's --fjader-tooltip-bg/-text; the mode a
+		   data-fjader-tooltip ancestor picks; contrast. light-dark() resolves against
+		   the color-scheme the tooltip inherits from the chart's DOM ancestors. */
+		background: var(
+			--fjader-tooltip-bg,
+			var(--_fjader-tooltip-bg, light-dark(rgba(0, 0, 0, 0.88), rgba(255, 255, 255, 0.92)))
+		);
+		color: var(--fjader-tooltip-text, var(--_fjader-tooltip-text, light-dark(#ffffff, #111827)));
 		padding: 6px 10px;
 		border-radius: 4px;
 		font-family: var(--fjader-font, system-ui, sans-serif);
@@ -243,13 +249,31 @@
 		line-height: 1.4;
 		pointer-events: none;
 		white-space: nowrap;
-		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+		box-shadow:
+			0 0 0 1px var(--_fjader-tooltip-ring, transparent),
+			0 2px 8px rgba(0, 0, 0, 0.25);
 		opacity: 0;
 		scale: 0.78;
 		transition:
 			opacity 100ms ease-out,
 			scale 200ms cubic-bezier(0.34, 1.3, 0.64, 1);
 		will-change: opacity, scale, translate;
+	}
+
+	/* The mode, set on any ancestor (the page, a panel, a chart through ChartContainer's
+	   tooltipScheme): custom properties inherit, so the nearest one wins. `contrast` is
+	   the opposite of the scheme, `follow` the same, with a ring to separate it from a
+	   background of its own colour. */
+	:global([data-fjader-tooltip='contrast']) {
+		--_fjader-tooltip-bg: light-dark(rgba(0, 0, 0, 0.88), rgba(255, 255, 255, 0.92));
+		--_fjader-tooltip-text: light-dark(#ffffff, #111827);
+		--_fjader-tooltip-ring: transparent;
+	}
+
+	:global([data-fjader-tooltip='follow']) {
+		--_fjader-tooltip-bg: light-dark(rgba(255, 255, 255, 0.96), rgba(31, 41, 55, 0.96));
+		--_fjader-tooltip-text: light-dark(#111827, #f9fafb);
+		--_fjader-tooltip-ring: light-dark(rgba(17, 24, 39, 0.1), rgba(255, 255, 255, 0.12));
 	}
 
 	.tooltip.visible {

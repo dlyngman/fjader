@@ -18,8 +18,6 @@
 		--fjader-bg: var(--gray-10);
 		--fjader-primary: var(--blue-3);
 		--fjader-accent: var(--blue-1);
-		--fjader-tooltip-bg: rgba(255, 255, 255, 0.92);
-		--fjader-tooltip-text: var(--gray-10);
 		--fjader-palette-bg: rgba(255, 255, 255, 0.95);
 		--fjader-palette-text: var(--gray-10);
 		--fjader-palette-text-secondary: rgba(17, 24, 39, 0.5);
