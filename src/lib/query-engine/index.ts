@@ -59,7 +59,9 @@ export type {
 	QueryDescriptor,
 	ActiveDim,
 	ActivationSource,
-	QueryEngineOptions
+	QueryEngineOptions,
+	StatementClass,
+	StatementRecord
 } from './QueryEngine';
 export { mapSqlTypeToJs, buildSchemaMap } from './QueryEngine';
 export { MarkHandle } from './MarkHandle.svelte';

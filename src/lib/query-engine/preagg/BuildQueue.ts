@@ -33,7 +33,11 @@ export interface QueuedBuild {
 /** What the queue needs from its owner. */
 export interface BuildQueueHost {
 	exec(sql: string): Promise<void>;
-	/** Whether a mark query is running or waiting. */
+	/**
+	 * Whether an interaction statement is on the connection, or a mark query is
+	 * waiting to be sent. Background statements (other builds, tooltip writes)
+	 * do not count.
+	 */
 	busy(): boolean;
 	/**
 	 * Whether a build is still wanted, checked when it would be sent: a mark
@@ -99,11 +103,12 @@ export class BuildQueue {
 	}
 
 	/**
-	 * Send the next queued build if nothing else is on the connection: no build
-	 * running, and no mark query waiting or running. Called when a build is
-	 * queued, when one finishes, and when a mark query settles. Queries without
-	 * a caller id (identity lookups, describe, ad-hoc queries) do not hold builds
-	 * back and can wait behind a running one; none is on an interaction path.
+	 * Send the next queued build if nothing someone waits for is on the
+	 * connection: no build running, no interaction statement in flight, and no
+	 * mark query waiting. Called when a build is queued, when one finishes, when
+	 * a mark query settles, and when the last interaction statement settles.
+	 * Background statements (tooltip-table writes, cleanup) do not hold builds
+	 * back.
 	 *
 	 * Mark queries hold a build back for at most the wait limit. A drag that
 	 * starts before its source's tables are built reads the base table, each
