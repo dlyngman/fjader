@@ -465,8 +465,6 @@ export class MarkLifecycleV2 {
 
 	// --- fitDomain ---
 	#fitDomainTimeout: ReturnType<typeof setTimeout> | null = null;
-	/** The chart's visibility as the refit effect last saw it, to notice a return. */
-	#refitSawVisible = true;
 	/** Debounces a refit after a data change (#refitFromData). */
 	#refitTimeout: ReturnType<typeof setTimeout> | null = null;
 	#fitDomainLastTarget: [number, number] = [0, 0];
@@ -814,10 +812,24 @@ export class MarkLifecycleV2 {
 
 		// Off screen, the engine stops re-querying this mark (after its first
 		// result) and queries it once when it is back; see MarkHandle.active.
+		//
+		// The one owner of a return to view. A fitted axis may have moved
+		// meanwhile (a shared axis zoomed from another chart), and the fit
+		// effects do not run off screen. If the mark came back stale, its
+		// catch-up result refits like any data change (#refitFromData, or
+		// #onTooltipTableWritten with JS transforms). Refitting here as well
+		// would fit to the old data first, then to the new: two fits.
+		// Otherwise its data is current and nothing else will refit, so
+		// refit now.
 		$effect(() => {
 			const handle = this.#handle;
 			const visible = this.#chartContext.visible ?? true;
-			if (handle) untrack(() => handle.setActive(visible));
+			if (!handle) return;
+			untrack(() => {
+				const cameBack = visible && !handle.active;
+				const caughtUp = handle.setActive(visible);
+				if (cameBack && !caughtUp) this.#refitOnReturn();
+			});
 		});
 
 		// Push per-mark params and trigger query. Runs immediately after
@@ -939,26 +951,18 @@ export class MarkLifecycleV2 {
 		// result): refit, debounced like the data settling. Marks with JS
 		// transforms refit after their tooltip table is written instead, which
 		// their fit reads (#onTooltipTableWritten). Off screen, like the mark's
-		// re-queries: reading `visible` refits when the chart is back.
+		// re-queries: the return to view refits (#refitOnReturn).
 		$effect(() => {
 			const fitDomain = this.#reactiveConfig.fitDomain;
 			if (!fitDomain) return;
 			const dataVersion = this.dataVersion;
 			if (dataVersion === 0) return;
-			const visible = this.#chartContext.visible ?? true;
-			const cameBack = visible && !this.#refitSawVisible;
-			this.#refitSawVisible = visible;
-			if (!visible) return;
+			// Untracked: a return to view refits from the setActive effect, which
+			// knows whether a catch-up result is coming.
+			if (!untrack(() => this.#chartContext.visible ?? true)) return;
 			// With JS transforms the fit reads the tooltip table, and a data change
-			// refits after its write (#onTooltipTableWritten). Coming back into view
-			// with no new data (a shared axis zoomed from another chart meanwhile)
-			// writes nothing, so refit here from the table, which is current.
-			if (this.#transformCompiler.hasJSTransforms()) {
-				if (cameBack && untrack(() => this.#tooltipTableReady)) {
-					untrack(() => this.#refitFromData());
-				}
-				return;
-			}
+			// refits after its write (#onTooltipTableWritten).
+			if (this.#transformCompiler.hasJSTransforms()) return;
 			untrack(() => {
 				clearTimeout(this.#refitTimeout!);
 				this.#refitTimeout = setTimeout(() => this.#refitFromData(), 300);
@@ -2615,6 +2619,19 @@ export class MarkLifecycleV2 {
 		if (!target) return;
 
 		this.#issueFitDomainQuery(fittedAxis, target as [number, number], true);
+	}
+
+	/**
+	 * The chart came back into view with current data: fit to the driving
+	 * axis as it is now. Not debounced, since no data is settling. With JS
+	 * transforms the fit reads the tooltip table; if its write is still
+	 * pending, #onTooltipTableWritten fits after it instead.
+	 */
+	#refitOnReturn(): void {
+		if (!this.#reactiveConfig.fitDomain || this.dataVersion === 0) return;
+		if (this.#transformCompiler.hasJSTransforms() && !this.#tooltipTableReady) return;
+		clearTimeout(this.#refitTimeout!);
+		this.#refitFromData();
 	}
 
 	// ===========================================================================

@@ -51,16 +51,22 @@ export class MarkHandle {
 		return this.#active;
 	}
 
-	setActive(active: boolean): void {
-		if (active === this.#active) return;
+	/**
+	 * Returns whether this call sent a catch-up query: the mark came back
+	 * stale. A return with no query means the data it holds is current, so
+	 * the caller can act on its return now rather than after a result.
+	 */
+	setActive(active: boolean): boolean {
+		if (active === this.#active) return false;
 		this.#active = active;
-		if (active) this._onActivate?.();
+		return active ? (this._onActivate?.() ?? false) : false;
 	}
 
 	#active = true;
 
-	// Engine sets this during registration: query a mark that went stale.
-	_onActivate: (() => void) | null = null;
+	// Engine sets this during registration: query a mark that went stale, and
+	// say whether it did.
+	_onActivate: (() => boolean) | null = null;
 
 	/**
 	 * Engine-internal: called to deliver query results.
