@@ -1107,17 +1107,6 @@ export class GPUCoordinator {
 	/** Reused per pass: the chart's x and y ScaleParam and entrance, pushed as immediates. */
 	#chartScaleImmediates = new Float32Array(CHART_SCALE_IMMEDIATE_SIZE / 4);
 
-	/**
-	 * Begin a chart's entrance on the first pass that draws data in it.
-	 *
-	 * Per chart, not per mark: every mark in the chart reads the same immediate,
-	 * so a bar chart and the line drawn over it enter together. Marks normally
-	 * land in one query batch; one landing mid-entrance joins at the current t,
-	 * and one landing after it simply appears.
-	 *
-	 * Started here rather than on registration, so an off-screen chart enters
-	 * when it is first drawn, which is when it can be seen.
-	 */
 	/** Debug listeners for chart entrances (observeEntrances). */
 	#entranceObservers = new Set<(entrance: ChartEntrance) => void>();
 
@@ -1131,6 +1120,17 @@ export class GPUCoordinator {
 		return () => this.#entranceObservers.delete(listener);
 	}
 
+	/**
+	 * Begin a chart's entrance on the first pass that draws data in it.
+	 *
+	 * Per chart, not per mark: every mark in the chart reads the same immediate,
+	 * so a bar chart and the line drawn over it enter together. Marks normally
+	 * land in one query batch; one landing mid-entrance joins at the current t,
+	 * and one landing after it simply appears.
+	 *
+	 * Started here rather than on registration, so an off-screen chart enters
+	 * when it is first drawn, which is when it can be seen.
+	 */
 	#startEntranceIfDrawing(chart: ChartConfig, scalesKnown: boolean): void {
 		// Every mark's first data first, so the chart enters once, whole. Only
 		// this chart's marks: a chart sharing a scale that lands later springs
@@ -2218,6 +2218,9 @@ export class GPUCoordinator {
 	 */
 	setVisibilityCallback(chartId: string, callback: (visible: boolean) => void): () => void {
 		this.#visibilityCallbacks.set(chartId, callback);
+		// Callbacks hear changes only. One set after the chart was already found
+		// off screen would otherwise go on assuming it visible.
+		if (this.#registeredCharts.get(chartId)?.visible === false) callback(false);
 		return () => this.#visibilityCallbacks.delete(chartId);
 	}
 

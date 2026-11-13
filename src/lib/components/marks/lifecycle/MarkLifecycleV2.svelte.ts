@@ -905,6 +905,10 @@ export class MarkLifecycleV2 {
 			const fitDomain = this.#reactiveConfig.fitDomain;
 			if (!fitDomain) return;
 			if (!this.#dataDerivedDomainsSet) return;
+			// Off screen, like the mark's re-queries (MarkHandle.active): no fit.
+			// Reading `visible` re-runs this when the chart is back, which fits
+			// to the driving axis as it is then.
+			if (!(this.#chartContext.visible ?? true)) return;
 
 			const fittedAxis = this.#resolveFittedAxis(fitDomain);
 			if (!fittedAxis) return;

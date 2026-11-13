@@ -36,9 +36,14 @@ function mark(markId: string, field: string): MarkHandle {
 	);
 }
 
-/** Give a handle its first result, as the engine would. */
+/**
+ * The mark's first query goes out (the lifecycle's params push does this) and
+ * its result lands. Clears the record, so a test sees only what follows.
+ */
 function landed(handle: MarkHandle): void {
+	handle.updateParams({ sort: undefined, limit: undefined });
 	handle._setResult({ numRows: 0 } as never);
+	queried.length = 0;
 }
 
 beforeEach(() => {
@@ -110,5 +115,22 @@ describe('off-screen gate', () => {
 		h.destroy();
 		h.setActive(true);
 		expect(queried).toEqual([]);
+	});
+});
+
+describe('off-screen gate, re-registration', () => {
+	function register(markId: string, field: string): MarkHandle {
+		return mark(markId, field);
+	}
+
+	it('sends the first query of a re-registration with new parts, even while inactive', () => {
+		const h = register('m', 'a');
+		landed(h);
+		h.setActive(false);
+		register('m', 'b');
+		expect(queried).toEqual(['m']);
+		// Only that first one: a filter change after it is gated again.
+		engine.onFilterChange(group);
+		expect(queried).toEqual(['m']);
 	});
 });

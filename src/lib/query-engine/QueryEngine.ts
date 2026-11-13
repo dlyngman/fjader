@@ -219,6 +219,13 @@ interface MarkRegistration {
 	filterGroup: FilterGroup;
 	/** A re-query was skipped while the mark was inactive; run it on activation. */
 	stale: boolean;
+	/**
+	 * The registration's first query has not been sent: a new mark, or one
+	 * registered again with different query parts (a rebin, a field change).
+	 * That first result can feed domains other charts share, so it goes out
+	 * even while the mark is inactive.
+	 */
+	needsFirst: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -894,7 +901,13 @@ export class QueryEngine {
 
 		// Reuse existing handle to preserve arrowTable during re-query
 		const handle = prev?.handle ?? new MarkHandle();
-		const reg: MarkRegistration = { descriptor, handle, filterGroup, stale: false };
+		const reg: MarkRegistration = {
+			descriptor,
+			handle,
+			filterGroup,
+			stale: false,
+			needsFirst: !prev || prev.descriptor.parts !== descriptor.parts
+		};
 		this.#marks.set(markId, reg);
 		this.#preagg.trackTable(descriptor.baseTable);
 
@@ -990,13 +1003,16 @@ export class QueryEngine {
 	 */
 	#queryMark(markId: string, reg: MarkRegistration): void {
 		const { handle } = reg;
-		// Off screen and already holding data: nothing to show for it now. Its
-		// first query still runs (it can feed a domain another chart shares).
-		if (!handle.active && handle.dataVersion > 0) {
+		// Off screen and already holding data for this registration: nothing to
+		// show for it now. A registration's first query still runs (it can feed
+		// a domain another chart shares), including after a re-registration
+		// with new parts, where the handle still holds the old data.
+		if (!handle.active && handle.dataVersion > 0 && !reg.needsFirst) {
 			reg.stale = true;
 			return;
 		}
 		reg.stale = false;
+		reg.needsFirst = false;
 		const preagg = this.#preagg.sqlFor(markId, reg);
 		const sqlStr = preagg?.sql || this.#baseSQL(markId, reg);
 		if (!sqlStr) return;
