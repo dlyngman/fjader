@@ -431,6 +431,44 @@
 			add('11b DDL overlap, same name', `main CREATE: ${mainSame}; lane CREATE: ${await slowSame}`);
 		});
 
+	// 12. A cancelled CREATE TABLE AS on a lane must leave no table: preagg
+	//     tables are hash-named and reused through CREATE TABLE IF NOT EXISTS, so
+	//     a partial or empty leftover would be served as the aggregate until a
+	//     reload. Cancel one partway, look for it from the main connection, then
+	//     run the same IF NOT EXISTS build again and count its rows.
+	const cancelledCreate = () =>
+		exp(async () => {
+			const fj = connectionFrom(a, {
+				pollingIntervalMs: pollInterval === 'default' ? undefined : Number(pollInterval)
+			});
+			lane ??= await fj.openSlicedLane!();
+			await fj.exec!('DROP TABLE IF EXISTS cancelled_build');
+			const build = `CREATE TABLE IF NOT EXISTS cancelled_build AS
+				SELECT i % 1000 AS k, count(*) AS n FROM range(60000000) t(i) GROUP BY k`;
+			const t0 = now();
+			const ctl = new AbortController();
+			const first = lane.exec(build, ctl.signal).then(
+				() => `completed at ${fmt(now() - t0)}`,
+				(e) => `${e?.name} at ${fmt(now() - t0)}`
+			);
+			await new Promise((r) => setTimeout(r, 200));
+			ctl.abort();
+			const outcome = await first;
+			const count = async (sql: string) =>
+				Number((tableFromIPC(await fj.queryIPC!(sql)).get(0) as { n: unknown }).n);
+			const exists = await count(
+				"SELECT count(*) AS n FROM duckdb_tables() WHERE table_name = 'cancelled_build'"
+			);
+			await lane.exec(build);
+			const rows = await count('SELECT count(*) AS n FROM cancelled_build');
+			const total = await count('SELECT sum(n) AS n FROM cancelled_build');
+			add(
+				'12 cancelled CREATE TABLE AS',
+				`first build: ${outcome}; table after the cancel: ${exists ? 'EXISTS' : 'none'}; ` +
+					`rebuilt with IF NOT EXISTS: ${rows} rows, sum(n) ${total} (expect 1000, 60000000)`
+			);
+		});
+
 	onMount(open);
 </script>
 
@@ -461,6 +499,7 @@
 		<button disabled={!ready || running} onclick={fjaderLane}>9 fjader lane</button>
 		<button disabled={!ready || running} onclick={types}>10 types</button>
 		<button disabled={!ready || running} onclick={ddlOverlap}>11 DDL overlap</button>
+		<button disabled={!ready || running} onclick={cancelledCreate}>12 cancelled CREATE</button>
 	</div>
 	<p>{ready ? (running ? 'running…' : 'ready') : 'starting DuckDB…'}</p>
 	<table>

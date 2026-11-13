@@ -531,15 +531,28 @@ export class QueryEngine {
 		kind: StatementRecord['kind'],
 		sql: string,
 		place: StatementPlacement,
-		run: (conn: DuckDBConnection) => Promise<T>,
-		/** How to run it on a sliced lane; absent: main connection only. */
-		runSliced?: (lane: SlicedLane) => Promise<T>,
-		signal?: AbortSignal
+		how: {
+			run: (conn: DuckDBConnection) => Promise<T>;
+			/** How to run it on a sliced lane; absent: main connection only. */
+			runSliced?: (lane: SlicedLane) => Promise<T>;
+			signal?: AbortSignal;
+		}
 	): Promise<T> {
+		const { run, runSliced, signal } = how;
 		if (!this.#conn) await this.#ensureConnection();
 		const cls = place.class;
-		const lane =
-			cls === 'background' && !place.connectionLocal && runSliced ? await this.#lane() : null;
+		const wantsLane = cls === 'background' && !place.connectionLocal && !!runSliced;
+		// Awaited only while the lane is opening. Once its state is known (open,
+		// or none to be had) the choice is made in this tick, so without a lane
+		// a background statement goes out exactly as before: no extra microtask
+		// for an interaction statement sent in the same tick to overtake it.
+		const lane = !wantsLane
+			? null
+			: this.#laneState === 'open'
+				? this.#openLane
+				: this.#laneState === 'none' || !this.#conn?.openSlicedLane
+					? null
+					: await this.#lane();
 		// The main connection cannot interrupt a statement once sent: a signal
 		// only stops one that has not gone yet. A lane cancels (SlicedLane).
 		if (!lane && signal?.aborted) throw new DOMException('Statement aborted', 'AbortError');
@@ -590,17 +603,14 @@ export class QueryEngine {
 		kind: StatementRecord['kind'] = 'query',
 		signal?: AbortSignal
 	): Promise<Table> {
-		return this.#send(
-			kind,
-			sql,
-			place,
-			async (conn) => {
+		return this.#send(kind, sql, place, {
+			run: async (conn) => {
 				if (conn.queryIPC) return tableFromIPC(await conn.queryIPC(sql));
 				return conn.query(sql);
 			},
-			async (lane) => tableFromIPC((await lane.query(sql, signal)).ipc),
+			runSliced: async (lane) => tableFromIPC((await lane.query(sql, signal)).ipc),
 			signal
-		);
+		});
 	}
 
 	/**
@@ -611,13 +621,19 @@ export class QueryEngine {
 	#lane(): Promise<SlicedLane | null> {
 		if (this.#lanePromise) return this.#lanePromise;
 		const conn = this.#conn;
-		if (!conn?.openSlicedLane || this.#destroyed) return Promise.resolve(null);
+		if (!conn?.openSlicedLane || this.#destroyed) {
+			if (conn) this.#laneState = 'none';
+			return Promise.resolve(null);
+		}
+		this.#laneState = 'opening';
 		this.#lanePromise = conn.openSlicedLane().then(
 			(lane) => {
-				this.#laneReady = true;
+				this.#openLane = lane;
+				this.#laneState = 'open';
 				return lane;
 			},
 			(e) => {
+				this.#laneState = 'none';
 				console.warn(
 					'[QueryEngine] could not open a sliced lane; background stays on the main connection:',
 					e
@@ -634,12 +650,15 @@ export class QueryEngine {
 	 * opens it; false until it is open.
 	 */
 	#slicedReady(): boolean {
-		if (!this.#laneReady) void this.#lane();
-		return this.#laneReady;
+		if (this.#laneState === 'unknown') void this.#lane();
+		return this.#laneState === 'open';
 	}
 
 	#lanePromise: Promise<SlicedLane | null> | null = null;
-	#laneReady = false;
+	/** The lane once open, read in #send without awaiting. */
+	#openLane: SlicedLane | null = null;
+	/** 'none': no lane to be had (no capability, or it failed to open). */
+	#laneState: 'unknown' | 'opening' | 'open' | 'none' = 'unknown';
 
 	/**
 	 * Listen to every statement sent to the connection, as it settles. For
@@ -851,19 +870,16 @@ export class QueryEngine {
 		const statements = Array.isArray(sql) ? sql : [sql];
 		// One statement at a time, each committing on its own.
 		for (const stmt of statements) {
-			await this.#send(
-				'exec',
-				stmt,
-				place,
-				async (conn) => {
+			await this.#send('exec', stmt, place, {
+				run: async (conn) => {
 					if (conn.exec) await conn.exec(stmt);
 					else await conn.query(stmt);
 				},
-				async (lane) => {
+				runSliced: async (lane) => {
 					await lane.exec(stmt, signal);
 				},
 				signal
-			);
+			});
 		}
 	}
 
@@ -988,11 +1004,13 @@ export class QueryEngine {
 			'insert',
 			`INSERT ARROW INTO "${options.name}" (${data.byteLength} bytes)`,
 			{ class: 'interaction' },
-			async (conn) => {
-				if (!conn.insertArrowFromIPCStream) {
-					throw new Error('Arrow IPC loading requires a DuckDB-WASM connection');
+			{
+				run: async (conn) => {
+					if (!conn.insertArrowFromIPCStream) {
+						throw new Error('Arrow IPC loading requires a DuckDB-WASM connection');
+					}
+					await conn.insertArrowFromIPCStream(data, options);
 				}
-				await conn.insertArrowFromIPCStream(data, options);
 			}
 		);
 	}

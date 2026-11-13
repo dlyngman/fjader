@@ -260,6 +260,19 @@ describe('QueryEngine background lane', () => {
 		expect(records[0].connection).toBe('main');
 	});
 
+	it('without a lane, keeps the order of statements sent in the same tick', async () => {
+		const { conn, sent } = fakeConnection();
+		const engine = new QueryEngine(conn);
+		// Learn there is no lane.
+		await engine.exec('SELECT 0', { class: 'background' });
+		sent.length = 0;
+		await Promise.all([
+			engine.exec('background first', { class: 'background' }),
+			engine.exec('interaction second')
+		]);
+		expect(sent).toEqual(['background first', 'interaction second']);
+	});
+
 	it('falls back to the main connection when the lane fails to open', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const { conn, log } = withLane(async () => {
