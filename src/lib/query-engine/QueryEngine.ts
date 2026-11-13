@@ -766,6 +766,11 @@ export class QueryEngine {
 
 		const promise = this.#fetchDescribe(table);
 		this.#describeCache.set(table, promise);
+		// A failure is not remembered: a DESCRIBE sent before its table existed
+		// would otherwise fail every later one for good.
+		promise.catch(() => {
+			if (this.#describeCache.get(table) === promise) this.#describeCache.delete(table);
+		});
 		return promise;
 	}
 
