@@ -30,7 +30,8 @@ import { Preagg } from './preagg/Preagg';
 import type { ActivationSource } from './preagg/plan';
 export type { ActiveDim, ActivationSource } from './preagg/plan';
 import { MarkHandle, type QueryParams, type ResultCause } from './MarkHandle.svelte';
-import type { SlicedLane } from './sliced-lane';
+import { LaneSlot, type LaneResult, type SlicedLane } from './sliced-lane';
+import { SourceRouting } from './source-routing';
 import {
 	CategoricalIdentity,
 	type DimValue,
@@ -76,6 +77,15 @@ export interface QueryOpts {
 	class?: StatementClass;
 	/** Reads or writes connection-local state; see StatementPlacement. */
 	connectionLocal?: boolean;
+	/**
+	 * The table this read reads (base table, view or preagg table). An
+	 * interaction read with one is routed by its source's cost (see
+	 * SourceRouting): known-fast on the main connection, unknown or slow sliced
+	 * on that source's lane. Without one it stays on the main connection.
+	 */
+	source?: string;
+	/** A mark's data read: its cost updates the source's record. */
+	data?: boolean;
 }
 
 /**
@@ -91,6 +101,10 @@ export interface QueryOpts {
 export interface StatementPlacement {
 	class: StatementClass;
 	connectionLocal?: boolean;
+	/** See QueryOpts.source. */
+	source?: string;
+	/** See QueryOpts.data. */
+	data?: boolean;
 }
 
 /**
@@ -114,8 +128,10 @@ export interface StatementRecord {
 	/** How it was sent: a query returning rows, a statement, a DESCRIBE, an Arrow insert. */
 	kind: 'query' | 'exec' | 'describe' | 'insert';
 	class: StatementClass;
-	/** Which connection ran it: the main one, or the sliced lane. */
+	/** Which connection ran it: the main one, or a sliced lane. */
 	connection: 'main' | 'lane';
+	/** The source it was routed by, when it named one. */
+	source?: string;
 	/** performance.now() when handed to the connection, and when it settled. */
 	start: number;
 	end: number;
@@ -130,6 +146,13 @@ export interface StatementRecord {
  * build instead.
  */
 const BUILD_MAX_WAIT_MS = 100;
+
+/**
+ * Sliced lanes for interaction reads of unknown or slow sources. A source
+ * sticks to one; more sources than lanes share them (reads of one source are
+ * serial anyway).
+ */
+const SOURCE_LANES = 4;
 
 export interface QueryEngineOptions {
 	/** Overrides BUILD_MAX_WAIT_MS; tests use it to make the queue deterministic. */
@@ -541,18 +564,11 @@ export class QueryEngine {
 		const { run, runSliced, signal } = how;
 		if (!this.#conn) await this.#ensureConnection();
 		const cls = place.class;
-		const wantsLane = cls === 'background' && !place.connectionLocal && !!runSliced;
-		// Awaited only while the lane is opening. Once its state is known (open,
-		// or none to be had) the choice is made in this tick, so without a lane
-		// a background statement goes out exactly as before: no extra microtask
-		// for an interaction statement sent in the same tick to overtake it.
-		const lane = !wantsLane
-			? null
-			: this.#laneState === 'open'
-				? this.#openLane
-				: this.#laneState === 'none' || !this.#conn?.openSlicedLane
-					? null
-					: await this.#lane();
+		// Awaited only while a lane is opening (LaneSlot.get): once its state is
+		// known the choice is made in this tick.
+		const slot = runSliced ? this.#slotFor(place) : null;
+		const got = slot ? slot.get() : null;
+		const lane = got instanceof Promise ? await got : got;
 		// The main connection cannot interrupt a statement once sent: a signal
 		// only stops one that has not gone yet. A lane cancels (SlicedLane).
 		if (!lane && signal?.aborted) throw new DOMException('Statement aborted', 'AbortError');
@@ -573,6 +589,7 @@ export class QueryEngine {
 					kind,
 					class: cls,
 					connection: lane ? 'lane' : 'main',
+					source: place.source,
 					start,
 					end: performance.now(),
 					error
@@ -605,43 +622,45 @@ export class QueryEngine {
 	): Promise<Table> {
 		return this.#send(kind, sql, place, {
 			run: async (conn) => {
-				if (conn.queryIPC) return tableFromIPC(await conn.queryIPC(sql));
-				return conn.query(sql);
+				if (!conn.queryIPC) return conn.query(sql);
+				const t0 = performance.now();
+				const bytes = await conn.queryIPC(sql);
+				const ms = performance.now() - t0;
+				const table = tableFromIPC(bytes);
+				if (this.#notesCost(place)) this.#routing.noteMainRead(place.source!, ms, table.numRows);
+				return table;
 			},
-			runSliced: async (lane) => tableFromIPC((await lane.query(sql, signal)).ipc),
+			runSliced: async (lane) => {
+				const result: LaneResult = await lane.query(sql, signal);
+				const table = tableFromIPC(result.ipc);
+				if (this.#notesCost(place)) {
+					this.#routing.noteLaneRead(place.source!, result.polls, result.execMs, table.numRows);
+				}
+				return table;
+			},
 			signal
 		});
 	}
 
 	/**
-	 * The sliced lane background statements run on, opened on first use; null
-	 * when the connection has none (a custom one) or it failed to open, and
-	 * then everything stays on the main connection.
+	 * The lane a statement runs on, or null for the main connection:
+	 * - connection-local state, or a statement with no sliced form: main;
+	 * - background: the background lane (preagg builds and their reads);
+	 * - interaction naming a source: by the source's cost (SourceRouting),
+	 *   unknown or slow on that source's lane, known-fast on main.
+	 * Without the capability every slot answers null: one connection.
 	 */
-	#lane(): Promise<SlicedLane | null> {
-		if (this.#lanePromise) return this.#lanePromise;
-		const conn = this.#conn;
-		if (!conn?.openSlicedLane || this.#destroyed) {
-			if (conn) this.#laneState = 'none';
-			return Promise.resolve(null);
-		}
-		this.#laneState = 'opening';
-		this.#lanePromise = conn.openSlicedLane().then(
-			(lane) => {
-				this.#openLane = lane;
-				this.#laneState = 'open';
-				return lane;
-			},
-			(e) => {
-				this.#laneState = 'none';
-				console.warn(
-					'[QueryEngine] could not open a sliced lane; background stays on the main connection:',
-					e
-				);
-				return null;
-			}
-		);
-		return this.#lanePromise;
+	#slotFor(place: StatementPlacement): LaneSlot | null {
+		if (place.connectionLocal) return null;
+		if (place.class === 'background') return this.#backgroundLane;
+		if (!place.source || !this.#conn?.openSlicedLane) return null;
+		const i = this.#routing.route(place.source);
+		return i == null ? null : this.#sourceLanes[i];
+	}
+
+	/** Whether a read's cost goes into its source's record: interaction data reads. */
+	#notesCost(place: StatementPlacement): boolean {
+		return place.class === 'interaction' && !!place.data && !!place.source;
 	}
 
 	/**
@@ -650,15 +669,32 @@ export class QueryEngine {
 	 * opens it; false until it is open.
 	 */
 	#slicedReady(): boolean {
-		if (this.#laneState === 'unknown') void this.#lane();
-		return this.#laneState === 'open';
+		this.#backgroundLane.get();
+		return this.#backgroundLane.isOpen;
 	}
 
-	#lanePromise: Promise<SlicedLane | null> | null = null;
-	/** The lane once open, read in #send without awaiting. */
-	#openLane: SlicedLane | null = null;
-	/** 'none': no lane to be had (no capability, or it failed to open). */
-	#laneState: 'unknown' | 'opening' | 'open' | 'none' = 'unknown';
+	#openLaneFn = (): Promise<SlicedLane> | null => {
+		const conn = this.#conn;
+		if (!conn?.openSlicedLane || this.#destroyed) return null;
+		return conn.openSlicedLane();
+	};
+	#laneFailed = (e: unknown): void => {
+		if (this.#warnedLaneFailed) return;
+		this.#warnedLaneFailed = true;
+		console.warn(
+			'[QueryEngine] could not open a sliced lane; its statements stay on the main connection:',
+			e
+		);
+	};
+	#warnedLaneFailed = false;
+	/** Background statements: preagg builds, their counts and drops. */
+	#backgroundLane = new LaneSlot(this.#openLaneFn, this.#laneFailed);
+	/** Interaction reads of unknown and slow sources, a source sticking to one. */
+	#sourceLanes = Array.from(
+		{ length: SOURCE_LANES },
+		() => new LaneSlot(this.#openLaneFn, this.#laneFailed)
+	);
+	#routing = new SourceRouting(SOURCE_LANES);
 
 	/**
 	 * Listen to every statement sent to the connection, as it settles. For
@@ -698,7 +734,9 @@ export class QueryEngine {
 		const sqlStr = typeof sql === 'string' ? sql : sql.toString();
 		const place: StatementPlacement = {
 			class: opts?.class ?? 'interaction',
-			connectionLocal: opts?.connectionLocal
+			connectionLocal: opts?.connectionLocal,
+			source: opts?.source,
+			data: opts?.data
 		};
 
 		// Cache check: return cached result immediately, bypassing
@@ -965,6 +1003,8 @@ export class QueryEngine {
 		// against dropped state (see CategoricalIdentity's generation counter).
 		const identityReset = this.#identity.reset().finally(() => this.#notifyIdentityReset());
 		this.#preagg.reset();
+		// New data: a source's cost is unknown again (a reload can be slower).
+		this.#routing.reset();
 		this.#queryCache.clear();
 		return identityReset;
 	}
@@ -1169,13 +1209,25 @@ export class QueryEngine {
 
 		// Use the public query() path — its execute-latest logic ensures
 		// at most 1 inflight + 1 pending per callerId during rapid brushing.
-		this.query(sqlStr, { callerId: markId })
+		// Routed by the table this read reads (SourceRouting): the preagg table
+		// when one answers, else the mark's BASE table. Its identity view reads
+		// the same rows, and the mark's range and stats reads name the base
+		// table: one record per source, kept by the data reads.
+		this.query(sqlStr, {
+			callerId: markId,
+			source: preagg?.table ?? reg.descriptor.baseTable,
+			data: true
+		})
 			.catch((e) => {
 				if (!preagg || (e as Error)?.name === 'AbortError') throw e;
 				this.#preagg.readFailed(markId, preagg.table, e);
 				const baseSQL = this.#baseSQL(markId, reg);
 				if (!baseSQL) throw e;
-				return this.query(baseSQL, { callerId: markId });
+				return this.query(baseSQL, {
+					callerId: markId,
+					source: reg.descriptor.baseTable,
+					data: true
+				});
 			})
 			.then((table) => handle._setResult(table, cause))
 			.catch((e) => {
@@ -1289,8 +1341,7 @@ export class QueryEngine {
 		}
 		this.#pending.clear();
 		// The preagg drops above ran on the lane; close it, then the connection.
-		const lane = this.#lanePromise ? await this.#lanePromise : null;
-		if (lane) await lane.close().catch(() => {});
+		await Promise.all([this.#backgroundLane, ...this.#sourceLanes].map((slot) => slot.close()));
 		const conn = this.#conn ?? (this.#connPromise ? await this.#connPromise : null);
 		if (conn) await conn.close();
 	}

@@ -202,7 +202,7 @@ export async function fetchCategoricalDomains(
 		});
 
 		fetches.push(
-			coordinator.query(q, { cache: true }).then((result) => {
+			coordinator.query(q, { cache: true, source: table }).then((result) => {
 				if (stale()) return;
 				const row = Array.from(result)[0];
 				if (row && row.min_time != null && row.max_time != null) {
@@ -270,7 +270,7 @@ export async function fetchCategoricalDomains(
 				});
 
 				fetches.push(
-					coordinator.query(q, { cache: true }).then((result) => {
+					coordinator.query(q, { cache: true, source: table }).then((result) => {
 						if (stale()) return;
 						const row = Array.from(result)[0];
 						if (row && row.min_color != null && row.max_color != null) {
@@ -296,7 +296,7 @@ export async function fetchCategoricalDomains(
 		});
 
 		fetches.push(
-			coordinator.query(q, { cache: true }).then((result) => {
+			coordinator.query(q, { cache: true, source: table }).then((result) => {
 				if (stale()) return;
 				const row = Array.from(result)[0];
 				if (row && row.min_radius != null && row.max_radius != null) {
@@ -438,7 +438,7 @@ export async function fetchGlobalAggregates(
 		console.log(`📊 [${markId}] Sidecar query SQL:`, sidecarQuery.toString());
 
 		// Step 3: Execute the query
-		const result = await coordinator.query(sidecarQuery, { cache: true });
+		const result = await coordinator.query(sidecarQuery, { cache: true, source: table });
 		if (stale()) return { globalAggregatesSet: false };
 		const extents: Record<string, unknown> = Array.from(result)[0];
 
