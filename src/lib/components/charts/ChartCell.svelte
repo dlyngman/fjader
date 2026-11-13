@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { ScaleGeneration } from '$lib/scales/ScaleGeneration.svelte';
 	import type { ChartVisibility } from './ChartVisibility.svelte';
+	import type { ChartHover } from './ChartHover.svelte';
 	import { setContext, getContext, onMount } from 'svelte';
 	import type { Snippet } from 'svelte';
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
@@ -49,6 +50,8 @@
 		scaleGeneration: ScaleGeneration;
 		/** Whether any of the chart's cells is on screen; this cell reports into it. */
 		chartVisibility: ChartVisibility;
+		/** Whether the pointer is over any of the chart's cells; this cell reports into it. */
+		chartHover: ChartHover;
 		chartConfig: ChartConfig;
 		facetingProps?: FacetingProps;
 		gpuCoordinator: GPUCoordinator;
@@ -71,6 +74,7 @@
 		scales,
 		scaleGeneration,
 		chartVisibility,
+		chartHover,
 		chartConfig,
 		facetingProps = {
 			fx: null,
@@ -237,6 +241,7 @@
 	onMount(() => () => {
 		removeVisibilityCallback();
 		chartVisibility.remove(layout.chartId);
+		chartHover.set(layout.chartId, false);
 	});
 	onMount(() => () => hoverSettle.leave());
 
@@ -373,6 +378,9 @@
 		},
 		get visible() {
 			return chartVisibility.visible;
+		},
+		get hovered() {
+			return chartHover.hovered;
 		},
 		get yScaleState() {
 			return scales?.yScaleState;
@@ -562,6 +570,7 @@
 	}
 
 	function handleChartPointerEnter(event: PointerEvent) {
+		chartHover.set(layout.chartId, true);
 		activateSources();
 		hoverSettle.enter();
 		refreshSvgOrigin();
@@ -580,6 +589,7 @@
 	}
 
 	function handleChartPointerLeave() {
+		chartHover.set(layout.chartId, false);
 		pointerInside = false;
 		pointerOverSvg = false;
 		hoverSettle.leave();

@@ -57,7 +57,7 @@ import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 import type { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
-import type { QueryEngine } from '$lib/query-engine/QueryEngine';
+import type { QueryEngine, StatementClass } from '$lib/query-engine/QueryEngine';
 import { MarkHandle } from '$lib/query-engine/MarkHandle.svelte';
 import type { FilterGroup } from '$lib/query-engine/FilterGroup.svelte';
 import { isContinuousScale, isNumericScale } from '$lib/scales/scale-categories';
@@ -880,8 +880,21 @@ export class MarkLifecycleV2 {
 			};
 		});
 
-		// And this one rewrites it when data updates (debounced). The old table
-		// stays readable until the rewrite replaces it.
+		// And this one rewrites it when data updates, but only when someone may
+		// hover it. The table is a second scan of the mark's data, often with a
+		// sort, and nobody hovers most charts after most changes (at load, or
+		// while another chart is brushed), so a write per data change was the
+		// largest cost after a table load.
+		//
+		// - The chart hovered: written after the data settles (debounced), as
+		//   before. The old table stays readable until the rewrite replaces it,
+		//   so a click right after a data update still finds its row.
+		// - Not hovered: the table is marked stale (not ready), which takes the
+		//   mark out of the tooltip manager, so no lookup reads old rows. It is
+		//   written when the pointer enters the chart, at once, as interaction:
+		//   it is what the first hover waits for.
+		// - fitDomain on a mark with JS transforms reads the table to fit
+		//   (#buildFitDomainQuery), so that mark writes eagerly, in background.
 		$effect(() => {
 			const tooltipConfig = this.#reactiveConfig.tooltip;
 			const fitDomain = this.#reactiveConfig.fitDomain;
@@ -889,13 +902,30 @@ export class MarkLifecycleV2 {
 
 			const dataVersion = this.dataVersion;
 			if (dataVersion === 0) return;
+			const hovered = this.#chartContext.hovered ?? true;
+			const eager = !!fitDomain && this.#transformCompiler.hasJSTransforms();
 
 			untrack(() => {
+				if (dataVersion === this.#tooltipWrittenFor) return;
 				clearTimeout(this.#tooltipWriteTimeout!);
-				this.#tooltipWriteTimeout = setTimeout(() => {
-					const data = this.data;
-					if (data && data.length > 0) this.#writeTooltipTable(data);
-				}, 300);
+				// A data change waits for the data to settle; hover arriving at a
+				// stale table writes at once.
+				const dataChanged = dataVersion !== this.#tooltipSeenVersion;
+				this.#tooltipSeenVersion = dataVersion;
+				if (!hovered && !eager) {
+					this.#tooltipTableReady = false;
+					return;
+				}
+				const cls = eager && !hovered ? 'background' : 'interaction';
+				this.#tooltipWriteTimeout = setTimeout(
+					() => {
+						const data = this.data;
+						if (!data || data.length === 0) return;
+						this.#tooltipWrittenFor = dataVersion;
+						this.#writeTooltipTable(data, cls);
+					},
+					dataChanged ? 300 : 0
+				);
 			});
 			return () => clearTimeout(this.#tooltipWriteTimeout!);
 		});
@@ -2106,7 +2136,12 @@ export class MarkLifecycleV2 {
 	// TOOLTIP WRITE-BACK
 	// ===========================================================================
 
-	async #writeTooltipTable(data: DataAccessor): Promise<void> {
+	/** The data version the tooltip table was last written for. */
+	#tooltipWrittenFor = -1;
+	/** The data version the write effect last saw, to tell a data change from a hover. */
+	#tooltipSeenVersion = -1;
+
+	async #writeTooltipTable(data: DataAccessor, cls: StatementClass): Promise<void> {
 		const tableName = this.#tooltipTableName;
 		// Before any statement: a write that fails part way can leave a table.
 		this.#tooltipTableWritten = true;
@@ -2175,7 +2210,7 @@ export class MarkLifecycleV2 {
 				// One statement: a hover query never finds the table missing.
 				await this.#queryEngine.exec(
 					`CREATE OR REPLACE TEMP TABLE "${tableName}" AS SELECT *${replaceClause} FROM (${withoutMembers})${orderClause}`,
-					{ class: 'background' }
+					{ class: cls }
 				);
 			} else {
 				// Path B: Serialize transformed data via SQL VALUES.
@@ -2219,7 +2254,7 @@ export class MarkLifecycleV2 {
 						`CREATE TEMP TABLE "${tableName}" (${schemaDef})`,
 						`INSERT INTO "${tableName}" VALUES ${valueRows.join(', ')}`
 					],
-					{ class: 'background' }
+					{ class: cls }
 				);
 			}
 
@@ -2227,7 +2262,7 @@ export class MarkLifecycleV2 {
 			const tipExtras = this.#getTipExtras();
 			if (Object.keys(tipExtras).length > 0) {
 				try {
-					await this.#mergeTipExtras(tableName, tipExtras);
+					await this.#mergeTipExtras(tableName, tipExtras, cls);
 				} catch (err) {
 					console.warn('Failed to merge tip extras into tooltip table:', err);
 				}
@@ -2287,7 +2322,11 @@ export class MarkLifecycleV2 {
 	 * DB query. Computes aggregates against the source table using the same
 	 * GROUP BY as the main query, then ALTER+UPDATE the temp table.
 	 */
-	async #mergeTipExtras(tableName: string, tipExtras: Record<string, unknown>): Promise<void> {
+	async #mergeTipExtras(
+		tableName: string,
+		tipExtras: Record<string, unknown>,
+		cls: StatementClass
+	): Promise<void> {
 		if (!this.#resolvedQueryParts) return;
 
 		// Identify non-aggregate channel columns — these are the join keys
@@ -2335,7 +2374,7 @@ export class MarkLifecycleV2 {
 			.join(' AND ');
 		const updateStmt = `UPDATE ${ident(tableName)} SET ${setClauses} FROM (${sidecarQuery.toString()}) _s WHERE ${joinCondition}`;
 
-		await this.#queryEngine.exec([...alterStmts, updateStmt], { class: 'background' });
+		await this.#queryEngine.exec([...alterStmts, updateStmt], { class: cls });
 	}
 
 	// ===========================================================================

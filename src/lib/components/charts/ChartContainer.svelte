@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { ScaleGeneration } from '$lib/scales/ScaleGeneration.svelte';
 	import { ChartVisibility } from './ChartVisibility.svelte';
+	import { ChartHover } from './ChartHover.svelte';
 	import { setContext, getContext, onDestroy } from 'svelte';
 	import type { Snippet } from 'svelte';
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
@@ -225,6 +226,8 @@
 	const scaleGeneration = new ScaleGeneration(() => scales);
 	// Whether any cell is on screen; the cells report into it.
 	const chartVisibility = new ChartVisibility();
+	// Whether the pointer is over any cell; the cells report into it.
+	const chartHover = new ChartHover();
 
 	// Queue for scale registrations that arrive before ChartScales is created.
 	// Marks mount synchronously during render, but ChartScales is created in an
@@ -395,6 +398,9 @@
 		get visible() {
 			return chartVisibility.visible;
 		},
+		get hovered() {
+			return chartHover.hovered;
+		},
 		get yScaleState() {
 			return scales?.yScaleState;
 		},
@@ -517,6 +523,7 @@
 						{scales}
 						{scaleGeneration}
 						{chartVisibility}
+						{chartHover}
 						{chartConfig}
 						{facetingProps}
 						{gpuCoordinator}
@@ -541,6 +548,7 @@
 			{scales}
 			{scaleGeneration}
 			{chartVisibility}
+			{chartHover}
 			{chartConfig}
 			{facetingProps}
 			{gpuCoordinator}
