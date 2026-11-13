@@ -465,6 +465,8 @@ export class MarkLifecycleV2 {
 
 	// --- fitDomain ---
 	#fitDomainTimeout: ReturnType<typeof setTimeout> | null = null;
+	/** Debounces a refit after a data change (#refitFromData). */
+	#refitTimeout: ReturnType<typeof setTimeout> | null = null;
 	#fitDomainLastTarget: [number, number] = [0, 0];
 	#fitDomainQuerySequence = 0;
 	#fitDomainSuppressed = false;
@@ -917,17 +919,37 @@ export class MarkLifecycleV2 {
 					return;
 				}
 				const cls = eager && !hovered ? 'background' : 'interaction';
-				this.#tooltipWriteTimeout = setTimeout(
-					() => {
-						const data = this.data;
-						if (!data || data.length === 0) return;
-						this.#tooltipWrittenFor = dataVersion;
-						this.#writeTooltipTable(data, cls);
-					},
-					dataChanged ? 300 : 0
-				);
+				const write = () => {
+					const data = this.data;
+					if (!data || data.length === 0) return;
+					this.#tooltipWrittenFor = dataVersion;
+					this.#writeTooltipTable(data, cls);
+				};
+				// Sent from this effect, not a timer, so it goes out before a preagg
+				// build the same pointer enter queues (see Preagg.activate).
+				if (dataChanged) this.#tooltipWriteTimeout = setTimeout(write, 300);
+				else write();
 			});
 			return () => clearTimeout(this.#tooltipWriteTimeout!);
+		});
+
+		// fitDomain after a data change (a brush on another chart, the first
+		// result): refit, debounced like the data settling. Marks with JS
+		// transforms refit after their tooltip table is written instead, which
+		// their fit reads (#onTooltipTableWritten). Off screen, like the mark's
+		// re-queries: reading `visible` refits when the chart is back.
+		$effect(() => {
+			const fitDomain = this.#reactiveConfig.fitDomain;
+			if (!fitDomain) return;
+			const dataVersion = this.dataVersion;
+			if (dataVersion === 0) return;
+			if (!(this.#chartContext.visible ?? true)) return;
+			if (this.#transformCompiler.hasJSTransforms()) return;
+			untrack(() => {
+				clearTimeout(this.#refitTimeout!);
+				this.#refitTimeout = setTimeout(() => this.#refitFromData(), 300);
+			});
+			return () => clearTimeout(this.#refitTimeout!);
 		});
 
 		// fitDomain — query DuckDB for fitted axis extent on driving axis change.
@@ -2539,7 +2561,22 @@ export class MarkLifecycleV2 {
 	 * Called after tooltip table is written. If fitDomain is active, issue a
 	 * sidecar MIN/MAX query against the fresh tooltip table.
 	 */
+	/**
+	 * A tooltip table was written. A fit over a mark with JS transforms reads that
+	 * table (#buildFitDomainQuery), so its refit after a data change waits for
+	 * the write; every other fit refits from the data itself (#refitAfterData).
+	 */
 	#onTooltipTableWritten(): void {
+		if (this.#transformCompiler.hasJSTransforms()) this.#refitFromData();
+	}
+
+	/**
+	 * Refit the fitted axis to the mark's current data, at the driving axis's
+	 * current domain. The data-driven trigger: the fitDomain effect reacts to the
+	 * driving axis, not to new data, and returns for a band driving axis, so this
+	 * is also a band-driven fit's only trigger, its first fit included.
+	 */
+	#refitFromData(): void {
 		const fitDomain = this.#reactiveConfig.fitDomain;
 		if (!fitDomain) return;
 		if (this.#fitDomainSuppressed) return;
@@ -2578,6 +2615,7 @@ export class MarkLifecycleV2 {
 		for (const scale of [...this.#otherScales]) this.#releaseOther(scale);
 		this.#handle?.destroy();
 		clearTimeout(this.#fitDomainTimeout!);
+		clearTimeout(this.#refitTimeout!);
 		clearTimeout(this.#tooltipWriteTimeout!);
 
 		if (this.#onMarkLOD) {
