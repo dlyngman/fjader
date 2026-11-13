@@ -30,7 +30,7 @@ import { Preagg } from './preagg/Preagg';
 import type { ActivationSource } from './preagg/plan';
 export type { ActiveDim, ActivationSource } from './preagg/plan';
 import { MarkHandle, type QueryParams, type ResultCause } from './MarkHandle.svelte';
-import { LaneSlot, type LaneResult, type SlicedLane } from './sliced-lane';
+import { LaneSlot, type LaneHold, type LaneResult, type SlicedLane } from './sliced-lane';
 import { SourceRouting } from './source-routing';
 import {
 	CategoricalIdentity,
@@ -154,6 +154,14 @@ const BUILD_MAX_WAIT_MS = 100;
  */
 const SOURCE_LANES = 4;
 
+/**
+ * How long the main connection must stay idle before a lane runs its next
+ * slice. Longer than the JS gap between two statements of a dependent chain
+ * (one settles, the next is built and sent), so the chain runs unbroken
+ * instead of letting one slice in at every gap.
+ */
+const MAIN_QUIET_MS = 2;
+
 export interface QueryEngineOptions {
 	/** Overrides BUILD_MAX_WAIT_MS; tests use it to make the queue deterministic. */
 	buildMaxWaitMs?: number;
@@ -255,7 +263,7 @@ export interface DuckDBConnection {
 	 * sends through them from `#send`, so every statement keeps its record,
 	 * class and accounting; nothing hands a raw lane to an app.
 	 */
-	openSlicedLane?(): Promise<SlicedLane>;
+	openSlicedLane?(options?: { hold?: LaneHold }): Promise<SlicedLane>;
 }
 
 // ---------------------------------------------------------------------------
@@ -577,6 +585,8 @@ export class QueryEngine {
 		if (interaction) this.#interactionInFlight++;
 		const start = performance.now();
 		let error: unknown;
+		// Paired with #mainIdle in the finally below.
+		if (!lane) this.#mainBusy();
 		try {
 			return lane ? await runSliced!(lane) : await run(conn);
 		} catch (e) {
@@ -604,6 +614,7 @@ export class QueryEngine {
 					}
 				}
 			}
+			if (!lane) this.#mainIdle();
 			// The last interaction statement settling frees the connection for a build.
 			if (interaction && --this.#interactionInFlight === 0) this.#preagg.pump();
 		}
@@ -676,7 +687,71 @@ export class QueryEngine {
 	#openLaneFn = (): Promise<SlicedLane> | null => {
 		const conn = this.#conn;
 		if (!conn?.openSlicedLane || this.#destroyed) return null;
-		return conn.openSlicedLane();
+		return conn.openSlicedLane({ hold: this.#mainQuiet });
+	};
+
+	// --- Holding lanes while the main connection works ---
+	//
+	// A lane's slice is a message at the back of the worker's queue, so it
+	// runs between two main-connection statements; in a dependent chain (a
+	// mark's setup: dims, views, then data) every step then waits a slice.
+	// Lanes hold their next slice (LaneHold) until the main connection has
+	// been idle for MAIN_QUIET_MS, capped by the lane (HOLD_CAP_MS) so a slow
+	// source still moves. Counted here, per connection: a slow source's reads
+	// are interaction class too, and a lane waiting on #interactionInFlight
+	// would wait for itself.
+
+	/** Statements on the main connection, sent and not settled. */
+	#mainInFlight = 0;
+	/** When the main connection last went idle. */
+	#mainIdleAt = 0;
+	/** Lanes waiting for quiet; each resolves itself at its own cap. */
+	#quietWaiters: (() => void)[] = [];
+	#quietTimer: ReturnType<typeof setTimeout> | null = null;
+
+	#mainBusy(): void {
+		this.#mainInFlight++;
+		if (this.#quietTimer) {
+			clearTimeout(this.#quietTimer);
+			this.#quietTimer = null;
+		}
+	}
+
+	#mainIdle(): void {
+		if (--this.#mainInFlight > 0) return;
+		this.#mainIdleAt = performance.now();
+		if (this.#quietWaiters.length > 0) this.#armQuiet();
+	}
+
+	/** Release the waiting lanes once the main connection has stayed idle long enough. */
+	#armQuiet(): void {
+		if (this.#quietTimer) clearTimeout(this.#quietTimer);
+		const left = MAIN_QUIET_MS - (performance.now() - this.#mainIdleAt);
+		this.#quietTimer = setTimeout(
+			() => {
+				this.#quietTimer = null;
+				if (this.#mainInFlight > 0) return;
+				for (const release of [...this.#quietWaiters]) release();
+			},
+			Math.max(0, left)
+		);
+	}
+
+	#mainQuiet: LaneHold = (maxMs) => {
+		if (this.#mainInFlight === 0 && performance.now() - this.#mainIdleAt >= MAIN_QUIET_MS) {
+			return null;
+		}
+		return new Promise<void>((resolve) => {
+			const release = () => {
+				clearTimeout(cap);
+				const i = this.#quietWaiters.indexOf(release);
+				if (i >= 0) this.#quietWaiters.splice(i, 1);
+				resolve();
+			};
+			const cap = setTimeout(release, maxMs);
+			this.#quietWaiters.push(release);
+			if (this.#mainInFlight === 0) this.#armQuiet();
+		});
 	};
 	#laneFailed = (e: unknown): void => {
 		if (this.#warnedLaneFailed) return;
@@ -971,26 +1046,47 @@ export class QueryEngine {
 	 */
 	async #classifySource(table: string): Promise<void> {
 		if (!this.#conn?.openSlicedLane) return;
-		const name = table.replaceAll("'", "''");
-		try {
-			const rows = await this.#queryRaw(
-				`SELECT t.table_type, d.path FROM information_schema.tables t ` +
-					`JOIN duckdb_databases() d ON d.database_name = t.table_catalog ` +
-					`WHERE t.table_name = '${name}'`,
-				{ class: 'interaction' }
-			);
-			if (rows.numRows === 0) return;
-			for (let i = 0; i < rows.numRows; i++) {
-				const row = rows.get(i) as { table_type?: string; path?: string | null };
-				const inMemory = !row.path || row.path === ':memory:';
-				const isTable = row.table_type === 'BASE TABLE' || row.table_type === 'LOCAL TEMPORARY';
-				if (!inMemory || !isTable) return;
-			}
-			this.#routing.prior(table, 'fast');
-		} catch {
-			// Unknown stays unknown: read sliced until measured.
-		}
+		let known = this.#catalog?.get(table);
+		if (known === undefined) known = (await this.#refreshCatalog()).get(table);
+		if (known === 'fast') this.#routing.prior(table, 'fast');
 	}
+
+	/**
+	 * Every user table and view, by name: 'fast' for a table in an in-memory
+	 * catalog, 'unknown' otherwise. One cheap query (the system functions,
+	 * not information_schema, a large view that took 30-38 ms per call at
+	 * load), refreshed when a name is missing; concurrent misses (a dozen
+	 * marks mounting) share the refresh in flight.
+	 */
+	#refreshCatalog(): Promise<Map<string, 'fast' | 'unknown'>> {
+		this.#catalogRefresh ??= this.#queryRaw(
+			`SELECT t.table_name AS name, d.path AS path, true AS is_table FROM duckdb_tables() t ` +
+				`JOIN duckdb_databases() d ON d.database_name = t.database_name WHERE NOT t.internal ` +
+				`UNION ALL SELECT v.view_name, d.path, false FROM duckdb_views() v ` +
+				`JOIN duckdb_databases() d ON d.database_name = v.database_name WHERE NOT v.internal`,
+			{ class: 'interaction' }
+		)
+			.then((rows) => {
+				const catalog = new Map<string, 'fast' | 'unknown'>();
+				for (let i = 0; i < rows.numRows; i++) {
+					const row = rows.get(i) as { name: string; path: string | null; is_table: boolean };
+					const inMemory = !row.path || row.path === ':memory:';
+					const cost = row.is_table && inMemory ? 'fast' : 'unknown';
+					// A name in two catalogs is fast only if every one is.
+					if (catalog.get(row.name) !== 'unknown') catalog.set(row.name, cost);
+				}
+				this.#catalog = catalog;
+				return catalog;
+			})
+			.catch(() => this.#catalog ?? new Map<string, 'fast' | 'unknown'>())
+			.finally(() => {
+				this.#catalogRefresh = null;
+			});
+		return this.#catalogRefresh;
+	}
+
+	#catalog: Map<string, 'fast' | 'unknown'> | null = null;
+	#catalogRefresh: Promise<Map<string, 'fast' | 'unknown'>> | null = null;
 
 	/**
 	 * Tell the engine how a source reads, overriding its prior: `'slow'` for a
@@ -1044,8 +1140,10 @@ export class QueryEngine {
 		// against dropped state (see CategoricalIdentity's generation counter).
 		const identityReset = this.#identity.reset().finally(() => this.#notifyIdentityReset());
 		this.#preagg.reset();
-		// New data: a source's cost is unknown again (a reload can be slower).
+		// New data: a source's cost is unknown again (a reload can be slower),
+		// and the catalog is read again.
 		this.#routing.reset();
+		this.#catalog = null;
 		this.#queryCache.clear();
 		return identityReset;
 	}

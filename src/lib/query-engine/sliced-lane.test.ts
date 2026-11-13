@@ -251,6 +251,48 @@ describe('PendingQueryLane', () => {
 	});
 });
 
+describe('PendingQueryLane hold', () => {
+	it('holds before the calls that execute (start, poll), never before a fetch', async () => {
+		const fake = fakeBindings({ q: { slices: 2, chunks: [new Uint8Array([1])] } });
+		const asked: string[] = [];
+		const hold = (maxMs: number) => {
+			asked.push(fake.calls.at(-1) ?? 'none');
+			expect(maxMs).toBeGreaterThan(0);
+			return null;
+		};
+		const l = new PendingQueryLane(fake.bindings, 1, async () => {}, { hold });
+		await l.query('q');
+		// Asked before start and before each of the two polls.
+		expect(asked).toEqual(['none', 'start q', 'poll q']);
+	});
+
+	it('waits as asked, and does not count the wait as execution', async () => {
+		const fake = fakeBindings({ q: { slices: 1 } });
+		let held = 0;
+		const hold = () => {
+			if (held++ > 0) return null;
+			return new Promise<void>((r) => setTimeout(r, 30));
+		};
+		const l = new PendingQueryLane(fake.bindings, 1, async () => {}, { hold });
+		const { execMs } = await l.query('q');
+		expect(execMs).toBeLessThan(25);
+	});
+
+	it('caps a hold so a slow source still runs a slice', async () => {
+		const fake = fakeBindings({ q: { slices: 3 } });
+		const budgets: number[] = [];
+		const hold = (maxMs: number) => {
+			budgets.push(maxMs);
+			// A main connection that never goes quiet: only the cap ends the wait.
+			return new Promise<void>((r) => setTimeout(r, maxMs));
+		};
+		const l = new PendingQueryLane(fake.bindings, 1, async () => {}, { hold });
+		await l.exec('q');
+		expect(budgets.length).toBe(4);
+		for (const b of budgets) expect(b).toBe(75);
+	});
+});
+
 describe('flechette reads a lane result as a stream', () => {
 	it('decodes [header, ...batches] given as separate buffers', () => {
 		// A stream split at message boundaries, as the worker returns it.

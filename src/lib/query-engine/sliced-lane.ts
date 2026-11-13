@@ -74,6 +74,21 @@ export interface SlicedLane {
 	close(): Promise<void>;
 }
 
+/**
+ * The longest a lane waits to run its next slice while `hold` asks it to:
+ * a source read sliced still gets a slice at least this often, so a long
+ * brush on fast charts updates the slow chart slowly, never not at all.
+ */
+export const HOLD_CAP_MS = 75;
+
+/**
+ * Asked before each call that executes (start, poll): a promise to wait on
+ * before running the next slice, at most `maxMs`, or null to go now. The
+ * engine holds while its main connection is busy, so the slices run between
+ * its statements instead of in them (see QueryEngine #mainQuiet).
+ */
+export type LaneHold = (maxMs: number) => Promise<void> | null;
+
 /** Slices longer than this warn once: the polling interval is long. */
 const SLOW_SLICE_MS = 25;
 /** Enough polls in one statement to measure its slices. */
@@ -105,6 +120,23 @@ export class PendingQueryLane implements SlicedLane {
 	#running: Job | null = null;
 	#runningDone: Promise<void> | null = null;
 	#closed = false;
+	#hold: LaneHold | null;
+
+	/**
+	 * Wait as `hold` asks before a call that executes, at most HOLD_CAP_MS
+	 * each time, so a held source still runs a slice that often. Fetches are
+	 * not held: they move finished bytes, nearly no worker time, and holding
+	 * them would only delay the slow result. Returns the wait, which is not
+	 * execution, or null when there is none: then the caller goes on in the
+	 * same tick, as a lane without a hold always did.
+	 */
+	#beforeSlice(): Promise<number> | null {
+		const wait = this.#hold?.(HOLD_CAP_MS);
+		if (!wait) return null;
+		const t = performance.now();
+		return wait.then(() => performance.now() - t);
+	}
+
 	/** Per-statement slice lengths, until judged; null when not measuring. */
 	#slices: number[] | null = [];
 
@@ -113,11 +145,12 @@ export class PendingQueryLane implements SlicedLane {
 		conn: number,
 		closeConnection: () => Promise<void>,
 		/** The database's polling interval, when the opener knows it. */
-		options: { pollingIntervalMs?: number } = {}
+		options: { pollingIntervalMs?: number; hold?: LaneHold } = {}
 	) {
 		this.#bindings = bindings;
 		this.#conn = conn;
 		this.#closeConnection = closeConnection;
+		this.#hold = options.hold ?? null;
 		const known = options.pollingIntervalMs;
 		if (known != null) {
 			this.#slices = null;
@@ -210,11 +243,17 @@ export class PendingQueryLane implements SlicedLane {
 		job.phase = 'running';
 		const t0 = performance.now();
 		let polls = 0;
+		let held = 0;
 		try {
 			let header: Uint8Array | null;
 			try {
+				const before = this.#beforeSlice();
+				if (before) held += await before;
+				if (job.aborted) throw abortError();
 				header = await b.startPendingQuery(conn, job.sql, false);
 				while (header == null) {
+					const wait = this.#beforeSlice();
+					if (wait) held += await wait;
 					if (job.aborted) throw abortError();
 					polls++;
 					header = await b.pollPendingQuery(conn);
@@ -226,7 +265,8 @@ export class PendingQueryLane implements SlicedLane {
 			}
 			// Finished just as a cancel arrived: aborted all the same.
 			if (job.aborted) throw abortError();
-			const execMs = performance.now() - t0;
+			// Held time is waiting for the main connection, not execution.
+			const execMs = performance.now() - t0 - held;
 
 			const ipc: Uint8Array[] = [header];
 			if (job.fetch) {
@@ -239,7 +279,7 @@ export class PendingQueryLane implements SlicedLane {
 				}
 			}
 			if (job.aborted) throw abortError();
-			this.#noteSlices(polls, performance.now() - t0);
+			this.#noteSlices(polls, execMs);
 			this.#detach(job);
 			job.resolve({ ipc, polls, execMs });
 		} catch (e) {

@@ -387,8 +387,8 @@ describe('QueryEngine source lanes', () => {
 		const { conn, log } = laneConnection(() => 30);
 		const ipcOf = conn.queryIPC!;
 		conn.queryIPC = async (sql: string) => {
-			if (sql.includes('information_schema.tables')) {
-				const t = tableFromArrays({ table_type: ['BASE TABLE'], path: [':memory:'] });
+			if (sql.includes('duckdb_tables()')) {
+				const t = tableFromArrays({ name: ['flights'], path: [':memory:'], is_table: [true] });
 				return tableToIPC(t, { format: 'stream' })!;
 			}
 			if (sql.startsWith('DESCRIBE')) {
@@ -411,5 +411,65 @@ describe('QueryEngine source lanes', () => {
 		engine.sourceCost('big', 'slow');
 		await engine.query('SELECT a', { source: 'big', data: true });
 		expect(log[0]).toMatch(/^lane/);
+	});
+
+	it('holds a lane while the main connection is busy, until it has been quiet', async () => {
+		let hold: ((maxMs: number) => Promise<void> | null) | undefined;
+		let release!: () => void;
+		const conn: DuckDBConnection = {
+			async query() {
+				return { numRows: 0, get: () => undefined } as never;
+			},
+			async exec() {
+				await new Promise<void>((r) => (release = r));
+			},
+			async close() {},
+			openSlicedLane: async (options) => {
+				hold = options?.hold;
+				return {
+					query: async () => ({ ipc: [await ipc()], polls: 0, execMs: 1 }),
+					exec: async () => ({ polls: 0 }),
+					close: async () => {}
+				};
+			}
+		};
+		const engine = new QueryEngine(conn);
+		await engine.query('SELECT 1', { source: 'a', data: true });
+		expect(hold!(75)).toBeNull();
+
+		const main = engine.exec('CREATE TABLE x (a INT)');
+		await new Promise((r) => setTimeout(r, 0));
+		let resolved = false;
+		hold!(75)!.then(() => (resolved = true));
+		await new Promise((r) => setTimeout(r, 10));
+		expect(resolved).toBe(false);
+		release();
+		await main;
+		await new Promise((r) => setTimeout(r, 10));
+		expect(resolved).toBe(true);
+	});
+
+	it("does not count a lane's own reads as the main connection being busy", async () => {
+		let hold: ((maxMs: number) => Promise<void> | null) | undefined;
+		let finish!: () => void;
+		const { conn } = laneConnection(() => 30);
+		const open = conn.openSlicedLane!;
+		conn.openSlicedLane = async (options) => {
+			hold = options?.hold;
+			const lane = await open(options);
+			return {
+				...lane,
+				query: async (sql: string) => {
+					await new Promise<void>((r) => (finish = r));
+					return lane.query(sql);
+				}
+			};
+		};
+		const engine = new QueryEngine(conn);
+		const slow = engine.query('SELECT v', { source: 'slow', data: true });
+		await new Promise((r) => setTimeout(r, 5));
+		expect(hold!(75)).toBeNull();
+		finish();
+		await slow;
 	});
 });

@@ -14,7 +14,7 @@
 
 import type { AsyncDuckDBConnection, DuckDBBundles } from '@duckdb/duckdb-wasm';
 import type { DuckDBConnection } from './QueryEngine';
-import { PendingQueryLane, type SlicedLane } from './sliced-lane';
+import { PendingQueryLane, type LaneHold, type SlicedLane } from './sliced-lane';
 
 /**
  * How long the worker runs a sliced statement before serving other messages:
@@ -81,14 +81,15 @@ export function connectionFrom(
 		insertArrowFromIPCStream(data: Uint8Array, options: { name: string; create: boolean }) {
 			return conn.insertArrowFromIPCStream(data, options);
 		},
-		async openSlicedLane(): Promise<SlicedLane> {
+		async openSlicedLane(laneOptions: { hold?: LaneHold } = {}): Promise<SlicedLane> {
 			// Another connection on the same AsyncDuckDB: one catalog, its own
 			// pending query.
 			const lane = await conn.bindings.connect();
 			return lane.useUnsafe(
 				(bindings, connId) =>
 					new PendingQueryLane(bindings, connId, () => lane.close(), {
-						pollingIntervalMs: options.pollingIntervalMs
+						pollingIntervalMs: options.pollingIntervalMs,
+						hold: laneOptions.hold
 					})
 			);
 		}
