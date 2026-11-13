@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { hasEntered } from '$lib/scales/entered';
 	import { getContext } from 'svelte';
 	import type { ChartContext } from '$lib/types';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
@@ -45,9 +46,10 @@
 			(s as ContinuousScaleState).setCustomFormat(tickFormat);
 	});
 
-	// Continuous scales (linear, time): use scaleState.getTicks()
+	// Continuous scales (linear, time): use scaleState.getTicks(). None until the
+	// scale has entered: before that its domain is a placeholder.
 	const continuousTicks = $derived(
-		c.yScaleState?.getTicks ? c.yScaleState.getTicks(ticksNumber) : []
+		c.yScaleState?.getTicks && hasEntered(c.yScaleState) ? c.yScaleState.getTicks(ticksNumber) : []
 	);
 
 	// Band scales: the categories on screen NOW, at their current fractional slots,

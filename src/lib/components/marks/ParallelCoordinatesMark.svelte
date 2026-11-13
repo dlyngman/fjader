@@ -36,6 +36,8 @@
 		/** How this mark responds to selections in its group (see BaseMarkProps). */
 		selectionResponse?: SelectionResponse;
 		nulls?: NullsResponse;
+		/** Whether the chart's entrance waits for this mark (see BaseMarkProps). */
+		holdsEntrance?: boolean;
 		transforms?: Transform[];
 	}
 
@@ -50,6 +52,7 @@
 		selection = undefined,
 		selectionResponse = undefined,
 		nulls = undefined,
+		holdsEntrance = undefined,
 		transforms = []
 	}: Props = $props();
 
@@ -68,6 +71,7 @@
 		selection: () => selection,
 		selectionResponse: () => selectionResponse,
 		nulls: () => nulls,
+		holdsEntrance: () => holdsEntrance,
 		transforms: () => transforms
 	});
 

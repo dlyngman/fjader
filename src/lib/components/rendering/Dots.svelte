@@ -188,7 +188,7 @@
       output.colorValue = colorValue;
       output.uv = quadPosition;
       output.radius = displayRadius;
-      output.alpha = alpha * selectionDim(
+      output.alpha = alpha * entranceAlpha(0u) * selectionDim(
         ${markActivityWGSL(ACTIVITY_READS, {
 					color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValue',
 					x: 'x',

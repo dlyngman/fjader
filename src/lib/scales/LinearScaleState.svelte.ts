@@ -16,7 +16,6 @@ const SCALE_SPRING_PRESETS = {
 	pan: SPRING_PRESETS.pan.stiffness, // 600 - responsive dragging
 	zoom: SPRING_PRESETS.zoom.stiffness, // 400 - smooth zoom
 	reset: SPRING_PRESETS.reset.stiffness, // 150 - gentle reset animation
-	zoomIn: 200, // Initial zoom-in effect
 	externalDomain: 600 // Brush-driven domain tracking (snappy, like pan)
 };
 
@@ -28,9 +27,6 @@ export interface LinearScaleOptions {
 	/** Who to ask which charts use this scale. Set by ScaleRegistry. */
 	registry?: { chartsUsing(scale: unknown): string[] } | null;
 	disableZoom?: boolean;
-	zoomInEffect?: boolean;
-	zoomInFactor?: number;
-	zoomInSpringConfig?: { stiffness?: number };
 }
 
 interface PanContext {
@@ -175,13 +171,6 @@ export class LinearScaleState {
 		hasUpdates: false
 	};
 
-	// --- Zoom-In Effect Config ---
-	zoomInEffect = {
-		enabled: true,
-		factor: 5,
-		stiffness: SCALE_SPRING_PRESETS.zoomIn
-	};
-
 	// --- Affected Charts Cache (set by GPUCoordinator) ---
 	/**
 	 * Charts to redraw while this scale animates, asked of the registry rather
@@ -253,18 +242,6 @@ export class LinearScaleState {
 		// Store zoom limits
 		this.zoomLimits.max = zoomLimits[0];
 		this.zoomLimits.min = zoomLimits[1];
-
-		// Zoom-in effect options
-		if (options.zoomInEffect !== undefined) {
-			this.zoomInEffect.enabled = options.zoomInEffect;
-		}
-		if (options.zoomInFactor !== undefined) {
-			this.zoomInEffect.factor = options.zoomInFactor;
-		}
-		if (options.zoomInSpringConfig !== undefined) {
-			this.zoomInEffect.stiffness =
-				options.zoomInSpringConfig.stiffness || SCALE_SPRING_PRESETS.zoomIn;
-		}
 
 		// Create domain accessor object
 		this.domain = this.#createDomainAccessor();
@@ -528,6 +505,14 @@ export class LinearScaleState {
 	}
 
 	/**
+	 * True once a chart drawing this scale has its marks' first data in (its
+	 * entrance gate opened). Until then every extent change snaps, and the
+	 * axes draw no ticks: the domain is a placeholder, [0, 100], and showing
+	 * it, or springing out of it, is the zoom-in on load by another route.
+	 */
+	entered = $state(false);
+
+	/**
 	 * Reset zoom to show full extent.
 	 */
 	resetZoom(instant: boolean = false): void {
@@ -546,31 +531,17 @@ export class LinearScaleState {
 			}
 		}
 
-		if (instant || (!this.ready && !this.zoomInEffect.enabled)) {
-			// Instant update - skip animation entirely.
-			// Also snaps when zoom-in is disabled on a not-yet-ready scale
-			// (e.g., column reassignment — no point animating from default domain).
+		if (instant || !this.entered) {
+			// Instant update - skip animation entirely. A scale's first domain
+			// snaps too: the viewport does not move on load. A chart's entrance
+			// is its data arriving (see the chart's entrance clock), not the
+			// camera travelling to it. So does every extent until a chart drawing
+			// this scale has its marks in (`entered`): the axes take the union of
+			// that chart's extents before it enters. Not `ready`, which several
+			// paths set before the first extent lands (time scales, field stats),
+			// and the scale then sprang from its placeholder domain. A chart that
+			// shares the scale and lands later springs it, as later data does.
 			this.#setInstant(min, max);
-		} else if (!this.ready && this.zoomInEffect.enabled) {
-			// First time - do zoom-in effect from expanded view
-			this.#setStiffness(this.zoomInEffect.stiffness);
-
-			const center = (min + max) / 2;
-			const range = max - min;
-			const factor = this.zoomInEffect.factor;
-			const expandedMin = center - (range * factor) / 2;
-			const expandedMax = center + (range * factor) / 2;
-
-			// Set current position to expanded, target to actual
-			this.#springPair.set(this.toSpringSpace(expandedMin), this.toSpringSpace(expandedMax));
-			this.#setTarget(min, max); // #setTarget transforms internally
-
-			// Initialize render values so first frame renders correctly
-			this.#renderMin = expandedMin;
-			this.#renderMax = expandedMax;
-			this.#updateGpuState();
-
-			this.#ensureAnimating();
 		} else {
 			// Normal reset
 			this.#setStiffness(SCALE_SPRING_PRESETS.reset);

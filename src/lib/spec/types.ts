@@ -3,7 +3,14 @@
  * between spec producers (Python wrapper, JS API) and the spec renderer.
  */
 
-import type { ColorDomainValue, ColorScheme, CurveType, ScaleType, SortConfig } from '$lib/types';
+import type {
+	ColorDomainValue,
+	ColorScheme,
+	CurveType,
+	EntranceMode,
+	ScaleType,
+	SortConfig
+} from '$lib/types';
 import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 
 // =============================================================================
@@ -76,6 +83,8 @@ export interface PlotSpec {
 	xDisableZoom?: boolean;
 	yDisableZoom?: boolean;
 	legend?: LegendSpec | boolean;
+	/** How the marks enter when data first draws; see ChartContainer. Default 'auto'. */
+	entrance?: EntranceMode;
 }
 
 // =============================================================================
@@ -208,6 +217,8 @@ interface BaseMarkSpec {
 	selectionResponse?: 'auto' | 'filter' | 'ignore';
 	/** What the mark does with NULL in its categorical channels; see BaseMarkProps. Default 'keep'. */
 	nulls?: 'keep' | 'drop';
+	/** Whether the chart's entrance waits for this mark's first data; see BaseMarkProps. Default true. */
+	holdsEntrance?: boolean;
 	scheme?: ColorScheme;
 	limit?: number;
 	transforms?: TransformSpec[];

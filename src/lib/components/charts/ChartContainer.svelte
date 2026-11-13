@@ -7,7 +7,7 @@
 	import { ChartConfig } from '$lib/config';
 	import { getGPUContext } from '$lib/gpu';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
-	import type { ChartContext, FieldRef } from '$lib/types';
+	import type { ChartContext, EntranceMode, FieldRef } from '$lib/types';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 	import type { DimValue } from '$lib/query-engine/categorical-identity';
 	import { identityKeyFor } from '$lib/query-engine/identity-key';
@@ -85,6 +85,12 @@
 		 * contrast. `--fjader-tooltip-bg`/`-text` set by the app override both.
 		 */
 		tooltipScheme?: 'contrast' | 'follow';
+		/**
+		 * How the marks enter when data first draws: 'auto' grows bars and
+		 * areas from 0 and fades the rest, 'fade' fades everything, 'none'
+		 * shows them at once. Reduced motion turns 'auto' into 'fade'.
+		 */
+		entrance?: EntranceMode;
 	}
 
 	let {
@@ -101,6 +107,7 @@
 		interactors = undefined,
 		legend = undefined,
 		legendPosition = 'top',
+		entrance = 'auto',
 		wheelInteraction = {
 			dwellTimeMs: 250,
 			momentumThreshold: 150,
@@ -247,7 +254,8 @@
 			xDisableZoom,
 			yDisableZoom,
 			useXSelection,
-			useYSelection
+			useYSelection,
+			entranceGate: chartConfig.entrance
 		});
 
 		// Replay any scale registrations that were queued before scales existed
@@ -274,9 +282,11 @@
 
 	// --- ChartConfig (reactive configuration store) ---
 	const chartConfig = new ChartConfig();
+	onDestroy(() => chartConfig.entrance.destroy());
 
 	// Register chart-level props for palette overrides
 	chartConfig.registerChart({
+		entrance: () => entrance,
 		marginTop: () => cellMargin.top,
 		marginRight: () => cellMargin.right,
 		marginBottom: () => cellMargin.bottom,

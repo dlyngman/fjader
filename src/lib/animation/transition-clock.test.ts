@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { TransitionClock, type ClockLoop } from './TransitionClock';
+import { TransitionClock, TRANSITION_STIFFNESS, type ClockLoop } from './TransitionClock';
+import { DT } from './Spring';
 
 /**
  * A loop that behaves like the coordinator's: a set of sources, and a settle
@@ -151,5 +152,41 @@ describe('TransitionClock and the loop', () => {
 		expect(rests).toBe(1);
 		// And the version still moved, so a consumer folds onto the new target.
 		expect(clock.version).toBeGreaterThan(0);
+	});
+});
+
+describe('TransitionClock.restartEaseOut', () => {
+	/** t after `ms` of physics steps, at the default stiffness. */
+	function tAfter(ms: number, start: (c: TransitionClock) => void): number {
+		const { loop } = fakeLoop();
+		const clock = new TransitionClock({ loop });
+		start(clock);
+		const steps = Math.round(ms / 1000 / DT);
+		for (let i = 0; i < steps; i++) clock.step();
+		clock.updateRenderState(0);
+		return clock.t;
+	}
+
+	it('moves from the first frames, where a restart from rest barely starts', () => {
+		const eased = tAfter(50, (c) => c.restartEaseOut());
+		const fromRest = tAfter(50, (c) => c.restart());
+		const omega = Math.sqrt(TRANSITION_STIFFNESS);
+		expect(eased).toBeCloseTo(1 - Math.exp(-omega * 0.05), 2);
+		expect(fromRest).toBeLessThan(0.25);
+		expect(eased).toBeGreaterThan(0.5);
+	});
+
+	it('rises monotonically: no overshoot and return, which the clamp to 1 would hide', () => {
+		const { loop } = fakeLoop();
+		const clock = new TransitionClock({ loop });
+		clock.restartEaseOut();
+		let last = 0;
+		for (let i = 0; i < 2000 && !clock.isAtRest(); i++) {
+			clock.step();
+			clock.updateRenderState(0);
+			expect(clock.t).toBeGreaterThanOrEqual(last);
+			last = clock.t;
+		}
+		expect(last).toBeGreaterThan(0.99);
 	});
 });

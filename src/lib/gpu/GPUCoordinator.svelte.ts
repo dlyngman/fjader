@@ -1,5 +1,12 @@
 import { setContext, getContext } from 'svelte';
 import { AnimationLoop } from '$lib/animation';
+import {
+	TransitionClock,
+	ENTRANCE_FADE_STIFFNESS,
+	ENTRANCE_GROW_STIFFNESS
+} from '$lib/animation/TransitionClock';
+import type { EntranceMode } from '$lib/types';
+import type { EntranceGate } from '$lib/animation/EntranceGate';
 import { scaleTemplateSystem, CHART_SCALE_IMMEDIATE_SIZE } from './ScaleTemplateSystem';
 import type { RendererDefinition } from './ScaleTemplateSystem';
 import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
@@ -67,6 +74,23 @@ interface ChartConfig {
 	msaa: { texture: GPUTexture; view: GPUTextureView } | null;
 	_lastRenderFrame: number;
 	_isDirty: boolean;
+	/** The entrance this chart makes, with reduced motion already applied. */
+	entranceMode: EntranceMode;
+	/** True once the chart has first drawn data, when its entrance begins. */
+	entranceStarted: boolean;
+	/**
+	 * Drive the entrance while it runs; null before and after. Two curves:
+	 * growth eases out (moves from its first frame), opacity is a softer
+	 * S-curve, since a fast fade reads as a pop.
+	 */
+	entranceClock: TransitionClock | null;
+	entranceFadeClock: TransitionClock | null;
+	/** `[chartId]`, held so the clock's redraw list is not built per frame. */
+	entranceCharts: string[];
+	/** Waits for the chart's marks' first data; null enters on first draw. */
+	entranceGate: EntranceGate | null;
+	/** Stops redrawing the chart when its gate opens, for an unregister first. */
+	entranceGateOff: (() => void) | null;
 }
 
 interface LayerConfig {
@@ -94,6 +118,11 @@ function layerCanDraw(layer: LayerConfig, chartScalesKnown: boolean): boolean {
 	return (
 		!!layer.renderer?.perDataBindGroup && (chartScalesKnown || layer.readsChartScales === false)
 	);
+}
+
+/** A guide (a grid line) rather than data: it neither enters nor starts the entrance. */
+function isGuideLayer(layer: LayerConfig): boolean {
+	return layer.markType.startsWith('grid-line-');
 }
 
 export interface DataBindingEntry {
@@ -186,6 +215,21 @@ interface ChartRegistrationConfig {
 	zIndex?: number;
 	facetIndex?: number;
 	facetScale?: FacetScaleRef | null;
+	/** How the chart's marks enter when its data first draws. Default 'auto'. */
+	entrance?: EntranceMode;
+	/** Holds the entrance until the chart's marks have their first data. */
+	entranceGate?: EntranceGate | null;
+}
+
+/**
+ * A chart's entrance once the viewer's preference is applied: under reduced
+ * motion, 'auto' fades rather than grows. Opacity is not motion, so a fade
+ * stays; an author's explicit 'fade' or 'none' is kept as is.
+ */
+function resolveEntrance(mode: EntranceMode | undefined): EntranceMode {
+	const chosen = mode ?? 'auto';
+	if (chosen !== 'auto' || typeof matchMedia === 'undefined') return chosen;
+	return matchMedia('(prefers-reduced-motion: reduce)').matches ? 'fade' : 'auto';
 }
 
 /**
@@ -1051,8 +1095,85 @@ export class GPUCoordinator {
 		last.set(view);
 	}
 
-	/** Reused per pass: the chart's x and y ScaleParam, pushed as immediates. */
+	/** Reused per pass: the chart's x and y ScaleParam and entrance, pushed as immediates. */
 	#chartScaleImmediates = new Float32Array(CHART_SCALE_IMMEDIATE_SIZE / 4);
+
+	/**
+	 * Begin a chart's entrance on the first pass that draws data in it.
+	 *
+	 * Per chart, not per mark: every mark in the chart reads the same immediate,
+	 * so a bar chart and the line drawn over it enter together. Marks normally
+	 * land in one query batch; one landing mid-entrance joins at the current t,
+	 * and one landing after it simply appears.
+	 *
+	 * Started here rather than on registration, so an off-screen chart enters
+	 * when it is first drawn, which is when it can be seen.
+	 */
+	#startEntranceIfDrawing(chart: ChartConfig, scalesKnown: boolean): void {
+		// Every mark's first data first, so the chart enters once, whole. Only
+		// this chart's marks: a chart sharing a scale that lands later springs
+		// the domain to the combined extent, as any later data would.
+		const gate = chart.entranceGate;
+		if (gate) {
+			if (!gate.canEnter) return;
+			gate.open();
+		}
+		const plan = chart.renderPlan;
+		let drawing = false;
+		for (let i = 0; i < plan.length; i++) {
+			// Data marks only: a grid line draws as soon as the scales exist, which
+			// is usually before the query has answered, and would start the
+			// entrance with nothing in it.
+			if (isGuideLayer(plan[i])) continue;
+			if (layerCanDraw(plan[i], scalesKnown)) {
+				drawing = true;
+				break;
+			}
+		}
+		if (!drawing) return;
+		chart.entranceStarted = true;
+		if (chart.entranceMode === 'none') return;
+		const clock = new TransitionClock({
+			loop: this,
+			stiffness: ENTRANCE_GROW_STIFFNESS,
+			charts: () => chart.entranceCharts,
+			onRest: () => {
+				if (chart.entranceClock === clock) chart.entranceClock = null;
+			}
+		});
+		chart.entranceClock = clock;
+		// Ease-out: growth should move from its first frame.
+		clock.restartEaseOut();
+		const fade = new TransitionClock({
+			loop: this,
+			stiffness: ENTRANCE_FADE_STIFFNESS,
+			charts: () => chart.entranceCharts,
+			onRest: () => {
+				if (chart.entranceFadeClock === fade) chart.entranceFadeClock = null;
+			}
+		});
+		chart.entranceFadeClock = fade;
+		// From rest: a soft S-curve for opacity.
+		fade.restart();
+	}
+
+	/**
+	 * The entrance immediates: x = growth, y = a growing mark's opacity, z = a
+	 * fading mark's opacity. The mode is folded in here, so a mark only says
+	 * whether it grows or fades.
+	 */
+	#writeEntrance(chart: ChartConfig, view: Float32Array): void {
+		// Before the entrance starts the chart draws nothing, so 0 is never
+		// seen; after it, the clocks are gone and everything is at 1.
+		const idle = chart.entranceStarted ? 1 : 0;
+		const grow = chart.entranceClock ? chart.entranceClock.t : idle;
+		const fade = chart.entranceFadeClock ? chart.entranceFadeClock.t : idle;
+		const mode = chart.entranceMode;
+		view[8] = mode === 'auto' ? grow : 1;
+		view[9] = mode === 'fade' ? fade : 1;
+		view[10] = mode === 'none' ? 1 : fade;
+		view[11] = 0;
+	}
 
 	// =========================================================================
 	// READBACK (test-only)
@@ -1343,6 +1464,8 @@ export class GPUCoordinator {
 			// known: a layer that does not read them still needs every byte set
 			// before it may draw.
 			const scalesKnown = this.#writeChartScales(chartConfig, this.#chartScaleImmediates);
+			if (!chartConfig.entranceStarted) this.#startEntranceIfDrawing(chartConfig, scalesKnown);
+			this.#writeEntrance(chartConfig, this.#chartScaleImmediates);
 			passEncoder.setImmediates(0, this.#chartScaleImmediates);
 
 			if (chartConfig.perFrameBindGroup) {
@@ -1942,8 +2065,19 @@ export class GPUCoordinator {
 			renderPassDescriptor: null,
 			msaa: null,
 			_lastRenderFrame: -1,
-			_isDirty: false
+			_isDirty: false,
+			entranceMode: resolveEntrance(config.entrance),
+			entranceStarted: false,
+			entranceClock: null,
+			entranceFadeClock: null,
+			entranceCharts: [chartId],
+			entranceGate: config.entranceGate ?? null,
+			entranceGateOff: null
 		};
+		// The gate opens on a mark's data or a timeout, neither of which need
+		// redraw this chart. Without a frame the entrance would wait for one.
+		chartConfig.entranceGateOff =
+			chartConfig.entranceGate?.onOpen(() => this.invalidateChart(chartId)) ?? null;
 
 		this.#registeredCharts.set(chartId, chartConfig);
 
@@ -1999,6 +2133,12 @@ export class GPUCoordinator {
 		const chartConfig = this.#registeredCharts.get(chartId);
 		if (chartConfig) {
 			chartConfig._isDirty = false;
+			chartConfig.entranceClock?.stop();
+			chartConfig.entranceClock = null;
+			chartConfig.entranceFadeClock?.stop();
+			chartConfig.entranceFadeClock = null;
+			chartConfig.entranceGateOff?.();
+			chartConfig.entranceGateOff = null;
 
 			if (chartConfig.frameUniformsBuffer) {
 				chartConfig.frameUniformsBuffer.destroy();

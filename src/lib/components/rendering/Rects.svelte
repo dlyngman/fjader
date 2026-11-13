@@ -49,7 +49,8 @@
 		DX: 32,
 		DY: 36,
 		OTHER_COLOR_ON_BAND: 40,
-		SPLIT_ALONG_X: 44
+		SPLIT_ALONG_X: 44,
+		ENTRANCE_AXIS: 48
 	};
 
 	interface Props {
@@ -89,6 +90,12 @@
 		 * bin's edges do not change under a filter, and a re-bin snaps.
 		 */
 		bandAxis?: 'x' | 'y' | null;
+		/**
+		 * The axis this mark grows along when its chart enters: its measure axis,
+		 * for bars and histograms anchored at 0. null fades it in instead, for
+		 * rects with bounds of their own (a Gantt bar has no 0 to grow from).
+		 */
+		grow?: 'x' | 'y' | null;
 	}
 
 	let {
@@ -110,7 +117,8 @@
 		dx = 0,
 		dy = 0,
 		markId = '',
-		bandAxis = null
+		bandAxis = null,
+		grow = null
 	}: Props = $props();
 
 	const splitData = $derived(share?.data ?? null);
@@ -166,6 +174,10 @@
       dy: f32,                  // Vertical pixel offset
       otherColorOnBand: u32,    // 1: an Other row skips its colour activity too
       splitAlongX: u32,         // 1: an Other bar splits along x (horizontal bars)
+      entranceAxis: u32,        // 0: fades in, 1: grows along x, 2: along y
+      _pad0: u32,
+      _pad1: u32,
+      _pad2: u32,
     };
     @group(1) @binding(6) var<uniform> markConstants: MarkConstants;
 
@@ -210,13 +222,19 @@
       // Y axis scaling (generated based on scale type)
       {{Y_AXIS_LOGIC}}
 
+      // The chart's entrance: both edges pulled toward 0 on the measure axis,
+      // so a stack grows as one block rather than its segments floating up.
+      let p0 = entrancePosition(vec2<f32>(scaledX0, scaledY0), markConstants.entranceAxis);
+      let p1 = entrancePosition(vec2<f32>(scaledX1, scaledY1), markConstants.entranceAxis);
+
       // Apply inset (shrink rect inward on all sides)
-      let ix = markConstants.inset * sign(scaledX1 - scaledX0);
-      let iy = markConstants.inset * sign(scaledY1 - scaledY0);
+      let ix = markConstants.inset * sign(p1.x - p0.x);
+      let iy = markConstants.inset * sign(p1.y - p0.y);
 
       // Interpolate rectangle corners and apply pixel offsets
-      let finalX = mix(scaledX0 + ix, scaledX1 - ix, rectCorner.x) + markConstants.dx;
-      let finalY = mix(scaledY0 + iy, scaledY1 - iy, rectCorner.y) + markConstants.dy;
+      let finalX = mix(p0.x + ix, p1.x - ix, rectCorner.x) + markConstants.dx;
+      let finalY = mix(p0.y + iy, p1.y - iy, rectCorner.y) + markConstants.dy;
+      let enterAlpha = entranceAlpha(markConstants.entranceAxis);
 
       // Convert to normalized device coordinates
       let worldPos = vec2<f32>(finalX, finalY);
@@ -241,7 +259,7 @@
 				y: 'y0',
 				group: 'markConstants.groupIndex'
 			})};
-      output.alpha = alpha * selectionDim(activity);
+      output.alpha = alpha * selectionDim(activity) * enterAlpha;
       // The unselected part is drawn only on an Other row: every other bar skips
       // its activity reads.
       output.alphaRest = output.alpha;
@@ -256,7 +274,7 @@
           bandFreeActivityY(markConstants.groupIndex),
           markConstants.splitAlongX == 1u
         );
-        output.alphaRest = alpha * selectionDim(min(otherActivity, free));
+        output.alphaRest = alpha * selectionDim(min(otherActivity, free)) * enterAlpha;
       }
       return output;
     }
@@ -421,6 +439,7 @@
 			view.setFloat32(UNIFORM_OFFSETS.DY, dy, LE);
 			view.setUint32(UNIFORM_OFFSETS.OTHER_COLOR_ON_BAND, otherColorOnBand ? 1 : 0, LE);
 			view.setUint32(UNIFORM_OFFSETS.SPLIT_ALONG_X, splitAlongX ? 1 : 0, LE);
+			view.setUint32(UNIFORM_OFFSETS.ENTRANCE_AXIS, grow === 'x' ? 1 : grow === 'y' ? 2 : 0, LE);
 
 			renderer.writeUniform(BINDINGS.CONSTANTS, new Uint8Array(buffer));
 		}

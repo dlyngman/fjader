@@ -1,5 +1,6 @@
 // src/lib/scales/ChartScales.svelte.ts
 import { untrack } from 'svelte';
+import type { EntranceGate } from '$lib/animation/EntranceGate';
 import { resolveScaleConfiguration, SCALE_PRIORITIES } from './ScalePriorities';
 import type { RegisteredScaleRequirement, ResolvedScaleConfiguration } from './ScalePriorities';
 import type { ScaleRegistry } from './ScaleRegistry.svelte';
@@ -51,6 +52,8 @@ interface ChartScalesConfig {
 	yDisableZoom?: boolean;
 	useXSelection?: boolean;
 	useYSelection?: boolean;
+	/** The chart's entrance gate: its scales snap, and show no ticks, until it opens. */
+	entranceGate?: EntranceGate | null;
 }
 
 export class ChartScales {
@@ -109,6 +112,7 @@ export class ChartScales {
 		this.gpuCoordinator = config.gpuCoordinator;
 		this.#scaleRegistry = config.scaleRegistry;
 		this.#getFacetChartIds = config.getFacetChartIds ?? null;
+		this.#entranceGateOff = config.entranceGate?.onOpen(() => this.#markScalesEntered()) ?? null;
 
 		if (!this.#scaleRegistry) {
 			console.error('ChartScales initialized without scaleRegistry!');
@@ -347,14 +351,10 @@ export class ChartScales {
 			) as ScaleStateInstance;
 
 			if (this.#xScaleInstance !== neededXScale) {
-				const wasReplacement = !!this.#xScaleInstance;
 				if (this.#xScaleInstance) {
 					this.#scaleRegistry.deregisterChart(this.#xScaleInstance, this.chartId);
 				}
 				this.#xScaleInstance = neededXScale;
-				if (wasReplacement && neededXScale instanceof LinearScaleState) {
-					neededXScale.zoomInEffect.enabled = false;
-				}
 			}
 		}
 
@@ -373,16 +373,13 @@ export class ChartScales {
 			) as ScaleStateInstance;
 
 			if (this.#yScaleInstance !== neededYScale) {
-				const wasReplacement = !!this.#yScaleInstance;
 				if (this.#yScaleInstance) {
 					this.#scaleRegistry.deregisterChart(this.#yScaleInstance, this.chartId);
 				}
 				this.#yScaleInstance = neededYScale;
-				if (wasReplacement && neededYScale instanceof LinearScaleState) {
-					neededYScale.zoomInEffect.enabled = false;
-				}
 			}
 		}
+		this.#markScalesEntered();
 	}
 
 	scaleConfigurations = $derived.by(() => {
@@ -555,6 +552,7 @@ export class ChartScales {
 			if (!next.has(column)) this.#scaleRegistry.deregisterChart(scale, this.chartId);
 		}
 		this.#parallelScaleInstances = next;
+		this.#markScalesEntered();
 		this.#parallelAxisOrder = wanted.map((_, i) => i);
 		if (next.size > 0) this.#ensureReorder().resetSprings();
 		else this.#reorder?.resetSprings();
@@ -952,7 +950,30 @@ export class ChartScales {
 		};
 	}
 
+	/**
+	 * A scale snaps every extent change until a chart drawing it has its marks'
+	 * first data in, so the domain is that chart's whole extent when it enters,
+	 * and its axes show no ticks before then (the domain is a placeholder).
+	 * Marked here when the chart's entrance gate opens, and again whenever the
+	 * scale instances change after that.
+	 */
+	#entranceGateOff: (() => void) | null = null;
+
+	#markScalesEntered(): void {
+		const gate = this.config.entranceGate;
+		if (gate && !gate.opened) return;
+		for (const scale of [
+			this.#xScaleInstance,
+			this.#yScaleInstance,
+			...this.#parallelScaleInstances.values()
+		]) {
+			if (scale instanceof LinearScaleState && !scale.entered) scale.entered = true;
+		}
+	}
+
 	destroy(): void {
+		this.#entranceGateOff?.();
+		this.#entranceGateOff = null;
 		this.#reorder?.destroy();
 		this.#reorder = null;
 

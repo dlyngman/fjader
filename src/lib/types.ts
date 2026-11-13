@@ -456,6 +456,15 @@ export interface BaseMarkProps {
 	 *   before any transform, so a top N ranks, and Other sums, without them.
 	 */
 	nulls?: NullsResponse;
+	/**
+	 * Whether the chart's entrance waits for this mark's first data. Default
+	 * true: the chart enters once every mark has landed, so later marks cannot
+	 * widen the axes mid-entrance. False for a mark known to be slower than
+	 * the rest: the chart enters without it, and it joins the entrance where it
+	 * is, or appears after it. A chart waits at most a second past its first
+	 * mark either way.
+	 */
+	holdsEntrance?: boolean;
 	scheme?: ColorScheme;
 	limit?: number;
 	transforms?: Transform[];
@@ -546,6 +555,19 @@ export interface LODConfig {
 }
 
 // ---------------------------------------------------------------------------
+/**
+ * How a chart's marks enter when its data first draws.
+ *
+ * - `'auto'` (the default): bars, histograms and areas grow from 0 on their
+ *   measure axis, showing magnitude; everything else fades in.
+ * - `'fade'`: every mark fades in. Calmer, for dense small multiples.
+ * - `'none'`: marks appear at once.
+ *
+ * Under `prefers-reduced-motion: reduce`, `'auto'` becomes `'fade'`. The axes
+ * never move on load: the entrance is the data's, not the viewport's.
+ */
+export type EntranceMode = 'auto' | 'fade' | 'none';
+
 // Chart context — the object set via setContext('chart', ...)
 // ---------------------------------------------------------------------------
 

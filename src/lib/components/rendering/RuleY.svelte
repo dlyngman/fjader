@@ -180,7 +180,7 @@
       var output: VertexOutput;
       output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
       output.colorValue = colorValue;
-      output.alpha = alpha * selectionDim(
+      output.alpha = alpha * entranceAlpha(0u) * selectionDim(
         ${markActivityWGSL(ACTIVITY_READS, {
 					color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValue',
 					x: 'x0',

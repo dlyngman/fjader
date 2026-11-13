@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { hasEntered } from '$lib/scales/entered';
 	import { getContext } from 'svelte';
 	import { GridLine } from '../rendering';
 	import type { ChartContext, ScaleStateInstance } from '$lib/types';
@@ -38,7 +39,9 @@
 	let yBuffer = new Float32Array(64);
 
 	function ticksOf(scale: ScaleStateInstance | null, which: 'x' | 'y'): Float32Array | null {
-		const ticks = scale?.getTicks ? (scale.getTicks() as ArrayLike<number>) : null;
+		// None until the scale has entered: its domain is a placeholder before that.
+		const ticks =
+			scale?.getTicks && hasEntered(scale) ? (scale.getTicks() as ArrayLike<number>) : null;
 		if (!ticks || ticks.length === 0) return null;
 		let buffer = which === 'x' ? xBuffer : yBuffer;
 		if (buffer.length < ticks.length) {

@@ -59,6 +59,11 @@ class Mark:
     # labelled "(null)". "drop": those rows are left out before any transform,
     # so a top N ranks, and Other sums, without them.
     nulls: Literal["keep", "drop"] | None = None
+    # Whether the chart's entrance waits for this mark's first data. True
+    # (default): the chart enters once its marks have landed, so later marks
+    # cannot widen the axes mid-entrance. False for a mark known to be slow:
+    # the chart enters without it, and it joins or appears after.
+    holds_entrance: bool | None = None
     scheme: ColorScheme | None = None
     limit: int | None = None
     transforms: list[TransformSpec] | None = None

@@ -40,7 +40,8 @@
 		FULL_DOMAIN_SPAN: 44, // f32
 		GROUP_INDEX: 48, // u32
 		ACTIVITY_SERIES_MODE: 52, // u32
-		ACTIVITY_SERIES_SCALE_INDEX: 56 // u32
+		ACTIVITY_SERIES_SCALE_INDEX: 56, // u32
+		ENTRANCE_AXIS: 60 // u32 (0 fades, 1 grows along x, 2 along y)
 	};
 
 	interface Props {
@@ -71,6 +72,11 @@
 		activitySeriesScaleIndex?: number;
 		constantColor?: [number, number, number, number];
 		markId?: string;
+		/**
+		 * Whether the area grows from 0 along its measure axis when its chart
+		 * enters. False fades it in, for a band with bounds of its own.
+		 */
+		grow?: boolean;
 	}
 
 	let {
@@ -94,7 +100,8 @@
 		activitySeriesMode = 0,
 		activitySeriesScaleIndex = 0,
 		constantColor = DEFAULT_FILL_COLOR,
-		markId = ''
+		markId = '',
+		grow = false
 	}: Props = $props();
 
 	const chartContext = getContext<ChartContext>('chart');
@@ -167,7 +174,7 @@
     // its own; mode 0 reads nothing.
     activitySeriesMode: u32,
     activitySeriesScaleIndex: u32,
-    _pad0: u32
+    entranceAxis: u32 // 0 fades in, 1 grows along x, 2 along y
   };
   @group(1) @binding(5) var<uniform> markConstants: MarkConstants;
 
@@ -197,6 +204,12 @@
       // Horizontal: dim is Y, boundary is X
       return vec2<f32>(boundaryVal, dimVal);
     }
+  }
+
+  // A point projected to pixels as it is during the chart's entrance: pulled
+  // toward 0 on the measure axis while the area grows.
+  fn enterPx(p: vec2<f32>) -> vec2<f32> {
+    return entrancePosition(projectToPixels(p), markConstants.entranceAxis);
   }
 
   const DISCARD_POS = vec4<f32>(2.0, 2.0, 2.0, 1.0);
@@ -233,7 +246,7 @@
         output.position = DISCARD_POS;
         return output;
       }
-      let center = projectToPixels(makePoint(dim, boundary));
+      let center = enterPx(makePoint(dim, boundary));
 
       var circleR: f32;
       if (markConstants.dotRadius < 0.0) {
@@ -267,7 +280,7 @@
       var output: VertexOutput;
       output.position = pixelsToClip(pos);
       output.colorValue = colorValues[instanceIdx];
-      output.alpha = selectionDim(
+      output.alpha = entranceAlpha(markConstants.entranceAxis) * selectionDim(
         ${connectedActivityWGSL(ACTIVITY_READS, {
 					color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValues[instanceIdx]',
 					series:
@@ -319,10 +332,10 @@
     }
 
     // Project segment endpoints for adaptive resolution
-    let topPxCurr = projectToPixels(makePoint(dimCurr, topCurr));
-    let topPxNext = projectToPixels(makePoint(dimNext, topNext));
-    let botPxCurr = projectToPixels(makePoint(dimCurr, botCurr));
-    let botPxNext = projectToPixels(makePoint(dimNext, botNext));
+    let topPxCurr = enterPx(makePoint(dimCurr, topCurr));
+    let topPxNext = enterPx(makePoint(dimNext, topNext));
+    let botPxCurr = enterPx(makePoint(dimCurr, botCurr));
+    let botPxNext = enterPx(makePoint(dimNext, botNext));
 
     // Adaptive sub-segment resolution: more segments for longer pixel spans.
     // Use the longer of top/bottom chord for resolution calculation.
@@ -351,10 +364,10 @@
     let dimPrev = dimValues[prevIdx];
     let dimAfter = dimValues[afterIdx];
 
-    let topPxPrev = projectToPixels(makePoint(dimPrev, topValues[prevIdx]));
-    let topPxAfter = projectToPixels(makePoint(dimAfter, topValues[afterIdx]));
-    let botPxPrev = projectToPixels(makePoint(dimPrev, bottomValues[prevIdx]));
-    let botPxAfter = projectToPixels(makePoint(dimAfter, bottomValues[afterIdx]));
+    let topPxPrev = enterPx(makePoint(dimPrev, topValues[prevIdx]));
+    let topPxAfter = enterPx(makePoint(dimAfter, topValues[afterIdx]));
+    let botPxPrev = enterPx(makePoint(dimPrev, bottomValues[prevIdx]));
+    let botPxAfter = enterPx(makePoint(dimAfter, bottomValues[afterIdx]));
 
     // Compute t for this vertex from effective resolution (not geometry buffer)
     let subSegSize = 1.0 / f32(effectiveRes);
@@ -374,7 +387,7 @@
     var output: VertexOutput;
     output.position = pixelsToClip(finalPos);
     output.colorValue = colorValues[currIdx];
-    output.alpha = markConstants.fillOpacity * selectionDim(
+    output.alpha = markConstants.fillOpacity * entranceAlpha(markConstants.entranceAxis) * selectionDim(
       ${connectedActivityWGSL(ACTIVITY_READS, {
 				color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValues[currIdx]',
 				series:
@@ -491,6 +504,12 @@
 			view.setUint32(UNIFORM_OFFSETS.ACTIVITY_SERIES_MODE, activitySeriesMode, LE);
 			view.setUint32(UNIFORM_OFFSETS.ACTIVITY_SERIES_SCALE_INDEX, activitySeriesScaleIndex, LE);
 			view.setUint32(UNIFORM_OFFSETS.ORIENTATION, orientation === 'horizontal' ? 1 : 0, LE);
+			// Grows along the boundary axis: y for a vertical area, x for a horizontal one.
+			view.setUint32(
+				UNIFORM_OFFSETS.ENTRANCE_AXIS,
+				grow ? (orientation === 'horizontal' ? 1 : 2) : 0,
+				LE
+			);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 0, constantColor[0], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 4, constantColor[1], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 8, constantColor[2], LE);

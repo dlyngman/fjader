@@ -2,7 +2,7 @@
 	import { onMount, onDestroy, setContext, getContext } from 'svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import type { Snippet } from 'svelte';
-	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
+	import type { ChartContext, EntranceMode, WebGPUCanvasContext } from '$lib/types';
 	import type { GPUCoordinator, ChartRegistrationResult } from '$lib/gpu/GPUCoordinator.svelte';
 	import type { FacetScaleRef } from '$lib/gpu/GPUCoordinator.svelte';
 
@@ -120,7 +120,9 @@
 			chartControl = gpuCoordinator.registerChart(chartId, canvas, {
 				zIndex: 0,
 				facetIndex: facetIndex ?? 0,
-				facetScale
+				facetScale,
+				entrance: c.config?.chartProps?.entrance as EntranceMode | undefined,
+				entranceGate: c.config?.entrance ?? null
 			});
 
 			// Notify coordinator that context is ready

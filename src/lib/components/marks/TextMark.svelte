@@ -15,7 +15,13 @@
 		resolveTip
 	} from './utils';
 	import { buildReactiveConfig } from './utils/reactive-config';
-	import type { FieldRef, BaseMarkProps, ContinuousScaleTypeProps, ChartContext } from '$lib/types';
+	import type {
+		FieldRef,
+		BaseMarkProps,
+		ContinuousScaleTypeProps,
+		ChartContext,
+		EntranceMode
+	} from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
@@ -44,6 +50,7 @@
 		selection = undefined,
 		selectionResponse = undefined,
 		nulls = undefined,
+		holdsEntrance = undefined,
 		x,
 		y,
 		text,
@@ -70,8 +77,15 @@
 	}: Props = $props();
 
 	const markId = generateMarkId('text');
+	// Held from mount, as other marks do in ChartConfig.registerMark: TextMark
+	// has no config entry, and its lifecycle is built later.
+	if (untrack(() => table) && untrack(() => holdsEntrance) !== false) {
+		getContext<ChartContext>('chart').config?.entrance.hold(markId);
+	}
 	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
+	// Read once: the entrance happens when the labels first mount.
+	const entrance = chartContext.config?.chartProps?.entrance as EntranceMode | undefined;
 	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 
@@ -134,6 +148,9 @@
 		},
 		get nulls() {
 			return nulls;
+		},
+		get holdsEntrance() {
+			return holdsEntrance;
 		},
 		get limit() {
 			return limit;
@@ -473,11 +490,17 @@
 
 	onDestroy(() => {
 		setup?.destroy();
+		// No config entry to unregister, which is where other marks release it.
+		chartContext.config?.entrance.release(markId);
 	});
 </script>
 
 {#if (setup?.gpuReady || !table) && markColor.ready && labelItems.length > 0}
-	<g class="text-mark" class:text-mark-hidden={useFadeMode && scalesAnimating}>
+	<g
+		class="text-mark"
+		class:text-mark-hidden={useFadeMode && scalesAnimating}
+		class:text-mark-enter={entrance !== 'none'}
+	>
 		{#each labelItems as item, i (item.idx)}
 			{@const pos = positions[i]}
 			<!--
@@ -512,5 +535,21 @@
 
 	.text-mark-hidden {
 		opacity: 0;
+	}
+
+	/*
+	 * The chart's entrance, for SVG labels: a fade, never motion, so it is the
+	 * same under reduced motion. Labels sit at their final positions, so on
+	 * growing bars they arrive as the bars reach them rather than ahead.
+	 */
+	.text-mark-enter {
+		/* The chart's fade: a soft S-curve over about 0.45s (ENTRANCE_FADE_STIFFNESS). */
+		animation: text-mark-enter 450ms ease-in-out;
+	}
+
+	@keyframes text-mark-enter {
+		from {
+			opacity: 0;
+		}
 	}
 </style>
