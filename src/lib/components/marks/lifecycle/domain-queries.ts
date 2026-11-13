@@ -47,7 +47,14 @@ export async function fetchCategoricalDomains(
 	markId: string,
 	explicitDomain?: { x?: DimValue[]; y?: DimValue[] } | null,
 	/** nulls="drop": the band and facet domains leave out the NULL category. */
-	dropNull = false
+	dropNull = false,
+	/**
+	 * True once the setup run that called this has been superseded or its mark
+	 * destroyed. Checked at every write, after each query returns: the scales
+	 * it would write may have been dropped with a ChartScales the chart has
+	 * since replaced.
+	 */
+	stale: () => boolean = () => false
 ): Promise<number> {
 	const categoriesOf = (key: string): DimValue[] => {
 		const categories = coordinator.categoryValues(key, table);
@@ -110,6 +117,7 @@ export async function fetchCategoricalDomains(
 			(async () => {
 				// Idempotent and coalesced — the mark's own setup calls this too.
 				await coordinator.ensureColumns(table, { categorical: [identityField] });
+				if (stale()) return;
 				// This table's categories: the dim spans every table on the field.
 				const categories = categoriesOf(identityField.key);
 				// A snapshot of the real categories. The scale adopts the live
@@ -168,6 +176,7 @@ export async function fetchCategoricalDomains(
 			(async () => {
 				// Idempotent and coalesced — the mark's own setup calls this too.
 				await coordinator.ensureColumns(table, { categorical: [facetKey] });
+				if (stale()) return;
 				const categories = categoriesOf(facetKey.key);
 				if (categories.length > 0) facetBandScale.addMark(categories, markId);
 			})()
@@ -194,6 +203,7 @@ export async function fetchCategoricalDomains(
 
 		fetches.push(
 			coordinator.query(q).then((result) => {
+				if (stale()) return;
 				const row = Array.from(result)[0];
 				if (row && row.min_time != null && row.max_time != null) {
 					console.log(`[fetchCategoricalDomains] Time extent for ${axis}:`, [
@@ -244,6 +254,7 @@ export async function fetchCategoricalDomains(
 						(async () => {
 							// Idempotent and coalesced — the mark's own setup calls this too.
 							await coordinator.ensureColumns(table, { categorical: [colorIdentity] });
+							if (stale()) return;
 							const categories = coordinator.categoryValues(colorIdentity.key);
 							if (categories.length > 0) {
 								colorScaleState.setDomain(categories as (string | number)[]);
@@ -260,6 +271,7 @@ export async function fetchCategoricalDomains(
 
 				fetches.push(
 					coordinator.query(q).then((result) => {
+						if (stale()) return;
 						const row = Array.from(result)[0];
 						if (row && row.min_color != null && row.max_color != null) {
 							console.log(`[fetchCategoricalDomains] Color domain (sequential):`, [
@@ -285,6 +297,7 @@ export async function fetchCategoricalDomains(
 
 		fetches.push(
 			coordinator.query(q).then((result) => {
+				if (stale()) return;
 				const row = Array.from(result)[0];
 				if (row && row.min_radius != null && row.max_radius != null) {
 					sizeScaleState.setDomain([row.min_radius as number, row.max_radius as number]);
@@ -302,6 +315,7 @@ export async function fetchCategoricalDomains(
 			fetches.push(
 				(async () => {
 					await coordinator.ensureColumns(table, { categorical: [seriesIdentity] });
+					if (stale()) return;
 					const categories = coordinator.categoryValues(seriesIdentity.key);
 					if (categories.length > 0) {
 						seriesScaleState.setDomain(categories as (string | number)[]);
@@ -312,6 +326,7 @@ export async function fetchCategoricalDomains(
 	}
 
 	if (fetches.length > 0) await Promise.all(fetches);
+	if (stale()) return fetches.length;
 
 	// Apply explicit domains after all async fetches — ViewManager columns
 	// from color/series scales are now registered, so the band view will
@@ -349,7 +364,9 @@ export async function fetchGlobalAggregates(
 	xScaleState: ContinuousScaleState | null,
 	yScaleState: ContinuousScaleState | null,
 	colorScaleState: ColorScaleState | null,
-	markId: string
+	markId: string,
+	/** As for fetchCategoricalDomains: checked before writing the extents. */
+	stale: () => boolean = () => false
 ): Promise<{ globalAggregatesSet: boolean }> {
 	// Only proceed if we have channels needing data-derived domains
 	if (channelsNeedingDataDomain.size === 0) {
@@ -422,6 +439,7 @@ export async function fetchGlobalAggregates(
 
 		// Step 3: Execute the query
 		const result = await coordinator.query(sidecarQuery);
+		if (stale()) return { globalAggregatesSet: false };
 		const extents: Record<string, unknown> = Array.from(result)[0];
 
 		console.log(`✅ [${markId}] Sidecar results:`, extents);
