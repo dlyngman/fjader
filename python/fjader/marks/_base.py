@@ -69,7 +69,9 @@ class Mark:
     transforms: list[TransformSpec] | None = None
     sort: SortConfig | None = None
     domain: DomainConfig | None = None
-    tooltip: bool | None = None
+    # Hover tooltips, or options: {"sort_table": True} writes the tooltip table
+    # sorted by x (zone-map skipping in hover lookups); off by default.
+    tooltip: bool | dict[str, bool] | None = None
     tooltip_proximity: Literal["x", "y", "xy"] | None = None
     tip: list[str | AggregateField | dict[str, AggregateField]] | Literal[False] | None = None
     fit_domain: Literal["x", "y"] | bool | None = None

@@ -918,9 +918,10 @@ export class QueryEngine {
 
 		handle._onParamsChange = () => this.#queryMark(markId, reg);
 		handle._onActivate = () => {
-			if (!reg.stale) return;
+			if (!reg.stale) return false;
 			reg.stale = false;
 			this.#queryMark(markId, reg);
+			return true;
 		};
 
 		handle.destroy = () => {

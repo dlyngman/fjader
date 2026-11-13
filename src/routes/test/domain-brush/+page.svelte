@@ -22,6 +22,14 @@
 					sin(idx * 0.02) * 10 + sin(idx * 0.005) * 20 + 2.0 * (random() - 0.5) as y
 				FROM points
 			`);
+			// Two series for the ?below=1 stacked chart, whose JS stack makes its
+			// fit read the tooltip table (the fitDomain path for JS transforms).
+			await queryEngine.exec(`
+				CREATE TABLE timeseries_split AS
+				SELECT x, 'a' AS series, abs(y) AS y FROM timeseries
+				UNION ALL
+				SELECT x, 'b' AS series, abs(y) * 0.5 + 5 AS y FROM timeseries
+			`);
 
 			isLoaded = true;
 		} catch (error) {
@@ -37,7 +45,7 @@
 	{:else if !isLoaded}
 		<div class="status">Generating data...</div>
 	{:else}
-		<MainView />
+		<MainView {queryEngine} />
 	{/if}
 </div>
 

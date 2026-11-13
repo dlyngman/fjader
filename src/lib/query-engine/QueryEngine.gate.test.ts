@@ -75,10 +75,10 @@ describe('off-screen gate', () => {
 		engine.onFilterChange(group);
 		h.updateParams({ sort: undefined, limit: 10 });
 		expect(queried).toEqual([]);
-		h.setActive(true);
+		expect(h.setActive(true)).toBe(true);
 		expect(queried).toEqual(['m']);
-		h.setActive(false);
-		h.setActive(true);
+		expect(h.setActive(false)).toBe(false);
+		expect(h.setActive(true)).toBe(false);
 		expect(queried).toEqual(['m']);
 	});
 
@@ -93,7 +93,7 @@ describe('off-screen gate', () => {
 		const h = mark('m', 'a');
 		landed(h);
 		h.setActive(false);
-		h.setActive(true);
+		expect(h.setActive(true)).toBe(false);
 		expect(queried).toEqual([]);
 	});
 

@@ -16,6 +16,8 @@
 	import * as msql from '@uwdata/mosaic-sql';
 	import { count, avg } from '@uwdata/mosaic-sql';
 	import { initFjader } from '$lib';
+	import { page } from '$app/state';
+	import { attachQueryLog } from '$lib/query-engine/debug/query-log';
 	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
@@ -35,14 +37,24 @@
 	import { Grid } from '$lib/components/guides';
 	import { bin } from '$lib/sql/bin';
 
-	const { queryEngine } = initFjader();
+	const { queryEngine, gpuCoordinator } = initFjader();
+	// Every statement and chart entrance, for "Save log": with ?slow=1 the slow
+	// mark is on from the first load, which is what shows whether it holds up
+	// the other charts.
+	const log = attachQueryLog(queryEngine);
+	const entrances = [];
+	gpuCoordinator.observeEntrances(({ canvas, chartId, time }) => {
+		const label = canvas.closest('section')?.querySelector('h2')?.textContent;
+		entrances.push({ chart: label ?? chartId, time });
+	});
+	let mountedAt = 0;
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 	let mode = $state('auto');
 	let replay = $state(0);
 	// Off by default: DuckDB-WASM runs one query at a time, so the slow mark's
 	// reads delay every other chart's queries too, not only its own chart.
-	let showSlow = $state(false);
+	let showSlow = $state(page.url.searchParams.get('slow') === '1');
 
 	const reducedMotion =
 		typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -63,6 +75,7 @@
 				CREATE VIEW slow_rule AS
 				SELECT 200 + 0 * avg(hash(i) % 1000) AS v FROM range(15000000) t(i)
 			`);
+			mountedAt = performance.now();
 			isLoaded = true;
 		} catch (error) {
 			console.error(error);
@@ -82,6 +95,12 @@
 			</select>
 		</label>
 		<button onclick={() => replay++}>Replay</button>
+		<button
+			onclick={() =>
+				log.download(`qlog-entrance${showSlow ? '-slow' : ''}.json`, { mountedAt, entrances })}
+		>
+			Save log
+		</button>
 		<label>
 			<input type="checkbox" bind:checked={showSlow} onchange={() => replay++} />
 			slow-mark charts (delays every chart: one DuckDB worker)

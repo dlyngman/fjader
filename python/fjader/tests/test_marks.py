@@ -243,3 +243,9 @@ class TestEntrance:
     def test_opts_entrance(self):
         p = fj.plot(fj.dot(table="t", x="a", y="b")).opts(entrance="none")
         assert p.to_dict()["plot"]["entrance"] == "none"
+
+
+class TestTooltipOptions:
+    def test_tooltip_options_serialize_camel_case(self):
+        mark = fj.dot(table="t", x="a", y="b", tooltip={"sort_table": True})
+        assert mark.to_mark_dict()["tooltip"] == {"sortTable": True}

@@ -812,10 +812,24 @@ export class MarkLifecycleV2 {
 
 		// Off screen, the engine stops re-querying this mark (after its first
 		// result) and queries it once when it is back; see MarkHandle.active.
+		//
+		// The one owner of a return to view. A fitted axis may have moved
+		// meanwhile (a shared axis zoomed from another chart), and the fit
+		// effects do not run off screen. If the mark came back stale, its
+		// catch-up result refits like any data change (#refitFromData, or
+		// #onTooltipTableWritten with JS transforms). Refitting here as well
+		// would fit to the old data first, then to the new: two fits.
+		// Otherwise its data is current and nothing else will refit, so
+		// refit now.
 		$effect(() => {
 			const handle = this.#handle;
 			const visible = this.#chartContext.visible ?? true;
-			if (handle) untrack(() => handle.setActive(visible));
+			if (!handle) return;
+			untrack(() => {
+				const cameBack = visible && !handle.active;
+				const caughtUp = handle.setActive(visible);
+				if (cameBack && !caughtUp) this.#refitOnReturn();
+			});
 		});
 
 		// Push per-mark params and trigger query. Runs immediately after
@@ -937,13 +951,17 @@ export class MarkLifecycleV2 {
 		// result): refit, debounced like the data settling. Marks with JS
 		// transforms refit after their tooltip table is written instead, which
 		// their fit reads (#onTooltipTableWritten). Off screen, like the mark's
-		// re-queries: reading `visible` refits when the chart is back.
+		// re-queries: the return to view refits (#refitOnReturn).
 		$effect(() => {
 			const fitDomain = this.#reactiveConfig.fitDomain;
 			if (!fitDomain) return;
 			const dataVersion = this.dataVersion;
 			if (dataVersion === 0) return;
-			if (!(this.#chartContext.visible ?? true)) return;
+			// Untracked: a return to view refits from the setActive effect, which
+			// knows whether a catch-up result is coming.
+			if (!untrack(() => this.#chartContext.visible ?? true)) return;
+			// With JS transforms the fit reads the tooltip table, and a data change
+			// refits after its write (#onTooltipTableWritten).
 			if (this.#transformCompiler.hasJSTransforms()) return;
 			untrack(() => {
 				clearTimeout(this.#refitTimeout!);
@@ -958,9 +976,10 @@ export class MarkLifecycleV2 {
 			if (!fitDomain) return;
 			if (!this.#dataDerivedDomainsSet) return;
 			// Off screen, like the mark's re-queries (MarkHandle.active): no fit.
-			// Reading `visible` re-runs this when the chart is back, which fits
-			// to the driving axis as it is then.
-			if (!(this.#chartContext.visible ?? true)) return;
+			// Read untracked: the refit-from-data effect fits once when the chart
+			// is back, at the driving axis's domain then; tracking it here too sent
+			// a second fit for the same return.
+			if (!untrack(() => this.#chartContext.visible ?? true)) return;
 
 			const fittedAxis = this.#resolveFittedAxis(fitDomain);
 			if (!fittedAxis) return;
@@ -2212,12 +2231,18 @@ export class MarkLifecycleV2 {
 				const replaceClause =
 					replaceExprs.length > 0 ? ` REPLACE (${replaceExprs.join(', ')})` : '';
 
-				// Optional ORDER BY for zone-map skipping in bounding-box queries.
+				// ORDER BY x, so a hover lookup's bounding box could skip row groups
+				// (zone maps): only when asked (`tooltip: { sortTable: true }`). Since
+				// lazy writes the sort is hover latency, and the lookups did not get
+				// faster for it. Measured on a scatter, sorted against unsorted:
+				// 200k rows, write 41 against 12 ms, lookup median 2.2 against 2.9 ms;
+				// 2M rows (17 row groups), write 273 against 70 ms, lookup median 11.3
+				// against 11.4 ms, p90 35 against 30 ms. The lookup's box is wide and
+				// holds most of the cost on dense data, sorted or not.
 				let orderClause = '';
 				const tooltipSortTable =
-					typeof this.#reactiveConfig.tooltip === 'object'
-						? this.#reactiveConfig.tooltip.sortTable !== false
-						: true;
+					typeof this.#reactiveConfig.tooltip === 'object' &&
+					this.#reactiveConfig.tooltip.sortTable === true;
 				if (tooltipSortTable) {
 					const orderCol = ['x', 'x1', 'x2'].find((c) => c in selectConfig);
 					if (orderCol) orderClause = ` ORDER BY ${orderCol}`;
@@ -2594,6 +2619,19 @@ export class MarkLifecycleV2 {
 		if (!target) return;
 
 		this.#issueFitDomainQuery(fittedAxis, target as [number, number], true);
+	}
+
+	/**
+	 * The chart came back into view with current data: fit to the driving
+	 * axis as it is now. Not debounced, since no data is settling. With JS
+	 * transforms the fit reads the tooltip table; if its write is still
+	 * pending, #onTooltipTableWritten fits after it instead.
+	 */
+	#refitOnReturn(): void {
+		if (!this.#reactiveConfig.fitDomain || this.dataVersion === 0) return;
+		if (this.#transformCompiler.hasJSTransforms() && !this.#tooltipTableReady) return;
+		clearTimeout(this.#refitTimeout!);
+		this.#refitFromData();
 	}
 
 	// ===========================================================================

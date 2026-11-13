@@ -224,7 +224,8 @@ interface BaseMarkSpec {
 	transforms?: TransformSpec[];
 	sort?: SortConfig | null;
 	domain?: { x?: string[]; y?: string[] } | null;
-	tooltip?: boolean;
+	/** Hover tooltips, or options; see BaseMarkProps.tooltip. */
+	tooltip?: boolean | { sortTable?: boolean };
 	tooltipProximity?: 'x' | 'y' | 'xy';
 	tip?: (string | '*' | AggregateFieldSpec | LabeledTipFieldSpec)[] | false;
 	fitDomain?: 'x' | 'y' | boolean;

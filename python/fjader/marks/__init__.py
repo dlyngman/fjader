@@ -50,7 +50,7 @@ def dot(
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     domain: DomainConfig | None = None,
-    tooltip: bool | None = None,
+    tooltip: bool | dict[str, bool] | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
     fit_domain: Literal["x", "y"] | bool | None = None,
@@ -88,7 +88,8 @@ def dot(
         transforms: List of transforms (e.g. ``[fj.topN(10), fj.filter(...)]``).
         sort: Sort configuration, e.g. ``{'y': 'count', 'order': 'desc'}``.
         domain: Explicit category order for band scales, e.g. ``{'x': ['Mon', 'Tue', ...]}``.
-        tooltip: Enable tooltip on hover.
+        tooltip: Enable tooltip on hover, or ``{"sort_table": True}`` to write the
+            tooltip table sorted by x (off by default).
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
         fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
@@ -132,7 +133,7 @@ def bar_x(
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     domain: DomainConfig | None = None,
-    tooltip: bool | None = None,
+    tooltip: bool | dict[str, bool] | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
     fit_domain: Literal["x", "y"] | bool | None = None,
@@ -184,7 +185,8 @@ def bar_x(
         transforms: List of transforms.
         sort: Sort configuration, e.g. ``{'y': 'count', 'order': 'desc'}``.
         domain: Explicit category order for band scales, e.g. ``{'y': ['sun', 'rain', ...]}``.
-        tooltip: Enable tooltip on hover.
+        tooltip: Enable tooltip on hover, or ``{"sort_table": True}`` to write the
+            tooltip table sorted by x (off by default).
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
         fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
@@ -227,7 +229,7 @@ def bar_y(
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     domain: DomainConfig | None = None,
-    tooltip: bool | None = None,
+    tooltip: bool | dict[str, bool] | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
     fit_domain: Literal["x", "y"] | bool | None = None,
@@ -279,7 +281,8 @@ def bar_y(
         transforms: List of transforms.
         sort: Sort configuration, e.g. ``{'x': 'name', 'order': 'asc'}``.
         domain: Explicit category order for band scales, e.g. ``{'x': ['Mon', 'Tue', ...]}``.
-        tooltip: Enable tooltip on hover.
+        tooltip: Enable tooltip on hover, or ``{"sort_table": True}`` to write the
+            tooltip table sorted by x (off by default).
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
         fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
@@ -320,7 +323,7 @@ def line(
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     domain: DomainConfig | None = None,
-    tooltip: bool | None = None,
+    tooltip: bool | dict[str, bool] | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
     fit_domain: Literal["x", "y"] | bool | None = None,
@@ -361,7 +364,8 @@ def line(
         transforms: List of transforms.
         sort: Sort configuration.
         domain: Explicit category order for band scales.
-        tooltip: Enable tooltip on hover.
+        tooltip: Enable tooltip on hover, or ``{"sort_table": True}`` to write the
+            tooltip table sorted by x (off by default).
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
         fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
@@ -407,7 +411,7 @@ def area_y(
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     domain: DomainConfig | None = None,
-    tooltip: bool | None = None,
+    tooltip: bool | dict[str, bool] | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
     fit_domain: Literal["x", "y"] | bool | None = None,
@@ -451,7 +455,8 @@ def area_y(
         transforms: List of transforms (e.g. ``[fj.stack_y()]``).
         sort: Sort configuration.
         domain: Explicit category order for band scales.
-        tooltip: Enable tooltip on hover.
+        tooltip: Enable tooltip on hover, or ``{"sort_table": True}`` to write the
+            tooltip table sorted by x (off by default).
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
         fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
@@ -497,7 +502,7 @@ def area_x(
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     domain: DomainConfig | None = None,
-    tooltip: bool | None = None,
+    tooltip: bool | dict[str, bool] | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
     fit_domain: Literal["x", "y"] | bool | None = None,
@@ -541,7 +546,8 @@ def area_x(
         transforms: List of transforms.
         sort: Sort configuration.
         domain: Explicit category order for band scales.
-        tooltip: Enable tooltip on hover.
+        tooltip: Enable tooltip on hover, or ``{"sort_table": True}`` to write the
+            tooltip table sorted by x (off by default).
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
         fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
@@ -589,7 +595,7 @@ def rect(
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     domain: DomainConfig | None = None,
-    tooltip: bool | None = None,
+    tooltip: bool | dict[str, bool] | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
     fit_domain: Literal["x", "y"] | bool | None = None,
@@ -635,7 +641,8 @@ def rect(
         transforms: List of transforms.
         sort: Sort configuration.
         domain: Explicit category order for band scales.
-        tooltip: Enable tooltip on hover.
+        tooltip: Enable tooltip on hover, or ``{"sort_table": True}`` to write the
+            tooltip table sorted by x (off by default).
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
         fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
@@ -680,7 +687,7 @@ def rect_x(
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     domain: DomainConfig | None = None,
-    tooltip: bool | None = None,
+    tooltip: bool | dict[str, bool] | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
     fit_domain: Literal["x", "y"] | bool | None = None,
@@ -722,7 +729,8 @@ def rect_x(
         transforms: List of transforms.
         sort: Sort configuration.
         domain: Explicit category order for band scales.
-        tooltip: Enable tooltip on hover.
+        tooltip: Enable tooltip on hover, or ``{"sort_table": True}`` to write the
+            tooltip table sorted by x (off by default).
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
         fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
@@ -764,7 +772,7 @@ def rect_y(
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     domain: DomainConfig | None = None,
-    tooltip: bool | None = None,
+    tooltip: bool | dict[str, bool] | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
     fit_domain: Literal["x", "y"] | bool | None = None,
@@ -806,7 +814,8 @@ def rect_y(
         transforms: List of transforms.
         sort: Sort configuration.
         domain: Explicit category order for band scales.
-        tooltip: Enable tooltip on hover.
+        tooltip: Enable tooltip on hover, or ``{"sort_table": True}`` to write the
+            tooltip table sorted by x (off by default).
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
         fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
@@ -850,7 +859,7 @@ def text(
     transforms: list[TransformSpec] | None = None,
     sort: SortConfig | None = None,
     domain: DomainConfig | None = None,
-    tooltip: bool | None = None,
+    tooltip: bool | dict[str, bool] | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
     tip: list[str] | Literal[False] | None = None,
     fit_domain: Literal["x", "y"] | bool | None = None,
@@ -894,7 +903,8 @@ def text(
         transforms: List of transforms.
         sort: Sort configuration.
         domain: Explicit category order for band scales.
-        tooltip: Enable tooltip on hover.
+        tooltip: Enable tooltip on hover, or ``{"sort_table": True}`` to write the
+            tooltip table sorted by x (off by default).
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
         fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
