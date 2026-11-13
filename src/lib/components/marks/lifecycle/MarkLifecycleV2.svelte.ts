@@ -1314,7 +1314,8 @@ export class MarkLifecycleV2 {
 		}
 
 		const q = Query.from(this.#config.table).select(selectDef as Record<string, ExprValue>);
-		const result = await this.#queryEngine.query(q);
+		// Shared and cached: marks on one table ask the same ranges (see QueryOpts.cache).
+		const result = await this.#queryEngine.query(q, { cache: true });
 		const row = result.get(0) as Record<string, unknown> | null;
 		if (!row) return null;
 
@@ -2161,7 +2162,8 @@ export class MarkLifecycleV2 {
 				const withoutMembers = withoutOtherMembers(tooltipQuery);
 				// One statement: a hover query never finds the table missing.
 				await this.#queryEngine.exec(
-					`CREATE OR REPLACE TEMP TABLE "${tableName}" AS SELECT *${replaceClause} FROM (${withoutMembers})${orderClause}`
+					`CREATE OR REPLACE TEMP TABLE "${tableName}" AS SELECT *${replaceClause} FROM (${withoutMembers})${orderClause}`,
+					{ class: 'background' }
 				);
 			} else {
 				// Path B: Serialize transformed data via SQL VALUES.
@@ -2199,11 +2201,14 @@ export class MarkLifecycleV2 {
 					valueRows.push(`(${vals.join(', ')})`);
 				}
 
-				await this.#queryEngine.exec([
-					`DROP TABLE IF EXISTS "${tableName}"`,
-					`CREATE TEMP TABLE "${tableName}" (${schemaDef})`,
-					`INSERT INTO "${tableName}" VALUES ${valueRows.join(', ')}`
-				]);
+				await this.#queryEngine.exec(
+					[
+						`DROP TABLE IF EXISTS "${tableName}"`,
+						`CREATE TEMP TABLE "${tableName}" (${schemaDef})`,
+						`INSERT INTO "${tableName}" VALUES ${valueRows.join(', ')}`
+					],
+					{ class: 'background' }
+				);
 			}
 
 			// Merge tip expression extras (aggregates/windows) via sidecar query.
@@ -2318,7 +2323,7 @@ export class MarkLifecycleV2 {
 			.join(' AND ');
 		const updateStmt = `UPDATE ${ident(tableName)} SET ${setClauses} FROM (${sidecarQuery.toString()}) _s WHERE ${joinCondition}`;
 
-		await this.#queryEngine.exec([...alterStmts, updateStmt]);
+		await this.#queryEngine.exec([...alterStmts, updateStmt], { class: 'background' });
 	}
 
 	// ===========================================================================
@@ -2545,7 +2550,9 @@ export class MarkLifecycleV2 {
 	#dropTooltipTable(): void {
 		if (!this.#tooltipTableWritten) return;
 		this.#tooltipTableWritten = false;
-		this.#queryEngine.exec(`DROP TABLE IF EXISTS "${this.#tooltipTableName}"`).catch(() => {});
+		this.#queryEngine
+			.exec(`DROP TABLE IF EXISTS "${this.#tooltipTableName}"`, { class: 'background' })
+			.catch(() => {});
 	}
 }
 

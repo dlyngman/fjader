@@ -51,9 +51,46 @@ export interface QueryOpts {
 	callerId?: string;
 	/** AbortSignal for external cancellation. */
 	signal?: AbortSignal;
-	/** Enable query result caching. Default true. Set false for queries against
-	 *  volatile temp tables whose contents change without the SQL changing. */
+	/**
+	 * Result caching, and sharing an identical query already running.
+	 *
+	 * - Mark queries (with a `callerId`): on by default; `false` for queries
+	 *   against tables whose contents change without the SQL changing.
+	 * - Ad-hoc queries (no `callerId`): off unless `true`, so an app re-reading
+	 *   a table it writes to sees its writes. fjader's own setup queries pass
+	 *   `true`: they read base tables, which change only on a data reload, after
+	 *   which `clearQueryCache()` is the contract.
+	 *
+	 * The key includes the dims' version (see #cacheKey).
+	 */
 	cache?: boolean;
+	/** Who is waiting for it; see StatementClass. Default 'interaction'. */
+	class?: StatementClass;
+}
+
+/**
+ * Who is waiting for a statement. Callers state a class, never a connection:
+ * which connection (or later, which backend) serves it is the engine's
+ * business, decided in one place, `#send`.
+ *
+ * - `'interaction'`: someone is looking at the result or about to: mark data,
+ *   hover lookups, a mark's setup (domains, dims). The default.
+ * - `'background'`: nobody waits for it directly: preagg builds, tooltip-table
+ *   writes, cleanup. Preagg builds yield to interaction statements, not to each
+ *   other's background work.
+ */
+export type StatementClass = 'interaction' | 'background';
+
+/** One statement as it reached the connection, for `observeStatements`. */
+export interface StatementRecord {
+	sql: string;
+	/** How it was sent: a query returning rows, a statement, a DESCRIBE, an Arrow insert. */
+	kind: 'query' | 'exec' | 'describe' | 'insert';
+	class: StatementClass;
+	/** performance.now() when handed to the connection, and when it settled. */
+	start: number;
+	end: number;
+	error?: unknown;
 }
 
 /**
@@ -192,8 +229,18 @@ export class QueryEngine {
 	#inflight = new Map<string, AbortController>();
 	#pending = new Map<
 		string,
-		{ sql: string; resolve: (t: Table) => void; reject: (e: Error) => void; cache: boolean }
+		{
+			sql: string;
+			resolve: (t: Table) => void;
+			reject: (e: Error) => void;
+			cache: boolean;
+			class: StatementClass;
+		}
 	>();
+	/** Interaction statements handed to the connection and not yet settled (see #send). */
+	#interactionInFlight = 0;
+	/** Debug listeners for every statement sent (observeStatements). */
+	#statementObservers = new Set<(record: StatementRecord) => void>();
 	#describeCache = new Map<string, Promise<ColumnInfo[]>>();
 	#marks = new Map<string, MarkRegistration>();
 	#destroyed = false;
@@ -244,9 +291,11 @@ export class QueryEngine {
 	) {
 		this.#preagg = new Preagg(
 			{
-				exec: (sql) => this.exec(sql),
-				query: (sql, opts) => this.query(sql, opts),
-				busy: () => this.#inflight.size > 0 || this.#pending.size > 0,
+				exec: (sql) => this.exec(sql, { class: 'background' }),
+				query: (sql, opts) => this.query(sql, { class: 'background', ...opts }),
+				// Builds yield to interaction: a statement someone waits for is on
+				// the connection, or a mark query is waiting to be sent.
+				busy: () => this.#interactionInFlight > 0 || this.#pending.size > 0,
 				identity: this.#identity,
 				mark: (markId) => this.#marks.get(markId),
 				marks: () => this.#marks
@@ -423,17 +472,79 @@ export class QueryEngine {
 	}
 
 	/**
+	 * The one place a statement reaches the connection. Everything that talks to
+	 * DuckDB goes through here: queries, statements, DESCRIBE, Arrow inserts.
+	 *
+	 * What attaches here: the interaction count builds yield to, and statement
+	 * observers (debugging, measurement). Later: routing a class to a connection,
+	 * and per-connection queues.
+	 */
+	async #send<T>(
+		kind: StatementRecord['kind'],
+		sql: string,
+		cls: StatementClass,
+		run: (conn: DuckDBConnection) => Promise<T>
+	): Promise<T> {
+		if (!this.#conn) await this.#ensureConnection();
+		const conn = this.#conn!;
+		const interaction = cls === 'interaction';
+		if (interaction) this.#interactionInFlight++;
+		const start = performance.now();
+		let error: unknown;
+		try {
+			return await run(conn);
+		} catch (e) {
+			error = e;
+			throw e;
+		} finally {
+			if (this.#statementObservers.size > 0) {
+				const record: StatementRecord = {
+					sql,
+					kind,
+					class: cls,
+					start,
+					end: performance.now(),
+					error
+				};
+				// A listener is for debugging: one that throws must not fail the
+				// statement, nor skip the in-flight count below.
+				for (const observe of this.#statementObservers) {
+					try {
+						observe(record);
+					} catch (e) {
+						console.error('[QueryEngine] statement observer threw:', e);
+					}
+				}
+			}
+			// The last interaction statement settling frees the connection for a build.
+			if (interaction && --this.#interactionInFlight === 0) this.#preagg.pump();
+		}
+	}
+
+	/**
 	 * Execute a SQL query and return a flechette Table.
 	 * Uses the fast IPC path (queryIPC → tableFromIPC) when available,
 	 * falling back to the standard conn.query() for mocks/testing.
 	 */
-	async #queryRaw(sql: string): Promise<Table> {
-		const conn = this.#conn!;
-		if (conn.queryIPC) {
-			const ipc = await conn.queryIPC(sql);
-			return tableFromIPC(ipc);
-		}
-		return conn.query(sql);
+	#queryRaw(
+		sql: string,
+		cls: StatementClass,
+		kind: StatementRecord['kind'] = 'query'
+	): Promise<Table> {
+		return this.#send(kind, sql, cls, async (conn) => {
+			if (conn.queryIPC) return tableFromIPC(await conn.queryIPC(sql));
+			return conn.query(sql);
+		});
+	}
+
+	/**
+	 * Listen to every statement sent to the connection, as it settles. For
+	 * debugging and measurement; returns the unsubscribe. Costs nothing while
+	 * no one listens.
+	 */
+	observeStatements(listener: (record: StatementRecord) => void): () => void {
+		this.#statementObservers.add(listener);
+		return () => this.#statementObservers.delete(listener);
 	}
 
 	/** Resolve #conn from #connPromise if needed. No-op when already resolved. */
@@ -462,6 +573,7 @@ export class QueryEngine {
 		if (!this.#conn) await this.#ensureConnection();
 
 		const sqlStr = typeof sql === 'string' ? sql : sql.toString();
+		const cls = opts?.class ?? 'interaction';
 
 		// Cache check: return cached result immediately, bypassing
 		// inflight/pending bookkeeping entirely.
@@ -489,11 +601,40 @@ export class QueryEngine {
 				}
 				// Store as pending — will be executed when inflight completes
 				return new Promise<Table>((resolve, reject) => {
-					this.#pending.set(callerId, { sql: sqlStr, resolve, reject, cache: useCache });
+					this.#pending.set(callerId, {
+						sql: sqlStr,
+						resolve,
+						reject,
+						cache: useCache,
+						class: cls
+					});
 				});
 			}
 
-			return this.#executeForCaller(callerId, sqlStr, opts.signal, useCache);
+			return this.#executeForCaller(callerId, sqlStr, opts.signal, useCache, cls);
+		}
+
+		// No callerId, cache asked for: the first caller's promise goes in the
+		// cache, so a concurrent identical query (two marks asking the same
+		// range) shares it, and a later one reads the result. A cached hit
+		// already returned above.
+		if (opts?.cache === true) {
+			if (opts.signal?.aborted) throw new DOMException('Query aborted', 'AbortError');
+			const key = this.#cacheKey(sqlStr);
+			const promise = this.#queryRaw(sqlStr, cls);
+			this.#queryCache.set(key, promise);
+			let result: Table;
+			try {
+				result = await promise;
+				this.#queryCache.set(key, result);
+			} catch (e) {
+				this.#queryCache.delete(key);
+				throw e;
+			}
+			// Aborted while running: the result stays cached for others (it is
+			// correct), but this caller asked not to receive it.
+			if (opts.signal?.aborted) throw new DOMException('Query aborted', 'AbortError');
+			return result;
 		}
 
 		// No callerId: direct execution, still respect external signal
@@ -501,14 +642,14 @@ export class QueryEngine {
 			if (opts.signal.aborted) {
 				throw new DOMException('Query aborted', 'AbortError');
 			}
-			const result = await this.#queryRaw(sqlStr);
+			const result = await this.#queryRaw(sqlStr, cls);
 			if (opts.signal.aborted) {
 				throw new DOMException('Query aborted', 'AbortError');
 			}
 			return result;
 		}
 
-		return this.#queryRaw(sqlStr);
+		return this.#queryRaw(sqlStr, cls);
 	}
 
 	/**
@@ -523,7 +664,8 @@ export class QueryEngine {
 		callerId: string,
 		sqlStr: string,
 		signal?: AbortSignal,
-		cache: boolean = true
+		cache: boolean = true,
+		cls: StatementClass = 'interaction'
 	): Promise<Table> {
 		const controller = new AbortController();
 		this.#inflight.set(callerId, controller);
@@ -543,7 +685,7 @@ export class QueryEngine {
 			key = this.#cacheKey(sqlStr);
 
 			// Cache the Promise so concurrent identical queries share one inflight
-			const queryPromise = this.#queryRaw(sqlStr);
+			const queryPromise = this.#queryRaw(sqlStr, cls);
 			if (cache) this.#queryCache.set(key, queryPromise);
 
 			const result = await queryPromise;
@@ -573,7 +715,7 @@ export class QueryEngine {
 			const pending = this.#pending.get(callerId);
 			if (pending) {
 				this.#pending.delete(callerId);
-				this.#executeForCaller(callerId, pending.sql, undefined, pending.cache)
+				this.#executeForCaller(callerId, pending.sql, undefined, pending.cache, pending.class)
 					.then(pending.resolve)
 					.catch(pending.reject);
 			}
@@ -587,19 +729,18 @@ export class QueryEngine {
 	 * Accepts a single SQL string or an array of statements to execute
 	 * sequentially.
 	 */
-	async exec(sql: string | string[]): Promise<void> {
+	async exec(sql: string | string[], opts?: { class?: StatementClass }): Promise<void> {
 		if (this.#destroyed) {
 			throw new Error('QueryEngine has been destroyed');
 		}
-		if (!this.#conn) await this.#ensureConnection();
+		const cls = opts?.class ?? 'interaction';
 		const statements = Array.isArray(sql) ? sql : [sql];
-		const execFn = this.#conn!.exec?.bind(this.#conn!);
+		// One statement at a time, each committing on its own.
 		for (const stmt of statements) {
-			if (execFn) {
-				await execFn(stmt);
-			} else {
-				await this.#conn!.query(stmt);
-			}
+			await this.#send('exec', stmt, cls, async (conn) => {
+				if (conn.exec) await conn.exec(stmt);
+				else await conn.query(stmt);
+			});
 		}
 	}
 
@@ -620,9 +761,8 @@ export class QueryEngine {
 	}
 
 	async #fetchDescribe(table: string): Promise<ColumnInfo[]> {
-		if (!this.#conn) await this.#ensureConnection();
 		const escaped = table.replaceAll('"', '""');
-		const result = await this.#queryRaw(`DESCRIBE "${escaped}"`);
+		const result = await this.#queryRaw(`DESCRIBE "${escaped}"`, 'interaction', 'describe');
 		const columns: ColumnInfo[] = [];
 		for (let i = 0; i < result.numRows; i++) {
 			const row = result.get(i);
@@ -712,12 +852,17 @@ export class QueryEngine {
 		data: Uint8Array,
 		options: { name: string; create: boolean }
 	): Promise<void> {
-		if (!this.#conn) await this.#ensureConnection();
-		const conn = this.#conn!;
-		if (!conn.insertArrowFromIPCStream) {
-			throw new Error('Arrow IPC loading requires a DuckDB-WASM connection');
-		}
-		await conn.insertArrowFromIPCStream(data, options);
+		await this.#send(
+			'insert',
+			`INSERT ARROW INTO "${options.name}" (${data.byteLength} bytes)`,
+			'interaction',
+			async (conn) => {
+				if (!conn.insertArrowFromIPCStream) {
+					throw new Error('Arrow IPC loading requires a DuckDB-WASM connection');
+				}
+				await conn.insertArrowFromIPCStream(data, options);
+			}
+		);
 	}
 
 	// -----------------------------------------------------------------
