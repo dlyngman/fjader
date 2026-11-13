@@ -141,3 +141,35 @@ describe('QueryEngine ad-hoc query caching', () => {
 		expect(sent.filter((s) => s === 'SELECT 1')).toHaveLength(2);
 	});
 });
+
+describe('QueryEngine #send robustness', () => {
+	it('a throwing observer neither fails the statement nor stops the others', async () => {
+		const { conn } = fakeConnection();
+		const engine = new QueryEngine(conn);
+		const seen: string[] = [];
+		const quiet = console.error;
+		console.error = () => {};
+		try {
+			engine.observeStatements(() => {
+				throw new Error('listener bug');
+			});
+			engine.observeStatements((r) => seen.push(r.sql));
+			await expect(engine.exec('SELECT 1')).resolves.toBeUndefined();
+			await expect(engine.query('SELECT 2', { cache: false })).resolves.toBeDefined();
+		} finally {
+			console.error = quiet;
+		}
+		expect(seen).toEqual(['SELECT 1', 'SELECT 2']);
+	});
+
+	it('cache: true honours an already aborted signal', async () => {
+		const { conn, sent } = fakeConnection();
+		const engine = new QueryEngine(conn);
+		const controller = new AbortController();
+		controller.abort();
+		await expect(
+			engine.query('SELECT 1', { cache: true, signal: controller.signal })
+		).rejects.toThrow('aborted');
+		expect(sent).toEqual([]);
+	});
+});

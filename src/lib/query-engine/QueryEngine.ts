@@ -477,7 +477,7 @@ export class QueryEngine {
 	 *
 	 * What attaches here: the interaction count builds yield to, and statement
 	 * observers (debugging, measurement). Later: routing a class to a connection,
-	 * and per-connection queues (proposal_query_scheduling.md).
+	 * and per-connection queues.
 	 */
 	async #send<T>(
 		kind: StatementRecord['kind'],
@@ -489,7 +489,7 @@ export class QueryEngine {
 		const conn = this.#conn!;
 		const interaction = cls === 'interaction';
 		if (interaction) this.#interactionInFlight++;
-		const start = this.#statementObservers.size > 0 ? performance.now() : 0;
+		const start = performance.now();
 		let error: unknown;
 		try {
 			return await run(conn);
@@ -506,7 +506,15 @@ export class QueryEngine {
 					end: performance.now(),
 					error
 				};
-				for (const observe of this.#statementObservers) observe(record);
+				// A listener is for debugging: one that throws must not fail the
+				// statement, nor skip the in-flight count below.
+				for (const observe of this.#statementObservers) {
+					try {
+						observe(record);
+					} catch (e) {
+						console.error('[QueryEngine] statement observer threw:', e);
+					}
+				}
 			}
 			// The last interaction statement settling frees the connection for a build.
 			if (interaction && --this.#interactionInFlight === 0) this.#preagg.pump();
@@ -611,17 +619,22 @@ export class QueryEngine {
 		// range) shares it, and a later one reads the result. A cached hit
 		// already returned above.
 		if (opts?.cache === true) {
+			if (opts.signal?.aborted) throw new DOMException('Query aborted', 'AbortError');
 			const key = this.#cacheKey(sqlStr);
 			const promise = this.#queryRaw(sqlStr, cls);
 			this.#queryCache.set(key, promise);
+			let result: Table;
 			try {
-				const result = await promise;
+				result = await promise;
 				this.#queryCache.set(key, result);
-				return result;
 			} catch (e) {
 				this.#queryCache.delete(key);
 				throw e;
 			}
+			// Aborted while running: the result stays cached for others (it is
+			// correct), but this caller asked not to receive it.
+			if (opts.signal?.aborted) throw new DOMException('Query aborted', 'AbortError');
+			return result;
 		}
 
 		// No callerId: direct execution, still respect external signal
