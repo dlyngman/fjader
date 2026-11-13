@@ -238,7 +238,12 @@ export class Preagg {
 			promises.push(this.#builds.push({ markId, sourceId: activeSourceId, build, createSQL }));
 		}
 
-		this.#builds.pump();
+		// From a microtask, not now: activation runs in the pointer-enter handler,
+		// which first marks the chart hovered, and the effect that writes the
+		// hovered marks' tooltip tables (what the first hover waits for) flushes
+		// in an earlier microtask. That write is then in flight, `busy()` holds
+		// the build back, and the tooltip does not wait behind it.
+		queueMicrotask(() => this.#builds.pump());
 		this.#evictUnused();
 		await Promise.all(promises);
 	}

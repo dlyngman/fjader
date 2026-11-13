@@ -173,3 +173,23 @@ describe('QueryEngine #send robustness', () => {
 		expect(sent).toEqual([]);
 	});
 });
+
+describe('QueryEngine.describe', () => {
+	it('does not remember a failed DESCRIBE: the table may exist by the next call', async () => {
+		let exists = false;
+		const conn: DuckDBConnection = {
+			async query(sql: string) {
+				if (sql.startsWith('DESCRIBE') && !exists) throw new Error('Table does not exist');
+				const rows = [{ column_name: 'a', column_type: 'INTEGER', null: 'YES' }];
+				return { numRows: rows.length, get: (i: number) => rows[i] } as never;
+			},
+			async close() {}
+		};
+		const engine = new QueryEngine(conn);
+		await expect(engine.describe('late')).rejects.toThrow('does not exist');
+		exists = true;
+		await expect(engine.describe('late')).resolves.toEqual([
+			{ name: 'a', type: 'INTEGER', nullable: true }
+		]);
+	});
+});

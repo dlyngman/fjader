@@ -656,6 +656,8 @@ export interface ChartContext {
 	 * Marks stop re-querying while it is false; see MarkHandle.active.
 	 */
 	readonly visible: boolean;
+	/** Whether the pointer is over any of the chart's cells (hover intent). */
+	readonly hovered: boolean;
 	readonly yScaleState: ScaleStateInstance | null | undefined;
 	readonly scaleTypes: { x: string; y: string } | null | undefined;
 	readonly scalesReady: boolean | undefined;

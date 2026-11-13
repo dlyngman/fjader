@@ -38,6 +38,8 @@
 	let mountedAt = 0;
 	/** When each chart's entrance started, labelled by its section: { chart, time }. */
 	const entrances = [];
+	/** Pointer entering a chart's section: { chart, time }, to time hover-intent work. */
+	const hovers = [];
 	gpuCoordinator.observeEntrances(({ canvas, chartId, time }) => {
 		const label = canvas.closest('[data-chart]')?.dataset.chart;
 		entrances.push({ chart: label ?? chartId, time });
@@ -80,14 +82,17 @@
 	<p class="note">
 		mount={mount}: {shown.length} charts. Brush chart 1.
 		<button onclick={report}>Report (console)</button>
-		<button onclick={() => log.download(`qlog-${mount}.json`, { mountedAt, entrances })}>
+		<button onclick={() => log.download(`qlog-${mount}.json`, { mountedAt, entrances, hovers })}>
 			Save log
 		</button>
 	</p>
 	{#if isLoaded}
 		<div class="grid">
 			{#each shown as chart (chart.name)}
-				<section data-chart={chart.name}>
+				<section
+					data-chart={chart.name}
+					onpointerenter={() => hovers.push({ chart: chart.name, time: performance.now() })}
+				>
 					<h2>{chart.name}</h2>
 					<div class="chart">
 						<ChartContainer xLabel={chart.x} yLabel={chart.y ?? 'count'}>
