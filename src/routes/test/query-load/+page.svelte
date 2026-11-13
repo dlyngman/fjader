@@ -6,7 +6,7 @@
 	 *   ?mount=all  every chart mounts (default)
 	 *   ?mount=visible  the first eight, the ones on screen in a typical window
 	 *   ?mount=top  only the first four
-	 *   ?slow=1  adds a histogram on a slow view, filtered by the brush
+	 *   ?slow=1  adds dots on a slow view, filtered by the brush
 	 *
 	 * The difference in when the top charts enter is the most query
 	 * prioritization could win at load. Every chart shares the "brush"
@@ -141,17 +141,21 @@
 		{ name: '11 distance over delay (area)', kind: 'area', x: 'delay' },
 		{ name: '12 mean delay over time (line)', kind: 'line', x: 'time', y: 'delay' }
 	];
-	// ?slow=1: a histogram on a slow view of flights, filtered by the same
-	// brush, second on the page so it is on screen. Its every read pays an
+	// ?slow=1: dots on a slow view of flights, filtered by the same brush,
+	// second on the page so it is on screen. Its every read pays an
 	// uncorrelated subquery (~100-200 ms), so it reads on a lane; the others
-	// stay on the main connection. A drag shows whether the fast charts keep
-	// their pace and whether the slow one still updates (the hold's cap).
+	// stay on the main connection. Dots, not a histogram: an aggregate gets a
+	// preagg table on hover and its brush reads stop touching the view (a
+	// histogram here read a 79 ms build, then 8.7 ms per update). A raw-row
+	// read hits the view on every update, which is what checks the hold's
+	// cap: the fast charts keep their pace and the slow one still updates.
 	const slow = page.url.searchParams.get('slow') === '1';
 	if (slow) {
 		charts.splice(1, 0, {
-			name: '1b distance histogram (slow view)',
-			kind: 'hist',
+			name: '1b delay by distance (slow view, dots)',
+			kind: 'dots',
 			x: 'distance',
+			y: 'delay',
 			table: 'slow_flights'
 		});
 	}
@@ -230,7 +234,7 @@
 											/>
 										{:else if chart.kind === 'dots'}
 											<DotsMark
-												table="flights"
+												table={chart.table ?? 'flights'}
 												x={chart.x}
 												y={chart.y}
 												r={1}

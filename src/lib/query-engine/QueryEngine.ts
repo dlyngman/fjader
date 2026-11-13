@@ -1052,28 +1052,30 @@ export class QueryEngine {
 	}
 
 	/**
-	 * Every user table and view, by name: 'fast' for a table in an in-memory
-	 * catalog, 'unknown' otherwise. One cheap query (the system functions,
-	 * not information_schema, a large view that took 30-38 ms per call at
-	 * load), refreshed when a name is missing; concurrent misses (a dozen
-	 * marks mounting) share the refresh in flight.
+	 * Every user table, by name: 'fast' when every catalog holding that name
+	 * is in memory, 'unknown' otherwise. A name not in it (a view, a table
+	 * function) stays unknown, so the views need not be listed: duckdb_views()
+	 * enumerates DuckDB's internal views before any filter and was most of
+	 * the cost (information_schema per table: 30-38 ms at load on WASM;
+	 * tables and views together still 33-41 ms; tables and databases alone
+	 * about a quarter of that, natively). Refreshed when a name is missing;
+	 * concurrent misses (a dozen marks mounting) share the refresh in flight.
 	 */
 	#refreshCatalog(): Promise<Map<string, 'fast' | 'unknown'>> {
 		this.#catalogRefresh ??= this.#queryRaw(
-			`SELECT t.table_name AS name, d.path AS path, true AS is_table FROM duckdb_tables() t ` +
-				`JOIN duckdb_databases() d ON d.database_name = t.database_name WHERE NOT t.internal ` +
-				`UNION ALL SELECT v.view_name, d.path, false FROM duckdb_views() v ` +
-				`JOIN duckdb_databases() d ON d.database_name = v.database_name WHERE NOT v.internal`,
+			`SELECT t.table_name AS name, d.path AS path FROM duckdb_tables() t ` +
+				`JOIN duckdb_databases() d ON d.database_name = t.database_name WHERE NOT t.internal`,
 			{ class: 'interaction' }
 		)
 			.then((rows) => {
 				const catalog = new Map<string, 'fast' | 'unknown'>();
 				for (let i = 0; i < rows.numRows; i++) {
-					const row = rows.get(i) as { name: string; path: string | null; is_table: boolean };
+					const row = rows.get(i) as { name: string; path: string | null };
 					const inMemory = !row.path || row.path === ':memory:';
-					const cost = row.is_table && inMemory ? 'fast' : 'unknown';
 					// A name in two catalogs is fast only if every one is.
-					if (catalog.get(row.name) !== 'unknown') catalog.set(row.name, cost);
+					if (catalog.get(row.name) !== 'unknown') {
+						catalog.set(row.name, inMemory ? 'fast' : 'unknown');
+					}
 				}
 				this.#catalog = catalog;
 				return catalog;

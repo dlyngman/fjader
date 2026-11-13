@@ -388,7 +388,7 @@ describe('QueryEngine source lanes', () => {
 		const ipcOf = conn.queryIPC!;
 		conn.queryIPC = async (sql: string) => {
 			if (sql.includes('duckdb_tables()')) {
-				const t = tableFromArrays({ name: ['flights'], path: [':memory:'], is_table: [true] });
+				const t = tableFromArrays({ name: ['flights'], path: [':memory:'] });
 				return tableToIPC(t, { format: 'stream' })!;
 			}
 			if (sql.startsWith('DESCRIBE')) {
