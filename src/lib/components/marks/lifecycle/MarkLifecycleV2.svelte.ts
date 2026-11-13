@@ -808,6 +808,14 @@ export class MarkLifecycleV2 {
 			});
 		});
 
+		// Off screen, the engine stops re-querying this mark (after its first
+		// result) and queries it once when it is back; see MarkHandle.active.
+		$effect(() => {
+			const handle = this.#handle;
+			const visible = this.#chartContext.visible ?? true;
+			if (handle) untrack(() => handle.setActive(visible));
+		});
+
 		// Push per-mark params and trigger query. Runs immediately after
 		// registration (Svelte flushes effects in creation order), providing
 		// the initial query. On subsequent changes to sort/limit,

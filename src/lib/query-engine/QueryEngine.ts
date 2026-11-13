@@ -217,6 +217,8 @@ interface MarkRegistration {
 	descriptor: QueryDescriptor;
 	handle: MarkHandle;
 	filterGroup: FilterGroup;
+	/** A re-query was skipped while the mark was inactive; run it on activation. */
+	stale: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -892,17 +894,23 @@ export class QueryEngine {
 
 		// Reuse existing handle to preserve arrowTable during re-query
 		const handle = prev?.handle ?? new MarkHandle();
-		const reg: MarkRegistration = { descriptor, handle, filterGroup };
+		const reg: MarkRegistration = { descriptor, handle, filterGroup, stale: false };
 		this.#marks.set(markId, reg);
 		this.#preagg.trackTable(descriptor.baseTable);
 
 		handle._onParamsChange = () => this.#queryMark(markId, reg);
+		handle._onActivate = () => {
+			if (!reg.stale) return;
+			reg.stale = false;
+			this.#queryMark(markId, reg);
+		};
 
 		handle.destroy = () => {
 			this.cancel(markId);
 			this.#preagg.dropMark(markId);
 			this.#marks.delete(markId);
 			handle._onParamsChange = null;
+			handle._onActivate = null;
 		};
 
 		// Re-registration: trigger re-query immediately with updated descriptor.
@@ -982,6 +990,13 @@ export class QueryEngine {
 	 */
 	#queryMark(markId: string, reg: MarkRegistration): void {
 		const { handle } = reg;
+		// Off screen and already holding data: nothing to show for it now. Its
+		// first query still runs (it can feed a domain another chart shares).
+		if (!handle.active && handle.dataVersion > 0) {
+			reg.stale = true;
+			return;
+		}
+		reg.stale = false;
 		const preagg = this.#preagg.sqlFor(markId, reg);
 		const sqlStr = preagg?.sql || this.#baseSQL(markId, reg);
 		if (!sqlStr) return;

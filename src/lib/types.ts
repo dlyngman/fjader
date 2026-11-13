@@ -651,6 +651,11 @@ export interface ChartContext {
 	 * its first resolution). Marks rebuild their lifecycle when it changes.
 	 */
 	readonly scaleGeneration: number;
+	/**
+	 * Whether any of the chart's cells is on screen (with a small margin).
+	 * Marks stop re-querying while it is false; see MarkHandle.active.
+	 */
+	readonly visible: boolean;
 	readonly yScaleState: ScaleStateInstance | null | undefined;
 	readonly scaleTypes: { x: string; y: string } | null | undefined;
 	readonly scalesReady: boolean | undefined;

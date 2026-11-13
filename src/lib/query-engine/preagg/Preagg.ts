@@ -169,6 +169,9 @@ export class Preagg {
 
 		for (const [markId, reg] of this.#host.marks()) {
 			if (reg.filterGroup !== filterGroup) continue;
+			// A mark off screen is not re-queried, so a table for it would only
+			// take the connection from the ones that are.
+			if (!reg.handle.active) continue;
 			// A mark the source never filters gets no table for it, and keeps
 			// the tables it holds for other sources.
 			const route = reg.descriptor.route ?? NO_ROUTE;
@@ -384,6 +387,8 @@ export class Preagg {
 		const reg = this.#host.mark(markId);
 		return (
 			!!reg &&
+			// Gone off screen while the build waited.
+			reg.handle.active &&
 			this.#marks.get(markId)?.building.get(sourceId) === build &&
 			reg.descriptor.parts === build.basis.parts &&
 			this.#binsFitCurrentView(build) &&
