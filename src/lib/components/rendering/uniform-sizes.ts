@@ -18,7 +18,7 @@ const SCALE_PARAM_BYTES = 16;
 
 export const UNIFORM_BYTES = {
 	dotsMarkConstants: 48,
-	rectsMarkConstants: 48,
+	rectsMarkConstants: 64,
 	ruleXMarkConstants: 48,
 	ruleYMarkConstants: 48,
 	linesMarkConstants: 64,

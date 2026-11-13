@@ -364,14 +364,14 @@ function _scaleFunctionName(scaleType: string, axis: string): string {
 
 /**
  * Bytes of immediate data every render pipeline declares: the chart's x and y
- * `ScaleParam`, 16 bytes each. Every layout declares the same size because a
+ * `ScaleParam`, 16 bytes each, and its entrance, a vec4. Every layout declares the same size because a
  * draw requires every declared byte to have been set, and the pass sets them
  * once, before its first draw.
  *
  * Immediates carry state shared across the pass and read by several marks: the
  * chart's scales and settings. 64 bytes are available on M-series Macs.
  */
-export const CHART_SCALE_IMMEDIATE_SIZE = 32;
+export const CHART_SCALE_IMMEDIATE_SIZE = 48;
 
 /**
  * Main template system class
@@ -492,6 +492,7 @@ export class ScaleTemplateSystem {
       // ===== 3. HELPER FUNCTIONS =====
       
       ${this._buildSlotTableHelpers()}
+      ${this._buildEntranceHelpers(scaleTypes)}
       ${this._buildBandActivityHelpers(scaleTypes)}
       ${bandHelpers}
       ${implementations}
@@ -533,6 +534,10 @@ export class ScaleTemplateSystem {
       struct ChartScales {
         x: ScaleParam,
         y: ScaleParam,
+        // The chart's entrance, written per pass from its entrance clock:
+        // x = how far a growing mark has grown, y = a growing mark's opacity,
+        // z = a fading mark's opacity. All 1 once the chart has entered.
+        entrance: vec4<f32>,
       };
       var<immediate> chartScales: ChartScales;
 
@@ -568,6 +573,56 @@ export class ScaleTemplateSystem {
     `;
 
 		return `${structDef}\n${chartScaleDeclaration}`;
+	}
+
+	/**
+	 * The chart's entrance, for marks to apply in the vertex stage.
+	 *
+	 * A mark either GROWS along one axis (bars, histograms and areas, from the
+	 * value 0 on their measure axis) or FADES (everything else). Which one is
+	 * the mark's to say, as `axis`: 0 fades, 1 grows along x, 2 along y. The
+	 * chart's mode is already folded into the immediates, so a chart set to
+	 * fade hands a growing mark g = 1 and its opacity instead.
+	 *
+	 * The base a mark grows from is where 0 sits on screen, clamped to the plot:
+	 * a domain that leaves 0 out grows from the edge, which is where its bars
+	 * visibly start anyway. A log axis has no 0 and grows from its low edge.
+	 * Decided per scale type here, so no shader evaluates log(0).
+	 */
+	_buildEntranceHelpers(scaleTypes: { x: string; y: string }): string {
+		const base = (axis: 'X' | 'Y', type: string) => {
+			const a = axis.toLowerCase();
+			const lo = `frameUniforms.rangeMin.${a}`;
+			const hi = `frameUniforms.rangeMax.${a}`;
+			if (type === 'band' || type === 'point') return '0.0';
+			// Screen y runs downward: the low edge of a y axis is rangeMax.
+			if (type === 'log') return axis === 'X' ? lo : hi;
+			return `clamp(${_scaleFunctionName(type, axis)}From(0.0, chartScale${axis}()), ${lo}, ${hi})`;
+		};
+		return `
+    // ===== ENTRANCE =====
+    fn entranceBaseX() -> f32 {
+      return ${base('X', scaleTypes.x)};
+    }
+    fn entranceBaseY() -> f32 {
+      return ${base('Y', scaleTypes.y)};
+    }
+    // A screen position as it is during the entrance: pulled toward the base
+    // on the growing axis, untouched otherwise.
+    fn entrancePosition(p: vec2<f32>, axis: u32) -> vec2<f32> {
+      let g = chartScales.entrance.x;
+      if (axis == 1u) {
+        return vec2<f32>(mix(entranceBaseX(), p.x, g), p.y);
+      }
+      if (axis == 2u) {
+        return vec2<f32>(p.x, mix(entranceBaseY(), p.y, g));
+      }
+      return p;
+    }
+    fn entranceAlpha(axis: u32) -> f32 {
+      return select(chartScales.entrance.z, chartScales.entrance.y, axis != 0u);
+    }
+    `;
 	}
 
 	/**

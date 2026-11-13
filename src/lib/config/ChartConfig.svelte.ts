@@ -13,7 +13,9 @@
 // on re-registration, preventing infinite loops.
 // =============================================================================
 
+import { untrack } from 'svelte';
 import { SvelteMap } from 'svelte/reactivity';
+import { EntranceGate } from '$lib/animation/EntranceGate';
 import { createOverridable, type Overridable } from './overridable.svelte';
 import type { SelectionResponse } from '$lib/components/rendering/activity-reads';
 import type {
@@ -52,6 +54,7 @@ export interface MarkEntry {
 	selectionResponse?: SelectionResponse;
 	contributeDomain?: boolean;
 	nulls?: NullsResponse;
+	holdsEntrance?: boolean;
 	limit?: number;
 	preferredXScaleType?: string | null;
 	preferredYScaleType?: string | null;
@@ -104,6 +107,12 @@ interface UndoEntry {
 // ---- ChartConfig ----
 
 export class ChartConfig {
+	/**
+	 * Holds the chart's entrance until its marks have their first data. One per
+	 * container, shared by its facet cells, as this config is.
+	 */
+	readonly entrance = new EntranceGate();
+
 	/** Overridable channels per mark, for reset support. */
 	#channels = new Map<string, Map<string, Overridable<unknown>>>();
 
@@ -139,6 +148,17 @@ export class ChartConfig {
 		const existing = this.#entries.get(id);
 		if (existing) return existing;
 
+		// A data mark holds the chart's entrance from the moment it mounts, which
+		// is now: its lifecycle is built later, in an effect that waits for the
+		// chart's scales, and until something holds the gate the chart looks
+		// like one with no data marks and enters on its first drawable layer.
+		if (
+			untrack(() => propGetters.table?.()) &&
+			untrack(() => propGetters.holdsEntrance?.()) !== false
+		) {
+			this.entrance.hold(id);
+		}
+
 		const channels = new Map<string, Overridable<unknown>>();
 		const entry = { id, markType } as MarkEntry;
 
@@ -164,6 +184,8 @@ export class ChartConfig {
 	}
 
 	unregisterMark(id: string): void {
+		// A mark that leaves before its first data must not hold the chart.
+		this.entrance.release(id);
 		this.#entries.delete(id);
 		this.#channels.delete(id);
 	}

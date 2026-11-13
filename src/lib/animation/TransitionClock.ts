@@ -58,6 +58,22 @@ import { Spring } from './Spring';
  */
 export const TRANSITION_STIFFNESS = 240;
 
+/**
+ * Stiffness for an entrance FADE: softer than a transition, since opacity has
+ * no distance to travel and a fast fade reads as a pop. From rest it is a
+ * gentle S-curve: 30% at 100 ms, 64% at 200 ms, 96% by 450 ms.
+ */
+export const ENTRANCE_FADE_STIFFNESS = 120;
+
+/**
+ * Stiffness for an entrance's GROWTH, launched at its own speed (see
+ * `restartEaseOut`): 1 − e^(−ωt), 67% at 100 ms, 89% at 200 ms, 96% by 300 ms.
+ * Slower than a data transition: growing from nothing is the chart's first
+ * statement of magnitude, and at TRANSITION_STIFFNESS it was over before the
+ * eye had settled on it.
+ */
+export const ENTRANCE_GROW_STIFFNESS = 120;
+
 /** Sub-pixel, so rest is declared when the difference stops being visible. */
 export const TRANSITION_PRECISION = 0.0005;
 
@@ -178,6 +194,21 @@ export class TransitionClock {
 			this.#running = true;
 			this.#loop.addAnimatedSource(this);
 		}
+	}
+
+	/**
+	 * Begin from 0 at the spring's own speed, ω, for an ENTRANCE.
+	 *
+	 * From rest a critically damped spring starts slowly: its position grows as
+	 * t² for the first frames, about 18% after 50 ms at the default stiffness.
+	 * Between two states that is the right shape; for something appearing it
+	 * reads as lag. Launched at ω the same spring follows 1 − e^(−ωt) exactly:
+	 * an exponential ease-out, 54% after 50 ms, still never overshooting, and
+	 * settling in the same time.
+	 */
+	restartEaseOut(): void {
+		this.restart();
+		this.#spring.velocity = this.#spring.omega;
 	}
 
 	/**

@@ -199,7 +199,7 @@
       var output: VertexOutput;
       output.position = pixelsToClip(pos);
       output.colorValue = colorValues[rowIdx];
-      output.alpha = config.opacity * selectionDim(
+      output.alpha = config.opacity * entranceAlpha(0u) * selectionDim(
         ${connectedActivityWGSL(ACTIVITY_READS, {
 					color: 'config.colorMode, config.colorScaleIndex, colorValues[rowIdx]',
 					group: 'config.groupIndex'
@@ -283,7 +283,7 @@
     var output: VertexOutput;
     output.position = pixelsToClip(finalPos);
     output.colorValue = colorValues[rowIdx];
-    output.alpha = config.opacity * selectionDim(
+    output.alpha = config.opacity * entranceAlpha(0u) * selectionDim(
       ${connectedActivityWGSL(ACTIVITY_READS, {
 				color: 'config.colorMode, config.colorScaleIndex, colorValues[rowIdx]',
 				group: 'config.groupIndex'

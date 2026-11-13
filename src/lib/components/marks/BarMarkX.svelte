@@ -42,6 +42,7 @@
 		selection = undefined,
 		selectionResponse = undefined,
 		nulls = undefined,
+		holdsEntrance = undefined,
 		contributeDomain = undefined,
 		x,
 		x1: x1Prop,
@@ -86,6 +87,7 @@
 		selection: () => selection,
 		selectionResponse: () => selectionResponse,
 		nulls: () => nulls,
+		holdsEntrance: () => holdsEntrance,
 		contributeDomain: () => contributeDomain,
 		limit: () => limit,
 		padding: () => padding,
@@ -322,6 +324,7 @@
 		facetData={setup?.facetData}
 		dataVersion={setup?.dataVersion || 0}
 		bandAxis={setup?.alignedBand ?? null}
+		grow={hasExplicitBounds ? null : 'x'}
 		inset={entry.inset ?? 0}
 		dx={entry.dx ?? 0}
 		dy={entry.dy ?? 0}

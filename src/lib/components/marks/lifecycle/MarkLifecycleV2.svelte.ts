@@ -18,6 +18,7 @@
  *   Changes trigger re-query for this mark only, no teardown.
  */
 
+import type { EntranceGate } from '$lib/animation/EntranceGate';
 import { untrack } from 'svelte';
 import type { Table } from '@uwdata/flechette';
 import {
@@ -161,6 +162,7 @@ export interface ReactiveConfig {
 	readonly selectionResponse: SelectionResponse | undefined;
 	readonly nulls: NullsResponse | undefined;
 	readonly contributeDomain: boolean | undefined;
+	readonly holdsEntrance: boolean | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -480,6 +482,15 @@ export class MarkLifecycleV2 {
 		this.#chartContext = chartContext;
 		this.#markId = markId;
 		this.#filterGroup = filterGroup;
+
+		// The chart's entrance waits for this mark's first data, unless the
+		// author has said not to (a mark known to be slow). Held by mark id, so
+		// a lifecycle rebuilt for the same mark holds the same hold. Released on
+		// first data, on failure, or when the mark unmounts.
+		this.#entranceGate = chartContext.config?.entrance ?? null;
+		if (config.table && untrack(() => reactiveConfig.holdsEntrance) !== false) {
+			this.#entranceGate?.hold(markId);
+		}
 
 		// Tooltip table name
 		this.#tooltipTableName = `_tt_${this.#markId.replace(/-/g, '_')}`;
@@ -810,7 +821,15 @@ export class MarkLifecycleV2 {
 			untrack(() => {
 				this.#handleDataDomains(dv);
 				this.otherRows.register();
+				// After the domains: the last release opens the gate, and the
+				// scales snap to every mark's extent only until then.
+				this.#releaseEntrance();
 			});
+		});
+
+		// A failed query has nothing to enter with; it must not hold the chart.
+		$effect(() => {
+			if (this.#handle?.error) untrack(() => this.#releaseEntrance());
 		});
 
 		// Tooltip: two effects, so a data update does not take the table away.
@@ -1035,7 +1054,16 @@ export class MarkLifecycleV2 {
 		} catch (error) {
 			if ((error as Error)?.name === 'AbortError') return;
 			console.error(`[MarkLifecycleV2] Setup failed for ${this.#markId}:`, error);
+			this.#releaseEntrance();
 		}
+	}
+
+	/** The chart's entrance gate, or null outside a chart (tests). */
+	#entranceGate: EntranceGate | null = null;
+
+	/** Stop holding the chart's entrance. Idempotent: the gate ignores a second. */
+	#releaseEntrance(): void {
+		this.#entranceGate?.release(this.#markId);
 	}
 
 	// ===========================================================================
@@ -2431,6 +2459,9 @@ export class MarkLifecycleV2 {
 
 	destroy(): void {
 		this.#destroyed = true;
+		// Not releasing the entrance here: a mark rebuilds its lifecycle when
+		// its scales resolve, and the rebuilt one re-holds the same id. The
+		// mark's unmount releases it (ChartConfig.unregisterMark).
 		this.#identityResetOff?.();
 		this.#identityResetOff = null;
 		this.otherRows.unregister();

@@ -49,6 +49,7 @@
 		selection = undefined,
 		selectionResponse = undefined,
 		nulls = undefined,
+		holdsEntrance = undefined,
 		y,
 		x,
 		x1: x1Prop,
@@ -103,6 +104,7 @@
 		selection: () => selection,
 		selectionResponse: () => selectionResponse,
 		nulls: () => nulls,
+		holdsEntrance: () => holdsEntrance,
 		limit: () => limit,
 		preferredXScaleType: () => preferredXScaleType,
 		preferredYScaleType: () => preferredYScaleType,
@@ -386,6 +388,7 @@
 			orientation="horizontal"
 			facetData={setup?.facetData}
 			dataVersion={setup?.dataVersion || 0}
+			grow={!hasExplicitBounds}
 		/>
 		{#if (entry.strokeWidth ?? 0) > 0}
 			<Lines
@@ -406,6 +409,7 @@
 				zIndex={1}
 				facetData={setup?.facetData}
 				dataVersion={setup?.dataVersion || 0}
+				grow={hasExplicitBounds ? null : 'x'}
 			/>
 			{#if showBothBoundaries}
 				<Lines
@@ -426,6 +430,7 @@
 					zIndex={1}
 					facetData={setup?.facetData}
 					dataVersion={setup?.dataVersion || 0}
+					grow={hasExplicitBounds ? null : 'x'}
 				/>
 			{/if}
 		{/if}

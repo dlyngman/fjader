@@ -40,7 +40,8 @@
 		ACTIVITY_COLOR_MODE: 44, // u32
 		ACTIVITY_COLOR_SCALE_INDEX: 48, // u32
 		ACTIVITY_SERIES_MODE: 52, // u32
-		ACTIVITY_SERIES_SCALE_INDEX: 56 // u32
+		ACTIVITY_SERIES_SCALE_INDEX: 56, // u32
+		ENTRANCE_AXIS: 60 // u32 (0 fades, 1 grows along x, 2 along y)
 	};
 
 	interface Props {
@@ -77,6 +78,11 @@
 		dotsRung?: import('$lib/lod/DotsRung.svelte').DotsRung | null;
 		globalAlpha?: number;
 		markId?: string;
+		/**
+		 * The axis this line grows along when its chart enters, or null to fade
+		 * in. A line mark fades; an area's outline grows with its fill.
+		 */
+		grow?: 'x' | 'y' | null;
 	}
 
 	let {
@@ -101,7 +107,8 @@
 		m4Decimator = null,
 		dotsRung = null,
 		globalAlpha = 1.0,
-		markId = ''
+		markId = '',
+		grow = null
 	}: Props = $props();
 
 	const chartContext = getContext<ChartContext>('chart');
@@ -179,9 +186,15 @@
     // The series scale it is also read through, for a z of its own; mode 0
     // reads nothing.
     activitySeriesMode: u32,
-    activitySeriesScaleIndex: u32
+    activitySeriesScaleIndex: u32,
+    entranceAxis: u32 // 0 fades in, 1 grows along x, 2 along y
   };
   @group(1) @binding(4) var<uniform> markConstants: MarkConstants;
+
+  // A point projected to pixels as it is during the chart's entrance.
+  fn enterPx(p: vec2<f32>) -> vec2<f32> {
+    return entrancePosition(projectToPixels(p), markConstants.entranceAxis);
+  }
 
   struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -226,7 +239,7 @@
         output.position = DISCARD_POS;
         return output;
       }
-      let center = projectToPixels(vec2<f32>(x, y));
+      let center = enterPx(vec2<f32>(x, y));
 
       // JS computes dotRadius via DotsRung. 0 = no dots. >0 = show at this size.
       let circleR = select(halfWidth, markConstants.dotRadius * frameUniforms.devicePixelRatio,
@@ -236,7 +249,7 @@
       var output: VertexOutput;
       output.position = pixelsToClip(pos);
       output.colorValue = colorValues[instanceIdx];
-      output.alpha = markConstants.globalAlpha * selectionDim(
+      output.alpha = markConstants.globalAlpha * entranceAlpha(markConstants.entranceAxis) * selectionDim(
         ${connectedActivityWGSL(ACTIVITY_READS, {
 					color:
 						'markConstants.activityColorMode, markConstants.activityColorScaleIndex, colorValues[instanceIdx]',
@@ -275,8 +288,8 @@
     }
 
     // Project segment endpoints to pixel space
-    let pCurr = projectToPixels(vec2<f32>(xCurr, yCurr));
-    let pNext = projectToPixels(vec2<f32>(xNext, yNext));
+    let pCurr = enterPx(vec2<f32>(xCurr, yCurr));
+    let pNext = enterPx(vec2<f32>(xNext, yNext));
 
     // Adaptive sub-segment resolution: more segments for longer pixel spans.
     // Fixed-resolution curves (linear, step) have CURVE_RESOLUTION <= 3;
@@ -303,8 +316,8 @@
       nextIdx + 1u >= pointCount || seriesValues[nextIdx + 1u] != seriesNext);
 
     // Project neighbor control points
-    let pPrev = projectToPixels(vec2<f32>(xValues[prevIdx], yValues[prevIdx]));
-    let pAfter = projectToPixels(vec2<f32>(xValues[afterIdx], yValues[afterIdx]));
+    let pPrev = enterPx(vec2<f32>(xValues[prevIdx], yValues[prevIdx]));
+    let pAfter = enterPx(vec2<f32>(xValues[afterIdx], yValues[afterIdx]));
 
     // Compute t values from effective resolution (not geometry buffer)
     let subSegSize = 1.0 / f32(effectiveRes);
@@ -339,7 +352,7 @@
     var output: VertexOutput;
     output.position = pixelsToClip(finalPos);
     output.colorValue = colorValues[currIdx];
-    output.alpha = markConstants.globalAlpha * selectionDim(
+    output.alpha = markConstants.globalAlpha * entranceAlpha(markConstants.entranceAxis) * selectionDim(
       ${connectedActivityWGSL(ACTIVITY_READS, {
 				color:
 					'markConstants.activityColorMode, markConstants.activityColorScaleIndex, colorValues[currIdx]',
@@ -464,6 +477,7 @@
 			view.setUint32(UNIFORM_OFFSETS.ACTIVITY_COLOR_SCALE_INDEX, activityScale, LE);
 			view.setUint32(UNIFORM_OFFSETS.ACTIVITY_SERIES_MODE, activitySeriesMode, LE);
 			view.setUint32(UNIFORM_OFFSETS.ACTIVITY_SERIES_SCALE_INDEX, activitySeriesScaleIndex, LE);
+			view.setUint32(UNIFORM_OFFSETS.ENTRANCE_AXIS, grow === 'x' ? 1 : grow === 'y' ? 2 : 0, LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 0, constantColor[0], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 4, constantColor[1], LE);
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 8, constantColor[2], LE);

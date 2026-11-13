@@ -28,6 +28,7 @@ export function buildReactiveConfig(
 			| 'selectionResponse'
 			| 'nulls'
 			| 'contributeDomain'
+			| 'holdsEntrance'
 		>
 	>,
 	opts?: {
@@ -40,6 +41,9 @@ export function buildReactiveConfig(
 		},
 		get limit() {
 			return entry.limit;
+		},
+		get holdsEntrance() {
+			return entry.holdsEntrance;
 		},
 		get domain() {
 			return entry.domain ?? null;
