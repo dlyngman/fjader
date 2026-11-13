@@ -23,7 +23,11 @@
  * SLICE LENGTH is the database's `queryPollingInterval`, set when it is opened
  * (`initDuckDB` uses 5 ms). At the default, ~100 ms, a quick statement on
  * another connection can wait ~50 ms for a slice to end. It cannot be read
- * back, so the lane measures it and warns once per page when slices run long.
+ * back. When the opener knows it (`connectionFrom`'s `pollingIntervalMs`),
+ * the lane trusts that; otherwise it measures, and warns once per page when
+ * the MEDIAN slice over its first sliced statements runs long. A median, not
+ * one reading: each poll waits for a main-thread turn, and during load a busy
+ * main thread stretches round trips past the threshold with short slices.
  */
 
 /** The DuckDB-WASM bindings a lane drives; `AsyncDuckDB` has them. */
@@ -46,7 +50,12 @@ export interface SlicedLane {
 	 * first, the cost signal (0 or 1: a quick read).
 	 */
 	query(sql: string, signal?: AbortSignal): Promise<{ ipc: Uint8Array[]; polls: number }>;
-	/** Run a statement sliced, discarding any result. */
+	/**
+	 * Run a statement sliced, discarding any result. The result is left
+	 * pending on the connection, unfetched, until the next statement resets
+	 * it (as after an abort past the header): the connection is NOT idle
+	 * between statements, so never send a `runQuery` on it from outside.
+	 */
 	exec(sql: string, signal?: AbortSignal): Promise<{ polls: number }>;
 	/**
 	 * Reject what is queued (AbortError), cancel what runs, then close the
@@ -55,10 +64,12 @@ export interface SlicedLane {
 	close(): Promise<void>;
 }
 
-/** Slices longer than this, measured, warn once: the polling interval is long. */
+/** Slices longer than this warn once: the polling interval is long. */
 const SLOW_SLICE_MS = 25;
-/** Enough polls to measure a slice. */
+/** Enough polls in one statement to measure its slices. */
 const MEASURE_POLLS = 3;
+/** Statements measured before judging: the median of these. */
+const MEASURE_STATEMENTS = 5;
 let warnedSlowSlices = false;
 
 function abortError(): DOMException {
@@ -84,11 +95,24 @@ export class PendingQueryLane implements SlicedLane {
 	#running: Job | null = null;
 	#runningDone: Promise<void> | null = null;
 	#closed = false;
+	/** Per-statement slice lengths, until judged; null when not measuring. */
+	#slices: number[] | null = [];
 
-	constructor(bindings: PendingQueryBindings, conn: number, closeConnection: () => Promise<void>) {
+	constructor(
+		bindings: PendingQueryBindings,
+		conn: number,
+		closeConnection: () => Promise<void>,
+		/** The database's polling interval, when the opener knows it. */
+		options: { pollingIntervalMs?: number } = {}
+	) {
 		this.#bindings = bindings;
 		this.#conn = conn;
 		this.#closeConnection = closeConnection;
+		const known = options.pollingIntervalMs;
+		if (known != null) {
+			this.#slices = null;
+			if (known > SLOW_SLICE_MS) warnSlowSlices(known);
+		}
 	}
 
 	query(sql: string, signal?: AbortSignal): Promise<{ ipc: Uint8Array[]; polls: number }> {
@@ -218,15 +242,25 @@ export class PendingQueryLane implements SlicedLane {
 	}
 
 	#noteSlices(polls: number, ms: number): void {
-		if (warnedSlowSlices || polls < MEASURE_POLLS) return;
-		if (ms / polls <= SLOW_SLICE_MS) return;
-		warnedSlowSlices = true;
-		console.warn(
-			`[Fjader] DuckDB runs sliced statements in ~${Math.round(ms / polls)} ms slices, so a ` +
-				'quick query can wait that long behind a slow one. Open the database with ' +
-				'db.open({ query: { queryPollingInterval: 5 } }) (initDuckDB does).'
-		);
+		const slices = this.#slices;
+		if (!slices || polls < MEASURE_POLLS) return;
+		slices.push(ms / polls);
+		if (slices.length < MEASURE_STATEMENTS) return;
+		this.#slices = null;
+		const median = [...slices].sort((x, y) => x - y)[slices.length >> 1];
+		if (median > SLOW_SLICE_MS) warnSlowSlices(median);
 	}
+}
+
+function warnSlowSlices(ms: number): void {
+	if (warnedSlowSlices) return;
+	warnedSlowSlices = true;
+	console.warn(
+		`[Fjader] DuckDB runs sliced statements in ~${Math.round(ms)} ms slices, so a quick ` +
+			'query can wait that long behind a slow one. Open the database with ' +
+			'db.open({ query: { queryPollingInterval: 5 } }) and pass ' +
+			'connectionFrom(conn, { pollingIntervalMs: 5 }) (initDuckDB does both).'
+	);
 }
 
 /** For tests: the once-per-page slice warning, rearmed. */

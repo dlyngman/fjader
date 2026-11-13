@@ -319,7 +319,9 @@
 	let lane: SlicedLane | null = null;
 	const fjaderLane = () =>
 		exp(async () => {
-			const fj = connectionFrom(a);
+			const fj = connectionFrom(a, {
+				pollingIntervalMs: pollInterval === 'default' ? undefined : Number(pollInterval)
+			});
 			lane ??= await fj.openSlicedLane!();
 			let t0 = now();
 			const slow = lane.query(SLOW).then((r) => ({ t: now() - t0, polls: r.polls }));

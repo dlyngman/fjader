@@ -47,14 +47,19 @@ export interface InitDuckDBOptions {
  *   await db.instantiate(…);
  *   await db.open({ query: { queryPollingInterval: 5 } }); // short slices, see below
  *   await db.registerFileBuffer('cached.parquet', bytes);
- *   initFjader(connectionFrom(await db.connect()));
+ *   initFjader(connectionFrom(await db.connect(), { pollingIntervalMs: 5 }));
  *
  * Sliced statements run in slices of the database's `queryPollingInterval`.
  * At DuckDB's default (~100 ms) a quick query can wait ~50 ms behind a slow
  * one; open the database with ~5 ms, as `initDuckDB` does. It is a setting of
- * the database, which this function cannot change.
+ * the database, which this function cannot change or read: say what you set
+ * as `pollingIntervalMs`. Without it, lanes measure their slices and warn if
+ * they run long.
  */
-export function connectionFrom(conn: AsyncDuckDBConnection): DuckDBConnection {
+export function connectionFrom(
+	conn: AsyncDuckDBConnection,
+	options: { pollingIntervalMs?: number } = {}
+): DuckDBConnection {
 	// useUnsafe + bindings.runQuery bypasses Arrow JS deserialization entirely,
 	// returning raw IPC bytes that flechette decodes into zero-copy typed arrays.
 	return {
@@ -81,7 +86,10 @@ export function connectionFrom(conn: AsyncDuckDBConnection): DuckDBConnection {
 			// pending query.
 			const lane = await conn.bindings.connect();
 			return lane.useUnsafe(
-				(bindings, connId) => new PendingQueryLane(bindings, connId, () => lane.close())
+				(bindings, connId) =>
+					new PendingQueryLane(bindings, connId, () => lane.close(), {
+						pollingIntervalMs: options.pollingIntervalMs
+					})
 			);
 		}
 	};
@@ -129,5 +137,5 @@ async function doInit({ bundles }: InitDuckDBOptions): Promise<DuckDBConnection>
 	// config's other fields decide how big integers, decimals, timestamps and
 	// durations come back, and stay at their defaults.
 	await db.open({ query: { queryPollingInterval: QUERY_POLLING_INTERVAL_MS } });
-	return connectionFrom(await db.connect());
+	return connectionFrom(await db.connect(), { pollingIntervalMs: QUERY_POLLING_INTERVAL_MS });
 }

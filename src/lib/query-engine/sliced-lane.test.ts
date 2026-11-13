@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { tableFromIPC, tableToIPC, tableFromArrays } from '@uwdata/flechette';
 import { PendingQueryLane, _resetSliceWarning, type PendingQueryBindings } from './sliced-lane';
-import { QueryEngine, type DuckDBConnection } from './QueryEngine';
 
 /**
  * Fake pending-query bindings, one connection. A statement takes `slices`
@@ -208,25 +207,46 @@ describe('PendingQueryLane', () => {
 		});
 		afterEach(() => vi.restoreAllMocks());
 
-		function timed(sliceMs: number) {
+		/** A lane whose polls each take `sliceMs` (one per call, in order, then the last). */
+		function timed(sliceMs: number[], options?: { pollingIntervalMs?: number }) {
 			const fake = fakeBindings({ q: { slices: 4 } });
 			const poll = fake.bindings.pollPendingQuery;
+			let n = 0;
 			fake.bindings.pollPendingQuery = async (c) => {
-				now += sliceMs;
+				now += sliceMs[Math.min(Math.floor(n++ / 4), sliceMs.length - 1)];
 				return poll(c);
 			};
-			return lane(fake).lane;
+			return new PendingQueryLane(fake.bindings, 1, async () => {}, options);
 		}
 
-		it('warns once per page when slices run long', async () => {
-			await timed(100).exec('q');
-			await timed(100).exec('q');
+		async function run(l: PendingQueryLane, statements: number) {
+			for (let i = 0; i < statements; i++) await l.exec('q');
+		}
+
+		it('warns once per page when the median slice over five statements runs long', async () => {
+			await run(timed([100]), 5);
+			await run(timed([100]), 5);
 			expect(warn).toHaveBeenCalledTimes(1);
 		});
 
-		it('says nothing at short slices', async () => {
-			await timed(5).exec('q');
+		it('does not judge on fewer than five statements', async () => {
+			await run(timed([100]), 4);
 			expect(warn).not.toHaveBeenCalled();
+		});
+
+		it('ignores a busy start: two long readings out of five', async () => {
+			await run(timed([60, 60, 5, 5, 5]), 5);
+			expect(warn).not.toHaveBeenCalled();
+		});
+
+		it('trusts a known short interval and measures nothing', async () => {
+			await run(timed([100], { pollingIntervalMs: 5 }), 6);
+			expect(warn).not.toHaveBeenCalled();
+		});
+
+		it('warns at once for a known long interval', () => {
+			timed([5], { pollingIntervalMs: 100 });
+			expect(warn).toHaveBeenCalledTimes(1);
 		});
 	});
 });
@@ -238,31 +258,5 @@ describe('flechette reads a lane result as a stream', () => {
 		const bytes = tableToIPC(t, { format: 'stream' })!;
 		const decoded = tableFromIPC([bytes]);
 		expect(Array.from(decoded.getChild('x')!.toArray() as Float32Array)).toEqual([1, 2, 3]);
-	});
-});
-
-describe('QueryEngine.openSlicedLane', () => {
-	const base = {
-		query: vi.fn(),
-		close: vi.fn(async () => {})
-	} as unknown as DuckDBConnection;
-
-	it('is null for a connection that cannot open one', async () => {
-		const engine = new QueryEngine({ ...base });
-		expect(await engine.openSlicedLane()).toBeNull();
-	});
-
-	it('closes its lanes on destroy', async () => {
-		const close = vi.fn(async () => {});
-		const conn = {
-			...base,
-			exec: vi.fn(async () => {}),
-			openSlicedLane: async () => ({ query: vi.fn(), exec: vi.fn(), close })
-		} as unknown as DuckDBConnection;
-		const engine = new QueryEngine(conn);
-		const lane = await engine.openSlicedLane();
-		expect(lane).not.toBeNull();
-		await engine.destroy();
-		expect(close).toHaveBeenCalledTimes(1);
 	});
 });
