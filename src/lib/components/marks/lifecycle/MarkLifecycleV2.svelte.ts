@@ -2558,13 +2558,9 @@ export class MarkLifecycleV2 {
 	}
 
 	/**
-	 * Called after tooltip table is written. If fitDomain is active, issue a
-	 * sidecar MIN/MAX query against the fresh tooltip table.
-	 */
-	/**
 	 * A tooltip table was written. A fit over a mark with JS transforms reads that
 	 * table (#buildFitDomainQuery), so its refit after a data change waits for
-	 * the write; every other fit refits from the data itself (#refitAfterData).
+	 * the write; every other fit refits from the data itself (#refitFromData).
 	 */
 	#onTooltipTableWritten(): void {
 		if (this.#transformCompiler.hasJSTransforms()) this.#refitFromData();
