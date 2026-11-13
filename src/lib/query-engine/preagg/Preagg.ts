@@ -60,10 +60,15 @@ export interface PreaggMark {
 
 /** What Preagg needs from the engine. */
 export interface PreaggHost {
-	exec(sql: string): Promise<void>;
+	exec(sql: string, signal?: AbortSignal): Promise<void>;
 	query(sql: string, opts: { cache: boolean }): Promise<Table>;
 	/** Whether a mark query is running or waiting. */
 	busy(): boolean;
+	/**
+	 * Whether background statements run sliced on their own connection (a
+	 * lane), where a build no longer holds up interaction.
+	 */
+	sliced(): boolean;
 	identity: PreaggIdentity;
 	/** The mark's current registration, which a re-setup replaces. */
 	mark(markId: string): PreaggMark | undefined;
@@ -108,8 +113,14 @@ export class Preagg {
 		this.#host = host;
 		this.#builds = new BuildQueue(
 			{
-				exec: (sql) => host.exec(sql),
-				busy: () => host.busy(),
+				exec: (sql, signal) => host.exec(sql, signal),
+				// Builds wait for interaction only on a shared connection. On a lane
+				// they run at once, and interaction still comes first on its own:
+				// each slice of a build is a poll, a message at the back of the
+				// worker's queue, so mark queries already waiting there are served
+				// before the next slice. A brush query waits at most one slice
+				// (~5 ms) behind a build instead of the whole build.
+				busy: () => !host.sliced() && host.busy(),
 				stillWanted: (item) => this.#stillWanted(item),
 				dropped: ({ markId, sourceId, build }) => {
 					const own = this.#marks.get(markId);
@@ -122,7 +133,9 @@ export class Preagg {
 					own.tables.set(sourceId, build);
 				},
 				failed: ({ markId, sourceId, build }, e) => {
-					console.warn(`[QueryEngine] preagg failed for ${markId}:`, e);
+					if (!(e instanceof DOMException && e.name === 'AbortError')) {
+						console.warn(`[QueryEngine] preagg failed for ${markId}:`, e);
+					}
 					const own = this.#marks.get(markId);
 					if (own?.building.get(sourceId) === build) own.building.delete(sourceId);
 				}
@@ -140,6 +153,8 @@ export class Preagg {
 	 *  tables — hash-named tables are reused via CREATE TABLE IF NOT EXISTS. */
 	dropMark(markId: string): void {
 		this.#marks.delete(markId);
+		// Its running build is no longer wanted: cancelled, it rolls back.
+		this.#builds.abortRunning((item) => item.markId === markId);
 	}
 
 	/**
@@ -316,6 +331,11 @@ export class Preagg {
 	 * A data reload: drop every queued build, every mark's tables and the tables
 	 * themselves (CREATE TABLE IF NOT EXISTS would otherwise keep serving
 	 * pre-reload aggregates), and the row counts.
+	 *
+	 * The running build is cancelled too (`clear`). On a lane it runs beside the
+	 * reload, reading the old rows through its snapshot; should it finish anyway
+	 * (the cancel lost the race), `built` finds its mark gone from `#marks` and
+	 * does not register it, and the DROP below follows it on the same lane.
 	 */
 	reset(): void {
 		this.#builds.clear();
@@ -330,8 +350,8 @@ export class Preagg {
 	/**
 	 * The engine is going: settle waiting activations and drop this session's
 	 * tables. Resolves once the drops have run; call it while the engine can
-	 * still exec. A build already running is ahead of the drops on the one
-	 * connection, so its table is dropped too.
+	 * still exec. A build already running is cancelled, and is ahead of the
+	 * drops on its connection either way, so its table is dropped too.
 	 */
 	async destroy(): Promise<void> {
 		this.#destroyed = true;

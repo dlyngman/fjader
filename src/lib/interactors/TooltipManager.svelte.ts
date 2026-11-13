@@ -283,7 +283,12 @@ export class TooltipManager {
 						// lookup but the first and last when a chart has three or more
 						// marks. Not cached: the tooltip table is rewritten on each data
 						// change while a lookup's SQL can stay the same.
-						.query(sql, { callerId: `tooltip:${markId}`, cache: false })
+						.query(sql, {
+							callerId: `tooltip:${markId}`,
+							cache: false,
+							// The tooltip table is TEMP, on the main connection.
+							connectionLocal: true
+						})
 						.then((result) => {
 							const rows = Array.from(result) as DataRow[];
 							return rows.length > 0 ? { markId, config, rows } : null;

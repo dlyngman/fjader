@@ -2302,7 +2302,7 @@ export class MarkLifecycleV2 {
 				// One statement: a hover query never finds the table missing.
 				await this.#queryEngine.exec(
 					`CREATE OR REPLACE TEMP TABLE "${tableName}" AS SELECT *${replaceClause} FROM (${withoutMembers})${orderClause}`,
-					{ class: cls }
+					{ class: cls, connectionLocal: true }
 				);
 			} else {
 				// Path B: Serialize transformed data via SQL VALUES.
@@ -2346,7 +2346,7 @@ export class MarkLifecycleV2 {
 						`CREATE TEMP TABLE "${tableName}" (${schemaDef})`,
 						`INSERT INTO "${tableName}" VALUES ${valueRows.join(', ')}`
 					],
-					{ class: cls }
+					{ class: cls, connectionLocal: true }
 				);
 			}
 
@@ -2466,7 +2466,10 @@ export class MarkLifecycleV2 {
 			.join(' AND ');
 		const updateStmt = `UPDATE ${ident(tableName)} SET ${setClauses} FROM (${sidecarQuery.toString()}) _s WHERE ${joinCondition}`;
 
-		await this.#queryEngine.exec([...alterStmts, updateStmt], { class: cls });
+		await this.#queryEngine.exec([...alterStmts, updateStmt], {
+			class: cls,
+			connectionLocal: true
+		});
 	}
 
 	// ===========================================================================
@@ -2527,7 +2530,9 @@ export class MarkLifecycleV2 {
 
 			const result = await this.#queryEngine.query(q.toString(), {
 				callerId: `${this.#markId}:fitDomain`,
-				cache: false
+				cache: false,
+				// With JS transforms the fit reads the TEMP tooltip table.
+				connectionLocal: this.#transformCompiler.hasJSTransforms()
 			});
 			if (seq !== this.#fitDomainQuerySequence) return;
 
@@ -2730,7 +2735,12 @@ export class MarkLifecycleV2 {
 		if (!this.#tooltipTableWritten) return;
 		this.#tooltipTableWritten = false;
 		this.#queryEngine
-			.exec(`DROP TABLE IF EXISTS "${this.#tooltipTableName}"`, { class: 'background' })
+			.exec(`DROP TABLE IF EXISTS "${this.#tooltipTableName}"`, {
+				class: 'background',
+				// A TEMP table on the main connection, written and dropped only
+				// there, so a drop cannot overtake the next lifecycle's write.
+				connectionLocal: true
+			})
 			.catch(() => {});
 	}
 }

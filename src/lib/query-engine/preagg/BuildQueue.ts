@@ -32,7 +32,7 @@ export interface QueuedBuild {
 
 /** What the queue needs from its owner. */
 export interface BuildQueueHost {
-	exec(sql: string): Promise<void>;
+	exec(sql: string, signal: AbortSignal): Promise<void>;
 	/**
 	 * Whether an interaction statement is on the connection, or a mark query is
 	 * waiting to be sent. Background statements (other builds, tooltip writes)
@@ -56,6 +56,8 @@ export class BuildQueue {
 	/** Waiting builds, oldest first. */
 	#queue: QueuedBuild[] = [];
 	#running = false;
+	/** The build being sent, and how to cancel it. */
+	#current: { item: QueuedBuild; abort: AbortController } | null = null;
 	#destroyed = false;
 	/** Pumps the queue when the oldest build's wait runs out, if no query does first. */
 	#waitTimer: ReturnType<typeof setTimeout> | null = null;
@@ -136,12 +138,23 @@ export class BuildQueue {
 			}
 
 			this.#running = true;
+			const abort = new AbortController();
+			this.#current = { item, abort };
 			this.#host
-				.exec(item.createSQL)
-				.then(() => this.#host.built(item))
-				.catch((e) => this.#host.failed(item, e))
+				.exec(item.createSQL, abort.signal)
+				.then(() => {
+					// Cancelled but finished anyway (the cancel lost the race): the
+					// caller gave it up, so it does not land.
+					if (abort.signal.aborted) this.#host.dropped(item);
+					else this.#host.built(item);
+				})
+				.catch((e) => {
+					if (abort.signal.aborted) this.#host.dropped(item);
+					else this.#host.failed(item, e);
+				})
 				.finally(() => {
 					this.#running = false;
+					this.#current = null;
 					item.done();
 					this.pump();
 				});
@@ -149,15 +162,27 @@ export class BuildQueue {
 		}
 	}
 
-	/** Drop every queued build (a data reload); a running build still finishes. */
+	/**
+	 * Cancel the running build if `unwanted` says so. On a lane it is
+	 * interrupted and rolls back (no table); on a shared connection it cannot
+	 * be, and finishes, but is not registered.
+	 */
+	abortRunning(unwanted: (item: QueuedBuild) => boolean): void {
+		const current = this.#current;
+		if (current && unwanted(current.item)) current.abort.abort();
+	}
+
+	/** Drop every queued build and cancel the running one (a data reload). */
 	clear(): void {
 		for (const item of this.#queue) this.#drop(item);
 		this.#queue = [];
+		this.abortRunning(() => true);
 	}
 
 	/** Stop for good: settle every waiting activation and send nothing more. */
 	destroy(): void {
 		this.#destroyed = true;
+		this.abortRunning(() => true);
 		if (this.#waitTimer) clearTimeout(this.#waitTimer);
 		this.#waitTimer = null;
 		for (const item of this.#queue) item.done();

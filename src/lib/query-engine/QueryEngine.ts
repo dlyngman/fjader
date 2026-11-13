@@ -65,8 +65,32 @@ export interface QueryOpts {
 	 * The key includes the dims' version (see #cacheKey).
 	 */
 	cache?: boolean;
-	/** Who is waiting for it; see StatementClass. Default 'interaction'. */
+	/**
+	 * Who is waiting for it; see StatementClass. Default 'interaction'.
+	 *
+	 * `'background'` runs on another connection when the engine has one (a
+	 * sliced lane on DuckDB-WASM), so a TEMP table created with `exec` on the
+	 * main connection is invisible there and the query fails: pass
+	 * `connectionLocal: true` for statements on connection-local state.
+	 */
 	class?: StatementClass;
+	/** Reads or writes connection-local state; see StatementPlacement. */
+	connectionLocal?: boolean;
+}
+
+/**
+ * Where a statement may run, beside who waits for it.
+ *
+ * `connectionLocal`: it reads or writes state that belongs to one connection
+ * (a TEMP table, a session setting), so it stays on the main connection
+ * whatever its class. fjader's tooltip tables are TEMP: their writes, drops,
+ * hover lookups and the fits that read them pass it. Each table is written
+ * through one connection only, so statements on it keep their order. A
+ * backend with one connection, or truly shared state, can ignore it.
+ */
+export interface StatementPlacement {
+	class: StatementClass;
+	connectionLocal?: boolean;
 }
 
 /**
@@ -77,8 +101,10 @@ export interface QueryOpts {
  * - `'interaction'`: someone is looking at the result or about to: mark data,
  *   hover lookups, a mark's setup (domains, dims). The default.
  * - `'background'`: nobody waits for it directly: preagg builds, tooltip-table
- *   writes, cleanup. Preagg builds yield to interaction statements, not to each
- *   other's background work.
+ *   writes, cleanup. On DuckDB-WASM it runs on a sliced lane (another
+ *   connection, see SlicedLane) unless `connectionLocal`, so a slow build no
+ *   longer holds up interaction. Without a lane, preagg builds yield to
+ *   interaction statements, not to each other's background work.
  */
 export type StatementClass = 'interaction' | 'background';
 
@@ -88,6 +114,8 @@ export interface StatementRecord {
 	/** How it was sent: a query returning rows, a statement, a DESCRIBE, an Arrow insert. */
 	kind: 'query' | 'exec' | 'describe' | 'insert';
 	class: StatementClass;
+	/** Which connection ran it: the main one, or the sliced lane. */
+	connection: 'main' | 'lane';
 	/** performance.now() when handed to the connection, and when it settled. */
 	start: number;
 	end: number;
@@ -253,7 +281,7 @@ export class QueryEngine {
 			resolve: (t: Table) => void;
 			reject: (e: Error) => void;
 			cache: boolean;
-			class: StatementClass;
+			place: StatementPlacement;
 		}
 	>();
 	/** Interaction statements handed to the connection and not yet settled (see #send). */
@@ -310,11 +338,12 @@ export class QueryEngine {
 	) {
 		this.#preagg = new Preagg(
 			{
-				exec: (sql) => this.exec(sql, { class: 'background' }),
+				exec: (sql, signal) => this.exec(sql, { class: 'background', signal }),
 				query: (sql, opts) => this.query(sql, { class: 'background', ...opts }),
-				// Builds yield to interaction: a statement someone waits for is on
-				// the connection, or a mark query is waiting to be sent.
+				// A statement someone waits for is on the connection, or a mark
+				// query is waiting to be sent.
 				busy: () => this.#interactionInFlight > 0 || this.#pending.size > 0,
+				sliced: () => this.#slicedReady(),
 				identity: this.#identity,
 				mark: (markId) => this.#marks.get(markId),
 				marks: () => this.#marks
@@ -501,17 +530,26 @@ export class QueryEngine {
 	async #send<T>(
 		kind: StatementRecord['kind'],
 		sql: string,
-		cls: StatementClass,
-		run: (conn: DuckDBConnection) => Promise<T>
+		place: StatementPlacement,
+		run: (conn: DuckDBConnection) => Promise<T>,
+		/** How to run it on a sliced lane; absent: main connection only. */
+		runSliced?: (lane: SlicedLane) => Promise<T>,
+		signal?: AbortSignal
 	): Promise<T> {
 		if (!this.#conn) await this.#ensureConnection();
+		const cls = place.class;
+		const lane =
+			cls === 'background' && !place.connectionLocal && runSliced ? await this.#lane() : null;
+		// The main connection cannot interrupt a statement once sent: a signal
+		// only stops one that has not gone yet. A lane cancels (SlicedLane).
+		if (!lane && signal?.aborted) throw new DOMException('Statement aborted', 'AbortError');
 		const conn = this.#conn!;
 		const interaction = cls === 'interaction';
 		if (interaction) this.#interactionInFlight++;
 		const start = performance.now();
 		let error: unknown;
 		try {
-			return await run(conn);
+			return lane ? await runSliced!(lane) : await run(conn);
 		} catch (e) {
 			error = e;
 			throw e;
@@ -521,6 +559,7 @@ export class QueryEngine {
 					sql,
 					kind,
 					class: cls,
+					connection: lane ? 'lane' : 'main',
 					start,
 					end: performance.now(),
 					error
@@ -547,14 +586,60 @@ export class QueryEngine {
 	 */
 	#queryRaw(
 		sql: string,
-		cls: StatementClass,
-		kind: StatementRecord['kind'] = 'query'
+		place: StatementPlacement,
+		kind: StatementRecord['kind'] = 'query',
+		signal?: AbortSignal
 	): Promise<Table> {
-		return this.#send(kind, sql, cls, async (conn) => {
-			if (conn.queryIPC) return tableFromIPC(await conn.queryIPC(sql));
-			return conn.query(sql);
-		});
+		return this.#send(
+			kind,
+			sql,
+			place,
+			async (conn) => {
+				if (conn.queryIPC) return tableFromIPC(await conn.queryIPC(sql));
+				return conn.query(sql);
+			},
+			async (lane) => tableFromIPC((await lane.query(sql, signal)).ipc),
+			signal
+		);
 	}
+
+	/**
+	 * The sliced lane background statements run on, opened on first use; null
+	 * when the connection has none (a custom one) or it failed to open, and
+	 * then everything stays on the main connection.
+	 */
+	#lane(): Promise<SlicedLane | null> {
+		if (this.#lanePromise) return this.#lanePromise;
+		const conn = this.#conn;
+		if (!conn?.openSlicedLane || this.#destroyed) return Promise.resolve(null);
+		this.#lanePromise = conn.openSlicedLane().then(
+			(lane) => {
+				this.#laneReady = true;
+				return lane;
+			},
+			(e) => {
+				console.warn(
+					'[QueryEngine] could not open a sliced lane; background stays on the main connection:',
+					e
+				);
+				return null;
+			}
+		);
+		return this.#lanePromise;
+	}
+
+	/**
+	 * Whether background statements run sliced, on their own connection, so
+	 * they no longer hold up interaction. Asks for the lane, so the first ask
+	 * opens it; false until it is open.
+	 */
+	#slicedReady(): boolean {
+		if (!this.#laneReady) void this.#lane();
+		return this.#laneReady;
+	}
+
+	#lanePromise: Promise<SlicedLane | null> | null = null;
+	#laneReady = false;
 
 	/**
 	 * Listen to every statement sent to the connection, as it settles. For
@@ -592,7 +677,10 @@ export class QueryEngine {
 		if (!this.#conn) await this.#ensureConnection();
 
 		const sqlStr = typeof sql === 'string' ? sql : sql.toString();
-		const cls = opts?.class ?? 'interaction';
+		const place: StatementPlacement = {
+			class: opts?.class ?? 'interaction',
+			connectionLocal: opts?.connectionLocal
+		};
 
 		// Cache check: return cached result immediately, bypassing
 		// inflight/pending bookkeeping entirely.
@@ -625,12 +713,12 @@ export class QueryEngine {
 						resolve,
 						reject,
 						cache: useCache,
-						class: cls
+						place
 					});
 				});
 			}
 
-			return this.#executeForCaller(callerId, sqlStr, opts.signal, useCache, cls);
+			return this.#executeForCaller(callerId, sqlStr, opts.signal, useCache, place);
 		}
 
 		// No callerId, cache asked for: the first caller's promise goes in the
@@ -640,7 +728,7 @@ export class QueryEngine {
 		if (opts?.cache === true) {
 			if (opts.signal?.aborted) throw new DOMException('Query aborted', 'AbortError');
 			const key = this.#cacheKey(sqlStr);
-			const promise = this.#queryRaw(sqlStr, cls);
+			const promise = this.#queryRaw(sqlStr, place, 'query', opts.signal);
 			this.#queryCache.set(key, promise);
 			let result: Table;
 			try {
@@ -661,14 +749,14 @@ export class QueryEngine {
 			if (opts.signal.aborted) {
 				throw new DOMException('Query aborted', 'AbortError');
 			}
-			const result = await this.#queryRaw(sqlStr, cls);
+			const result = await this.#queryRaw(sqlStr, place, 'query', opts.signal);
 			if (opts.signal.aborted) {
 				throw new DOMException('Query aborted', 'AbortError');
 			}
 			return result;
 		}
 
-		return this.#queryRaw(sqlStr, cls);
+		return this.#queryRaw(sqlStr, place);
 	}
 
 	/**
@@ -684,7 +772,7 @@ export class QueryEngine {
 		sqlStr: string,
 		signal?: AbortSignal,
 		cache: boolean = true,
-		cls: StatementClass = 'interaction'
+		place: StatementPlacement = { class: 'interaction' }
 	): Promise<Table> {
 		const controller = new AbortController();
 		this.#inflight.set(callerId, controller);
@@ -704,7 +792,7 @@ export class QueryEngine {
 			key = this.#cacheKey(sqlStr);
 
 			// Cache the Promise so concurrent identical queries share one inflight
-			const queryPromise = this.#queryRaw(sqlStr, cls);
+			const queryPromise = this.#queryRaw(sqlStr, place, 'query', controller.signal);
 			if (cache) this.#queryCache.set(key, queryPromise);
 
 			const result = await queryPromise;
@@ -734,7 +822,7 @@ export class QueryEngine {
 			const pending = this.#pending.get(callerId);
 			if (pending) {
 				this.#pending.delete(callerId);
-				this.#executeForCaller(callerId, pending.sql, undefined, pending.cache, pending.class)
+				this.#executeForCaller(callerId, pending.sql, undefined, pending.cache, pending.place)
 					.then(pending.resolve)
 					.catch(pending.reject);
 			}
@@ -748,18 +836,34 @@ export class QueryEngine {
 	 * Accepts a single SQL string or an array of statements to execute
 	 * sequentially.
 	 */
-	async exec(sql: string | string[], opts?: { class?: StatementClass }): Promise<void> {
+	async exec(
+		sql: string | string[],
+		opts?: { class?: StatementClass; connectionLocal?: boolean; signal?: AbortSignal }
+	): Promise<void> {
 		if (this.#destroyed) {
 			throw new Error('QueryEngine has been destroyed');
 		}
-		const cls = opts?.class ?? 'interaction';
+		const place: StatementPlacement = {
+			class: opts?.class ?? 'interaction',
+			connectionLocal: opts?.connectionLocal
+		};
+		const signal = opts?.signal;
 		const statements = Array.isArray(sql) ? sql : [sql];
 		// One statement at a time, each committing on its own.
 		for (const stmt of statements) {
-			await this.#send('exec', stmt, cls, async (conn) => {
-				if (conn.exec) await conn.exec(stmt);
-				else await conn.query(stmt);
-			});
+			await this.#send(
+				'exec',
+				stmt,
+				place,
+				async (conn) => {
+					if (conn.exec) await conn.exec(stmt);
+					else await conn.query(stmt);
+				},
+				async (lane) => {
+					await lane.exec(stmt, signal);
+				},
+				signal
+			);
 		}
 	}
 
@@ -786,7 +890,11 @@ export class QueryEngine {
 
 	async #fetchDescribe(table: string): Promise<ColumnInfo[]> {
 		const escaped = table.replaceAll('"', '""');
-		const result = await this.#queryRaw(`DESCRIBE "${escaped}"`, 'interaction', 'describe');
+		const result = await this.#queryRaw(
+			`DESCRIBE "${escaped}"`,
+			{ class: 'interaction' },
+			'describe'
+		);
 		const columns: ColumnInfo[] = [];
 		for (let i = 0; i < result.numRows; i++) {
 			const row = result.get(i);
@@ -879,7 +987,7 @@ export class QueryEngine {
 		await this.#send(
 			'insert',
 			`INSERT ARROW INTO "${options.name}" (${data.byteLength} bytes)`,
-			'interaction',
+			{ class: 'interaction' },
 			async (conn) => {
 				if (!conn.insertArrowFromIPCStream) {
 					throw new Error('Arrow IPC loading requires a DuckDB-WASM connection');
@@ -1162,6 +1270,9 @@ export class QueryEngine {
 			pending.reject(new DOMException('Engine destroyed', 'AbortError'));
 		}
 		this.#pending.clear();
+		// The preagg drops above ran on the lane; close it, then the connection.
+		const lane = this.#lanePromise ? await this.#lanePromise : null;
+		if (lane) await lane.close().catch(() => {});
 		const conn = this.#conn ?? (this.#connPromise ? await this.#connPromise : null);
 		if (conn) await conn.close();
 	}

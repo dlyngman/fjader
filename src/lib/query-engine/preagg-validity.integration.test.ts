@@ -170,6 +170,23 @@ function toggle(field: string, values: string[], chart: object | null = null) {
 // ---------------------------------------------------------------------------
 
 describe('preagg validity', () => {
+	it('a build that finishes after a reload is not registered: the next drag reads the base table', async () => {
+		// Hold the build in flight, as a slow one on a lane would be.
+		let open!: () => void;
+		conn.gate = new Promise((r) => (open = r));
+		const activation = activate();
+		await vi.waitFor(() => expect(creates().length).toBe(1));
+		const reload = engine.clearQueryCache();
+		conn.gate = null;
+		open();
+		await Promise.all([activation, reload]);
+
+		const b = brush();
+		await drag(b, 100, 399);
+		expect(lastQuery()).not.toContain('__dplot_preagg_');
+		expect(rows()).toEqual(await expected('x BETWEEN 100 AND 399'));
+	});
+
 	it('first hover with no brush clause, then drag: every drag frame reads the preagg table', async () => {
 		await activate();
 		const b = brush();
