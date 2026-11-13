@@ -51,8 +51,18 @@ export interface QueryOpts {
 	callerId?: string;
 	/** AbortSignal for external cancellation. */
 	signal?: AbortSignal;
-	/** Enable query result caching. Default true. Set false for queries against
-	 *  volatile temp tables whose contents change without the SQL changing. */
+	/**
+	 * Result caching, and sharing an identical query already running.
+	 *
+	 * - Mark queries (with a `callerId`): on by default; `false` for queries
+	 *   against tables whose contents change without the SQL changing.
+	 * - Ad-hoc queries (no `callerId`): off unless `true`, so an app re-reading
+	 *   a table it writes to sees its writes. fjader's own setup queries pass
+	 *   `true`: they read base tables, which change only on a data reload, after
+	 *   which `clearQueryCache()` is the contract.
+	 *
+	 * The key includes the dims' version (see #cacheKey).
+	 */
 	cache?: boolean;
 	/** Who is waiting for it; see StatementClass. Default 'interaction'. */
 	class?: StatementClass;
@@ -594,6 +604,24 @@ export class QueryEngine {
 			}
 
 			return this.#executeForCaller(callerId, sqlStr, opts.signal, useCache, cls);
+		}
+
+		// No callerId, cache asked for: the first caller's promise goes in the
+		// cache, so a concurrent identical query (two marks asking the same
+		// range) shares it, and a later one reads the result. A cached hit
+		// already returned above.
+		if (opts?.cache === true) {
+			const key = this.#cacheKey(sqlStr);
+			const promise = this.#queryRaw(sqlStr, cls);
+			this.#queryCache.set(key, promise);
+			try {
+				const result = await promise;
+				this.#queryCache.set(key, result);
+				return result;
+			} catch (e) {
+				this.#queryCache.delete(key);
+				throw e;
+			}
 		}
 
 		// No callerId: direct execution, still respect external signal

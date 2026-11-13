@@ -105,3 +105,39 @@ describe('QueryEngine #send funnel', () => {
 		expect(sent).toEqual(['CREATE TABLE late (a INT)']);
 	});
 });
+
+describe('QueryEngine ad-hoc query caching', () => {
+	it('shares a running identical query and caches it when asked', async () => {
+		const { conn, sent } = fakeConnection();
+		const engine = new QueryEngine(conn);
+		const q = 'SELECT min(x), max(x) FROM t';
+		await Promise.all([engine.query(q, { cache: true }), engine.query(q, { cache: true })]);
+		await engine.query(q, { cache: true });
+		expect(sent).toEqual([q]);
+	});
+
+	it('sends an ad-hoc query every time by default, so an app sees its own writes', async () => {
+		const { conn, sent } = fakeConnection();
+		const engine = new QueryEngine(conn);
+		await engine.query('SELECT count(*) FROM t');
+		await engine.query('SELECT count(*) FROM t');
+		expect(sent).toEqual(['SELECT count(*) FROM t', 'SELECT count(*) FROM t']);
+	});
+
+	it('does not cache a failed shared query', async () => {
+		const { conn, sent } = fakeConnection('broken');
+		const engine = new QueryEngine(conn);
+		await expect(engine.query('SELECT broken', { cache: true })).rejects.toThrow('boom');
+		await expect(engine.query('SELECT broken', { cache: true })).rejects.toThrow('boom');
+		expect(sent).toEqual(['SELECT broken', 'SELECT broken']);
+	});
+
+	it('serves nothing stale across clearQueryCache()', async () => {
+		const { conn, sent } = fakeConnection();
+		const engine = new QueryEngine(conn);
+		await engine.query('SELECT 1', { cache: true });
+		await engine.clearQueryCache();
+		await engine.query('SELECT 1', { cache: true });
+		expect(sent.filter((s) => s === 'SELECT 1')).toHaveLength(2);
+	});
+});
