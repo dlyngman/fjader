@@ -1012,10 +1012,11 @@ export class QueryEngine {
 			return;
 		}
 		reg.stale = false;
-		reg.needsFirst = false;
 		const preagg = this.#preagg.sqlFor(markId, reg);
 		const sqlStr = preagg?.sql || this.#baseSQL(markId, reg);
 		if (!sqlStr) return;
+		// Only once a first query actually goes out.
+		reg.needsFirst = false;
 
 		// Use the public query() path — its execute-latest logic ensures
 		// at most 1 inflight + 1 pending per callerId during rapid brushing.
