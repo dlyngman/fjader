@@ -22,3 +22,36 @@ describe('ChartVisibility', () => {
 		expect(v.visible).toBe(true);
 	});
 });
+
+describe('ChartVisibility.shownElsewhere', () => {
+	const scale = {};
+	function peers(using: string[], visible: string[]) {
+		return {
+			chartsUsing: () => using,
+			isChartVisible: (id: string) => visible.includes(id)
+		};
+	}
+
+	it('is true when another visible chart draws the scale', () => {
+		const v = new ChartVisibility(peers(['own', 'other'], ['own', 'other']));
+		v.set('own', true);
+		expect(v.shownElsewhere(scale)).toBe(true);
+	});
+
+	it('leaves the chart’s own cells out, so a returning chart does not block itself', () => {
+		const v = new ChartVisibility(peers(['own-1', 'own-2'], ['own-1', 'own-2']));
+		v.set('own-1', true);
+		v.set('own-2', false);
+		expect(v.shownElsewhere(scale)).toBe(false);
+	});
+
+	it('is false when the other charts drawing it are off screen', () => {
+		const v = new ChartVisibility(peers(['own', 'other'], ['own']));
+		v.set('own', true);
+		expect(v.shownElsewhere(scale)).toBe(false);
+	});
+
+	it('is false without peers (no coordinator)', () => {
+		expect(new ChartVisibility().shownElsewhere(scale)).toBe(false);
+	});
+});

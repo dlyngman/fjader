@@ -313,7 +313,7 @@ export class BaseGPURenderer {
 		bandIds: ArrayLike<number>,
 		channels: readonly (readonly [number, AllowSharedBufferSource])[],
 		/** Bindings that land at once rather than travel (see MorphedChannels.write). */
-		land?: readonly number[]
+		land?: readonly number[] | 'all'
 	): void {
 		if (!this.#device) return;
 

@@ -542,11 +542,11 @@ export class BandScaleState {
 	 * all-NULL column that renders nothing — because an expression-backed axis
 	 * gets a dim like any other since `c55e719`.
 	 */
-	#rebuildSlotTable(): void {
+	#rebuildSlotTable(instant = false): void {
 		if (this.hasIdentity) {
-			this.#slots.layout('ids', this.#displayOrder, this.#resolver.idCount);
+			this.#slots.layout('ids', this.#displayOrder, this.#resolver.idCount, instant);
 		} else {
-			this.#slots.layout('positions', null, this.#domain.length);
+			this.#slots.layout('positions', null, this.#domain.length, instant);
 		}
 	}
 
@@ -653,7 +653,7 @@ export class BandScaleState {
 	 * reports what CHANGED rather than notifying anyone: nothing below runs for
 	 * an answer identical to the one already on screen.
 	 */
-	updateDomainFromExtents(): void {
+	updateDomainFromExtents(options: { instant?: boolean } = {}): void {
 		if (!this.#enableUpdates) {
 			return;
 		}
@@ -669,7 +669,9 @@ export class BandScaleState {
 
 		this.#domain = values;
 		this.#displayOrder = ids;
-		this.#rebuildSlotTable();
+		// Instant: the categories take their new slots at once (a catch-up
+		// result, see SlotTransition.layout).
+		this.#rebuildSlotTable(options.instant);
 		this._version++;
 
 		// Notify GPU to re-render charts using this scale
@@ -813,6 +815,16 @@ export class BandScaleState {
 	 * the axis's clock, so a line fades out with a leaving bar and in with an
 	 * entering one. Changes on every layout.
 	 */
+	/**
+	 * The slots' latest layout if it landed at once (a catch-up result), else 0:
+	 * what follows from it, like `tickVisibility`, lands with it. Reactive
+	 * through `_version`, which every layout bumps.
+	 */
+	get slotsLandedLayout(): number {
+		void this._version;
+		return this.#slots.landedLayout;
+	}
+
 	tickVisibility(): Float32Array {
 		void this._version;
 		if (!this.hasIdentity) return new Float32Array(this.effectiveDomain.length).fill(1);

@@ -68,6 +68,12 @@
 		share?: SplitProp | null;
 		facetData?: Float32Array | null;
 		dataVersion: number;
+		/**
+		 * The data version whose first write lands without morphing, or 0: a
+		 * catch-up result (MarkLifecycleV2.landsFor). Later writes of that version
+		 * animate as usual.
+		 */
+		landsFor?: number;
 		zIndex?: number;
 		colorMode?: number;
 		colorScaleIndex?: number;
@@ -108,6 +114,7 @@
 		share = null,
 		facetData = null,
 		dataVersion,
+		landsFor = 0,
 		zIndex = 0,
 		colorMode = 0,
 		colorScaleIndex = 0,
@@ -346,6 +353,18 @@
 
 	// --- DATA WRITING EFFECTS (Independent & Fine-Grained) ---
 
+	// Whether this write lands: the first of the catch-up's data version
+	// (landsFor). Plain, not $state: only the write effect reads and sets it.
+	// Assumes a catch-up result is ONE morph write: should it ever take two
+	// (values, then band ids after the instant layout), the second springs.
+	// A morph SPRING right after a morph snap on a return points here.
+	let lastMorphedVersion = -1;
+	function landsNow(): boolean {
+		const first = dataVersion !== lastMorphedVersion;
+		lastMorphedVersion = dataVersion;
+		return first && landsFor !== 0 && landsFor === dataVersion;
+	}
+
 	// The measure axis's two edges morph, as ONE write per data update, so one
 	// update starts one transition. The band's ids go with them: they are how a
 	// row set that is not the one being animated gets noticed and snapped.
@@ -359,7 +378,7 @@
 		// split and the bar land together. A share that changes alone (a click)
 		// starts a transition of its own on that clock.
 		const split = splitData ? ([[BINDINGS.SHARE, splitData]] as const) : [];
-		const land = splitData && !splitSlides ? [BINDINGS.SHARE] : undefined;
+		const land = landsNow() ? 'all' : splitData && !splitSlides ? [BINDINGS.SHARE] : undefined;
 		if (bandAxis === 'x') {
 			renderer.writeMorphed(
 				'x',

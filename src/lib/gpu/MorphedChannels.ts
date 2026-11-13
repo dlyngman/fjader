@@ -1,3 +1,4 @@
+import { noteTransition, transitionsObserved } from '$lib/animation/transition-log';
 import { RESOLVE_IMMEDIATE_SIZE, RESOLVE_WORKGROUP, resolvePipelineFor } from './ResolveShader';
 import { TransitionClock, type ClockLoop } from '$lib/animation/TransitionClock';
 import { immediatesSupported } from './immediates';
@@ -180,12 +181,13 @@ export class MorphedChannels {
 	 * `land`: bindings whose new values take effect at once while the rest
 	 * travel. For a channel whose change is shown some other way at that moment
 	 * (an Other bar's split, when both sides of it look the same): sliding it
-	 * would draw a movement nothing asked for.
+	 * would draw a movement nothing asked for. `'all'`: the whole update lands,
+	 * for a catch-up result (MarkHandle.resultCause).
 	 */
 	write(
 		rowIds: ArrayLike<number>,
 		channels: readonly (readonly [number, AllowSharedBufferSource])[],
-		land: readonly number[] = NO_BINDINGS
+		land: readonly number[] | 'all' = NO_BINDINGS
 	): boolean {
 		const key = alignmentKey(rowIds);
 		let travels = this.#alignmentKey === key;
@@ -199,7 +201,7 @@ export class MorphedChannels {
 				reallocated = true;
 			}
 			channel.count = data.byteLength >> 2;
-			channel.land = land.includes(binding);
+			channel.land = land === 'all' || land.includes(binding);
 			this.#device.queue.writeBuffer(channel.to, 0, data as ArrayBufferView<ArrayBuffer>);
 		}
 		// A fresh buffer holds nothing that was ever on screen, so there is
@@ -207,8 +209,27 @@ export class MorphedChannels {
 		if (reallocated) travels = false;
 
 		this.#dirty = true;
-		if (travels) this.#startTransition();
-		else this.#snapPending = true;
+		// Every channel landing travels nothing, so it starts no transition: on
+		// a shared band clock a restart would set every sibling folding for a
+		// transition with nowhere to go.
+		// A loop, not `every`: this runs on each data update of a brush, and
+		// the callback would allocate per write.
+		let allLand = land === 'all';
+		if (land !== 'all' && land.length > 0) {
+			allLand = true;
+			for (let i = 0; i < channels.length; i++) {
+				if (!land.includes(channels[i][0])) {
+					allLand = false;
+					break;
+				}
+			}
+		}
+		if (travels && !allLand) this.#startTransition();
+		else if (!travels) this.#snapPending = true;
+		if (transitionsObserved()) {
+			// Snaps when the row set changed or a buffer grew, or every channel lands.
+			noteTransition('morph', !travels || allLand, this.#affectedCharts, this.#label);
+		}
 
 		if (!this.#registered) {
 			this.#registered = true;

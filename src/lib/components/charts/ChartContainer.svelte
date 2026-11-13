@@ -9,7 +9,7 @@
 	import { ChartScales } from '$lib/scales/ChartScales.svelte';
 	import { ChartConfig } from '$lib/config';
 	import { getGPUContext } from '$lib/gpu';
-	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
+	import type { ScaleRegistry, AnyScaleState } from '$lib/scales/ScaleRegistry.svelte';
 	import type { ChartContext, EntranceMode, FieldRef } from '$lib/types';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 	import type { DimValue } from '$lib/query-engine/categorical-identity';
@@ -225,7 +225,14 @@
 	// Survives `scales` being recreated: see ScaleGeneration.
 	const scaleGeneration = new ScaleGeneration(() => scales);
 	// Whether any cell is on screen; the cells report into it.
-	const chartVisibility = new ChartVisibility();
+	const chartVisibility = new ChartVisibility(
+		gpuCoordinator
+			? {
+					chartsUsing: (scale) => scaleRegistry.chartsUsing(scale as AnyScaleState),
+					isChartVisible: (chartId) => gpuCoordinator.isChartVisible(chartId)
+				}
+			: null
+	);
 	// Whether the pointer is over any cell; the cells report into it.
 	const chartHover = new ChartHover();
 
@@ -398,6 +405,7 @@
 		get visible() {
 			return chartVisibility.visible;
 		},
+		shownElsewhere: (scale) => chartVisibility.shownElsewhere(scale),
 		get hovered() {
 			return chartHover.hovered;
 		},

@@ -318,6 +318,7 @@
 		sizeScaleIndex={markSize.sizeScaleIndex}
 		facetData={setup?.facetData}
 		dataVersion={setup?.dataVersion || 0}
+		landsFor={setup?.landsFor ?? 0}
 		bandAxis={setup?.alignedBand ?? null}
 	/>
 {/if}

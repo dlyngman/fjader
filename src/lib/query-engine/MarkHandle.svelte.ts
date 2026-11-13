@@ -18,9 +18,21 @@ export interface QueryParams {
 	limit?: number;
 }
 
+/**
+ * Why a result was queried. `catchUp`: the mark came back into view stale (see
+ * `active`), so the result brings it up to date with changes it missed, which
+ * nobody just made; it lands without animating. `update`: anything else.
+ */
+export type ResultCause = 'update' | 'catchUp';
+
 export class MarkHandle {
 	arrowTable = $state<Table | null>(null);
 	dataVersion = $state(0);
+	/**
+	 * The cause of the result `dataVersion` counts, set with it. Plain, not
+	 * $state: read by whatever reacts to `dataVersion`, never on its own.
+	 */
+	resultCause: ResultCause = 'update';
 	error = $state<Error | null>(null);
 
 	#params = $state<QueryParams>({ sort: undefined, limit: undefined });
@@ -77,9 +89,10 @@ export class MarkHandle {
 	 * The error is cleared either way, so a success after a failure still
 	 * clears it.
 	 */
-	_setResult(table: Table): void {
+	_setResult(table: Table, cause: ResultCause = 'update'): void {
 		this.error = null;
 		if (table === this.arrowTable) return;
+		this.resultCause = cause;
 		this.arrowTable = table;
 		this.dataVersion++;
 	}

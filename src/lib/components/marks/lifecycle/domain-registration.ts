@@ -176,7 +176,11 @@ export function registerDataDerivedDomains(
 	xBandScaleState: BandScaleState | null,
 	yBandScaleState: BandScaleState | null,
 	markId: string,
-	isRebinning: boolean,
+	/**
+	 * Whether a scale's change from this result lands without animating: a
+	 * catch-up result on a scale no other visible chart draws. Null: animate.
+	 */
+	instantFor: ((scale: object) => boolean) | null,
 	colorScaleState?: ColorScaleState | null
 ): RegisterDomainsResult {
 	if (!data || data.length === 0) {
@@ -238,7 +242,8 @@ export function registerDataDerivedDomains(
 				extent = [Math.min(0, extent[0]), Math.max(0, extent[1])];
 			}
 
-			registerExtentOnScale(xScaleState, actualXScaleType, extent, markId, isRebinning, 'X');
+			const instant = !!xScaleState && (instantFor?.(xScaleState) ?? false);
+			registerExtentOnScale(xScaleState, actualXScaleType, extent, markId, instant, 'X');
 		}
 	}
 
@@ -256,7 +261,8 @@ export function registerDataDerivedDomains(
 				extent = [Math.min(0, extent[0]), Math.max(0, extent[1])];
 			}
 
-			registerExtentOnScale(yScaleState, actualYScaleType, extent, markId, isRebinning, 'Y');
+			const instant = !!yScaleState && (instantFor?.(yScaleState) ?? false);
+			registerExtentOnScale(yScaleState, actualYScaleType, extent, markId, instant, 'Y');
 		}
 	}
 
@@ -306,7 +312,7 @@ export function registerDataDerivedDomains(
 				if (categories.length === 0) continue;
 				bandScale.addMark(categories, markId);
 			}
-			bandScale.updateDomainFromExtents();
+			bandScale.updateDomainFromExtents({ instant: instantFor?.(bandScale) ?? false });
 		}
 	}
 
@@ -338,20 +344,15 @@ function registerExtentOnScale(
 	scaleType: string,
 	extent: [number, number],
 	markId: string,
-	isRebinning: boolean,
+	instant: boolean,
 	axisLabel: string
 ): void {
 	if (scaleType === 'time' && (scaleState as TimeScaleState | null)?.addOffsetExtent) {
 		// Time scale: data is in offset form, use addOffsetExtent
 		console.log(`📊 [${markId}] Registering ${axisLabel} domain from data (time offsets):`, extent);
-		(scaleState as TimeScaleState).addOffsetExtent(extent, markId);
+		(scaleState as TimeScaleState).addOffsetExtent(extent, markId, { instant });
 	} else if (scaleState?.addMark) {
-		// Linear/log/symlog scale: use addMark with instant flag when rebinning
-		if (isRebinning) {
-			console.log(`⚡ [${markId}] Instant ${axisLabel} domain update (rebinning):`, extent);
-		} else {
-			console.log(`📊 [${markId}] Registering ${axisLabel} domain from data:`, extent);
-		}
-		scaleState.addMark(extent, markId, { instant: isRebinning });
+		console.log(`📊 [${markId}] Registering ${axisLabel} domain from data:`, extent);
+		scaleState.addMark(extent, markId, { instant });
 	}
 }
