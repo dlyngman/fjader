@@ -2213,11 +2213,6 @@ export class GPUCoordinator {
 	// =========================================================================
 
 	/**
-	 * Register a callback invoked when a chart's effective visibility changes.
-	 * Effective visibility = IntersectionObserver visible AND page visible.
-	 * Used by ChartCell to toggle Mosaic client.enabled.
-	 */
-	/**
 	 * Debug: every transition that starts, and whether it animates or lands at
 	 * once (see transition-log). Returns the unsubscribe. Forwards to the
 	 * page-wide log: records from every coordinator in the document arrive
@@ -2232,6 +2227,11 @@ export class GPUCoordinator {
 		return this.#registeredCharts.get(chartId)?.visible ?? false;
 	}
 
+	/**
+	 * Register a callback invoked when a chart's effective visibility changes.
+	 * Effective visibility = IntersectionObserver visible AND page visible.
+	 * Used by ChartCell to report into the chart's ChartVisibility.
+	 */
 	setVisibilityCallback(chartId: string, callback: (visible: boolean) => void): () => void {
 		this.#visibilityCallbacks.set(chartId, callback);
 		// Callbacks hear changes only. One set after the chart was already found

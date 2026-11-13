@@ -212,7 +212,18 @@ export class MorphedChannels {
 		// Every channel landing travels nothing, so it starts no transition: on
 		// a shared band clock a restart would set every sibling folding for a
 		// transition with nowhere to go.
-		const allLand = land === 'all' || channels.every(([b]) => land.includes(b));
+		// A loop, not `every`: this runs on each data update of a brush, and
+		// the callback would allocate per write.
+		let allLand = land === 'all';
+		if (land !== 'all' && land.length > 0) {
+			allLand = true;
+			for (let i = 0; i < channels.length; i++) {
+				if (!land.includes(channels[i][0])) {
+					allLand = false;
+					break;
+				}
+			}
+		}
 		if (travels && !allLand) this.#startTransition();
 		else if (!travels) this.#snapPending = true;
 		if (transitionsObserved()) {

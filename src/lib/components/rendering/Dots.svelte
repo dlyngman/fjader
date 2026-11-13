@@ -269,6 +269,9 @@
 
 	// Whether this write lands: the first of the catch-up's data version
 	// (landsFor). Plain, not $state: only the write effect reads and sets it.
+	// Assumes a catch-up result is ONE morph write: should it ever take two
+	// (values, then band ids after the instant layout), the second springs.
+	// A morph SPRING right after a morph snap on a return points here.
 	let lastMorphedVersion = -1;
 	function landsNow(): boolean {
 		const first = dataVersion !== lastMorphedVersion;

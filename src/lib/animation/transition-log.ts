@@ -15,8 +15,10 @@
  *
  * MODULE-GLOBAL: one log per page (per module instance), not per coordinator.
  * Two coordinators in one document (notebook cells, Streamlit iframes sharing
- * it) see each other's records; filter by chart id. Fine for a debug hook. Free while nothing observes: each emitter asks
- * `transitionsObserved()` before building a record.
+ * it) see each other's records; filter by chart id. Fine for a debug hook.
+ *
+ * Free while nothing observes: each emitter asks `transitionsObserved()`
+ * before building a record.
  */
 
 import { untrack } from 'svelte';
