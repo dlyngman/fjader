@@ -59,6 +59,10 @@ export class MarkColor {
 			const mode = this.#mode;
 			const field = this.#field;
 			const type = this.config.scaleType;
+			// Again when the chart's scales are replaced: the registry dropped
+			// this one with the old ChartScales (its GPU slots may already be
+			// someone else's), and holding it would write to a destroyed scale.
+			void this.#chartContext.scaleGeneration;
 			// Only create scale when type is known (not null)
 			if (mode === 'field' && field && this.#scaleRegistry && type !== null) {
 				untrack(() => {
