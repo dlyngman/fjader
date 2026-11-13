@@ -50,6 +50,9 @@
 		console.table(entrances.map((e) => ({ chart: e.chart, ms: +(e.time - mountedAt).toFixed(0) })));
 	}
 	const mount = page.url.searchParams.get('mount') ?? 'all';
+	// ?tooltipSort=on: the scatters' tooltip tables written with ORDER BY (the
+	// default is unsorted), to compare write and hover lookup times.
+	const tooltip = page.url.searchParams.get('tooltipSort') === 'on' ? { sortTable: true } : true;
 	let isLoaded = $state(false);
 
 	const charts = [
@@ -82,7 +85,14 @@
 	<p class="note">
 		mount={mount}: {shown.length} charts. Brush chart 1.
 		<button onclick={report}>Report (console)</button>
-		<button onclick={() => log.download(`qlog-${mount}.json`, { mountedAt, entrances, hovers })}>
+		<button
+			onclick={() =>
+				log.download(`qlog-${mount}${tooltip === true ? '' : '-sorted'}.json`, {
+					mountedAt,
+					entrances,
+					hovers
+				})}
+		>
 			Save log
 		</button>
 	</p>
@@ -115,6 +125,7 @@
 												r={1}
 												opacity={0.3}
 												selection="brush"
+												{tooltip}
 											/>
 										{:else if chart.kind === 'area'}
 											<AreaMarkY
