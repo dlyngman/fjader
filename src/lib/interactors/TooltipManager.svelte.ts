@@ -279,7 +279,11 @@ export class TooltipManager {
 
 				queryPromises.push(
 					this.#queryEngine
-						.query(sql, { callerId: 'tooltip' })
+						// Per mark: one shared caller id let execute-latest drop every
+						// lookup but the first and last when a chart has three or more
+						// marks. Not cached: the tooltip table is rewritten on each data
+						// change while a lookup's SQL can stay the same.
+						.query(sql, { callerId: `tooltip:${markId}`, cache: false })
 						.then((result) => {
 							const rows = Array.from(result) as DataRow[];
 							return rows.length > 0 ? { markId, config, rows } : null;
