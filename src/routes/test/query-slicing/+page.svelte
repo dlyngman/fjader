@@ -386,6 +386,89 @@
 			add('10 types', desc);
 		});
 
+	// 11. DDL on both connections at once: a slow CREATE TABLE on the lane (a
+	//     preagg build) while the main connection creates a table of another
+	//     name (a dim). Then the same name on both, to see the conflict.
+	const ddlOverlap = () =>
+		exp(async () => {
+			const fj = connectionFrom(a, {
+				pollingIntervalMs: pollInterval === 'default' ? undefined : Number(pollInterval)
+			});
+			lane ??= await fj.openSlicedLane!();
+			await fj.exec!(
+				'DROP TABLE IF EXISTS lane_build; DROP TABLE IF EXISTS main_dim; DROP TABLE IF EXISTS same_name'
+			);
+			const settle = (p: Promise<unknown>) =>
+				p.then(
+					() => 'ok',
+					(e) => `failed: ${String(e).slice(0, 90)}`
+				);
+			let t0 = now();
+			const build = settle(
+				lane.exec(
+					`CREATE TABLE lane_build AS SELECT i % 1000 AS k, count(*) AS n FROM range(60000000) t(i) GROUP BY k`
+				)
+			).then((r) => `${r} at ${fmt(now() - t0)}`);
+			await new Promise((r) => setTimeout(r, 50));
+			const ts = now();
+			const dim = await settle(
+				fj.exec!('CREATE TABLE main_dim AS SELECT range AS v FROM range(1000)')
+			);
+			const dimMs = now() - ts;
+			add(
+				'11a DDL overlap, different names',
+				`main CREATE: ${dim} in ${fmt(dimMs)}; lane CREATE: ${await build}`
+			);
+
+			t0 = now();
+			const slowSame = settle(
+				lane.exec(
+					`CREATE TABLE same_name AS SELECT sum(hash(i) % 7) AS s FROM range(60000000) t(i)`
+				)
+			).then((r) => `${r} at ${fmt(now() - t0)}`);
+			await new Promise((r) => setTimeout(r, 50));
+			const mainSame = await settle(fj.exec!('CREATE TABLE same_name AS SELECT 1 AS s'));
+			add('11b DDL overlap, same name', `main CREATE: ${mainSame}; lane CREATE: ${await slowSame}`);
+		});
+
+	// 12. A cancelled CREATE TABLE AS on a lane must leave no table: preagg
+	//     tables are hash-named and reused through CREATE TABLE IF NOT EXISTS, so
+	//     a partial or empty leftover would be served as the aggregate until a
+	//     reload. Cancel one partway, look for it from the main connection, then
+	//     run the same IF NOT EXISTS build again and count its rows.
+	const cancelledCreate = () =>
+		exp(async () => {
+			const fj = connectionFrom(a, {
+				pollingIntervalMs: pollInterval === 'default' ? undefined : Number(pollInterval)
+			});
+			lane ??= await fj.openSlicedLane!();
+			await fj.exec!('DROP TABLE IF EXISTS cancelled_build');
+			const build = `CREATE TABLE IF NOT EXISTS cancelled_build AS
+				SELECT i % 1000 AS k, count(*) AS n FROM range(60000000) t(i) GROUP BY k`;
+			const t0 = now();
+			const ctl = new AbortController();
+			const first = lane.exec(build, ctl.signal).then(
+				() => `completed at ${fmt(now() - t0)}`,
+				(e) => `${e?.name} at ${fmt(now() - t0)}`
+			);
+			await new Promise((r) => setTimeout(r, 200));
+			ctl.abort();
+			const outcome = await first;
+			const count = async (sql: string) =>
+				Number((tableFromIPC(await fj.queryIPC!(sql)).get(0) as { n: unknown }).n);
+			const exists = await count(
+				"SELECT count(*) AS n FROM duckdb_tables() WHERE table_name = 'cancelled_build'"
+			);
+			await lane.exec(build);
+			const rows = await count('SELECT count(*) AS n FROM cancelled_build');
+			const total = await count('SELECT sum(n) AS n FROM cancelled_build');
+			add(
+				'12 cancelled CREATE TABLE AS',
+				`first build: ${outcome}; table after the cancel: ${exists ? 'EXISTS' : 'none'}; ` +
+					`rebuilt with IF NOT EXISTS: ${rows} rows, sum(n) ${total} (expect 1000, 60000000)`
+			);
+		});
+
 	onMount(open);
 </script>
 
@@ -415,6 +498,8 @@
 		<button disabled={!ready || running} onclick={scratchCatalog}>8 scratch catalog</button>
 		<button disabled={!ready || running} onclick={fjaderLane}>9 fjader lane</button>
 		<button disabled={!ready || running} onclick={types}>10 types</button>
+		<button disabled={!ready || running} onclick={ddlOverlap}>11 DDL overlap</button>
+		<button disabled={!ready || running} onclick={cancelledCreate}>12 cancelled CREATE</button>
 	</div>
 	<p>{ready ? (running ? 'running…' : 'ready') : 'starting DuckDB…'}</p>
 	<table>

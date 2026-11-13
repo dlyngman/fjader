@@ -64,6 +64,68 @@
 	const scale = Math.max(1, Number(page.url.searchParams.get('scale') ?? 1) || 1);
 	let isLoaded = $state(false);
 
+	/**
+	 * A drag that is the same on every run, for comparing branches: real pointer
+	 * events on chart 1, through the chart's own hit test and the brush's code.
+	 * Enters the chart, waits 1.5 s so the hover's preagg builds are done (the
+	 * steady state), then sweeps the brush's far edge from 20% to 80% of the
+	 * plot and back over 2 s, one move per frame. Recorded in the log as
+	 * `drag: { start, end }`.
+	 *
+	 * Pointer id 1 is the mouse, always an active pointer, so the brush's
+	 * setPointerCapture succeeds (a failure would start no drag, and the log
+	 * would show no brush queries). That capture is real: the REAL mouse's moves
+	 * also go to chart 1 until the script's pointerup, so don't move the mouse
+	 * during a run. Both pointermove and pointerrawupdate are fired; ChartCell
+	 * handles exactly one of them (rawupdate where the browser has it, outside
+	 * an iframe), so the brush gets one move per frame either way.
+	 */
+	let drag = null;
+	let dragging = $state(false);
+	async function scriptedDrag() {
+		const svg = document.querySelector('[data-chart^="1 "] svg.svg-foreground');
+		if (!svg) return;
+		dragging = true;
+		const r = svg.getBoundingClientRect();
+		const y = r.top + r.height * 0.5;
+		const at = (f) => r.left + r.width * f;
+		const fire = (type, x) =>
+			svg.dispatchEvent(
+				new PointerEvent(type, {
+					bubbles: true,
+					cancelable: true,
+					composed: true,
+					pointerId: 1,
+					pointerType: 'mouse',
+					isPrimary: true,
+					button: 0,
+					buttons: type === 'pointerup' ? 0 : 1,
+					clientX: x,
+					clientY: y
+				})
+			);
+		const frame = () => new Promise((res) => requestAnimationFrame(res));
+		fire('pointerenter', at(0.2));
+		svg
+			.closest('.chart-cell')
+			?.dispatchEvent(new PointerEvent('pointerenter', { clientX: at(0.2), clientY: y }));
+		await new Promise((res) => setTimeout(res, 1500));
+		const start = performance.now();
+		fire('pointerdown', at(0.2));
+		const ms = 2000;
+		for (;;) {
+			await frame();
+			const t = (performance.now() - start) / ms;
+			if (t >= 1) break;
+			const f = 0.2 + 0.6 * (t < 0.5 ? t * 2 : 2 - t * 2);
+			fire('pointermove', at(f));
+			fire('pointerrawupdate', at(f));
+		}
+		fire('pointerup', at(0.2));
+		drag = { start, end: performance.now() };
+		dragging = false;
+	}
+
 	const charts = [
 		{ name: '1 delay histogram (brush)', kind: 'hist', x: 'delay', brush: true },
 		{ name: '2 distance histogram', kind: 'hist', x: 'distance' },
@@ -111,12 +173,17 @@
 					{
 						mountedAt,
 						entrances,
-						hovers
+						hovers,
+						drag
 					}
 				)}
 		>
 			Save log
 		</button>
+		<button disabled={!isLoaded || dragging} onclick={scriptedDrag}>
+			{dragging ? 'dragging…' : 'Scripted drag'}
+		</button>
+		{#if dragging}<span>don't move the mouse</span>{/if}
 	</p>
 	{#if isLoaded}
 		<div class="grid">

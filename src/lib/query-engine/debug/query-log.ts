@@ -6,9 +6,11 @@
  * engine sends (queries, statements, DESCRIBE, Arrow inserts) with its class.
  * Times are taken on the main thread when a statement is handed over and when
  * it settles; while the main thread is busy (decoding, GPU uploads) they read
- * high. The queue-wait estimate assumes one connection served first-in,
- * first-out: a statement starts when it was sent or when the previous one
- * finished, whichever is later.
+ * high. The queue-wait estimate assumes each connection serves its statements
+ * first-in, first-out: a statement starts when it was sent or when the
+ * previous one ON ITS CONNECTION finished, whichever is later. Statements on a
+ * sliced lane interleave with the main connection's in the worker, so their
+ * "work" includes slices spent serving the other.
  */
 import type { QueryEngine, StatementRecord } from '../QueryEngine';
 
@@ -65,13 +67,16 @@ export function attachQueryLog(engine: QueryEngine): QueryLog {
 	const report = (): ReportRow[] => {
 		const sorted = [...statements].sort((a, b) => a.start - b.start);
 		if (sorted.length === 0) return [];
+		const lastEndOn = { main: 0, lane: 0 };
 		let lastEnd = 0;
 		const groups = new Map<string, ReportRow>();
 		let work = 0;
 		for (const s of sorted) {
-			const start = Math.max(s.start, lastEnd);
+			const conn = s.connection ?? 'main';
+			const start = Math.max(s.start, lastEndOn[conn]);
+			lastEndOn[conn] = Math.max(lastEndOn[conn], s.end);
 			lastEnd = Math.max(lastEnd, s.end);
-			const key = `${s.class} ${s.purpose} ${s.table}`;
+			const key = `${conn} ${s.class} ${s.purpose} ${s.table}`;
 			const g = groups.get(key) ?? { group: key, n: 0, workMs: 0, waitMs: 0 };
 			g.n++;
 			g.workMs += s.end - start;

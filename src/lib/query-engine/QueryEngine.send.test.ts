@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { QueryEngine } from './QueryEngine';
 import type { DuckDBConnection, StatementRecord } from './QueryEngine';
 
@@ -191,5 +191,114 @@ describe('QueryEngine.describe', () => {
 		await expect(engine.describe('late')).resolves.toEqual([
 			{ name: 'a', type: 'INTEGER', nullable: true }
 		]);
+	});
+});
+
+describe('QueryEngine background lane', () => {
+	/** A fake lane: records what it ran, in order, into `log`. */
+	function fakeLane(log: string[]) {
+		return {
+			async query(sql: string) {
+				log.push(`lane ${sql}`);
+				const { tableToIPC, tableFromArrays } = await import('@uwdata/flechette');
+				return { ipc: [tableToIPC(tableFromArrays({ a: [1] }), { format: 'stream' })!], polls: 0 };
+			},
+			async exec(sql: string) {
+				log.push(`lane ${sql}`);
+				return { polls: 0 };
+			},
+			async close() {
+				log.push('lane close');
+			}
+		};
+	}
+
+	function withLane(open?: () => Promise<unknown>) {
+		const log: string[] = [];
+		const { conn } = fakeConnection();
+		const exec = conn.exec!;
+		conn.exec = async (sql) => {
+			log.push(`main ${sql}`);
+			return exec(sql);
+		};
+		conn.close = async () => {
+			log.push('main close');
+		};
+		conn.openSlicedLane = (open ?? (async () => fakeLane(log))) as never;
+		return { conn, log };
+	}
+
+	it('runs background statements on the lane, and everything else on the main connection', async () => {
+		const { conn, log } = withLane();
+		const engine = new QueryEngine(conn);
+		const { records } = observe(engine);
+
+		await engine.exec('CREATE TABLE built AS SELECT 1', { class: 'background' });
+		await engine.exec('CREATE TEMP TABLE tt (a INT)', {
+			class: 'background',
+			connectionLocal: true
+		});
+		await engine.exec('CREATE TABLE dim (a INT)');
+		const t = await engine.query('SELECT count(*) FROM built', { class: 'background' });
+
+		expect(log).toEqual([
+			'lane CREATE TABLE built AS SELECT 1',
+			'main CREATE TEMP TABLE tt (a INT)',
+			'main CREATE TABLE dim (a INT)',
+			'lane SELECT count(*) FROM built'
+		]);
+		expect(t.numRows).toBe(1);
+		expect(records.map((r) => r.connection)).toEqual(['lane', 'main', 'main', 'lane']);
+	});
+
+	it('keeps everything on the main connection without the capability', async () => {
+		const { conn, sent } = fakeConnection();
+		const engine = new QueryEngine(conn);
+		const { records } = observe(engine);
+		await engine.exec('CREATE TABLE built AS SELECT 1', { class: 'background' });
+		expect(sent).toEqual(['CREATE TABLE built AS SELECT 1']);
+		expect(records[0].connection).toBe('main');
+	});
+
+	it('without a lane, keeps the order of statements sent in the same tick', async () => {
+		const { conn, sent } = fakeConnection();
+		const engine = new QueryEngine(conn);
+		// Learn there is no lane.
+		await engine.exec('SELECT 0', { class: 'background' });
+		sent.length = 0;
+		await Promise.all([
+			engine.exec('background first', { class: 'background' }),
+			engine.exec('interaction second')
+		]);
+		expect(sent).toEqual(['background first', 'interaction second']);
+	});
+
+	it('falls back to the main connection when the lane fails to open', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const { conn, log } = withLane(async () => {
+			throw new Error('no connect');
+		});
+		const engine = new QueryEngine(conn);
+		await engine.exec('CREATE TABLE built AS SELECT 1', { class: 'background' });
+		expect(log).toEqual(['main CREATE TABLE built AS SELECT 1']);
+		expect(warn).toHaveBeenCalledTimes(1);
+		warn.mockRestore();
+	});
+
+	it('does not send a statement whose signal is already aborted', async () => {
+		const { conn, sent } = fakeConnection();
+		const engine = new QueryEngine(conn);
+		const ctl = new AbortController();
+		ctl.abort();
+		await expect(engine.exec('DROP TABLE x', { signal: ctl.signal })).rejects.toThrow();
+		expect(sent).toEqual([]);
+	});
+
+	it('closes its lanes on destroy: the lane first, then the connection', async () => {
+		const { conn, log } = withLane();
+		const engine = new QueryEngine(conn);
+		await engine.exec('CREATE TABLE built AS SELECT 1', { class: 'background' });
+		await engine.destroy();
+		expect(log.slice(-2)).toEqual(['lane close', 'main close']);
 	});
 });
