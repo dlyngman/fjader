@@ -32,6 +32,10 @@ export class MarkSize {
 		$effect(() => {
 			const mode = this.#mode;
 			const field = this.#field;
+			// Again when the chart's scales are replaced: the registry dropped
+			// this one with the old ChartScales (its GPU slots may already be
+			// someone else's), and holding it would write to a destroyed scale.
+			void this.#chartContext.scaleGeneration;
 
 			if (mode === 'field' && field && this.#scaleRegistry) {
 				untrack(() => {

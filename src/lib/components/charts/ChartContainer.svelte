@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ScaleGeneration } from '$lib/scales/ScaleGeneration.svelte';
 	import { setContext, getContext, onDestroy } from 'svelte';
 	import type { Snippet } from 'svelte';
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
@@ -219,6 +220,8 @@
 
 	// --- ChartScales ---
 	let scales = $state<ChartScales | null>(null);
+	// Survives `scales` being recreated: see ScaleGeneration.
+	const scaleGeneration = new ScaleGeneration(() => scales);
 
 	// Queue for scale registrations that arrive before ChartScales is created.
 	// Marks mount synchronously during render, but ChartScales is created in an
@@ -383,6 +386,9 @@
 		get xScaleState() {
 			return scales?.xScaleState;
 		},
+		get scaleGeneration() {
+			return scaleGeneration.value;
+		},
 		get yScaleState() {
 			return scales?.yScaleState;
 		},
@@ -503,6 +509,7 @@
 						facetLabel={String(categoryLabel(cat))}
 						margin={{ top: 20, right: 10, bottom: 35, left: 55 }}
 						{scales}
+						{scaleGeneration}
 						{chartConfig}
 						{facetingProps}
 						{gpuCoordinator}
@@ -525,6 +532,7 @@
 			margin={cellMargin}
 			{clipPadding}
 			{scales}
+			{scaleGeneration}
 			{chartConfig}
 			{facetingProps}
 			{gpuCoordinator}

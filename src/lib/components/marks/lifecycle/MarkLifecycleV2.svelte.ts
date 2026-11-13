@@ -453,6 +453,14 @@ export class MarkLifecycleV2 {
 	// --- Tooltip ---
 	#tooltipTableName: string;
 	#tooltipTableReady = $state(false);
+	/**
+	 * True once a tooltip table write has started, so there may be a table to
+	 * drop. Without it every lifecycle torn down before its first data (a mark
+	 * that unmounts early, a rebuild) sent DuckDB a DROP for a table that never
+	 * existed, one more statement in the single worker's queue during load.
+	 */
+	#tooltipTableWritten = false;
+
 	#tooltipWriteTimeout: ReturnType<typeof setTimeout> | null = null;
 
 	// --- fitDomain ---
@@ -748,7 +756,19 @@ export class MarkLifecycleV2 {
 				(!seriesKey || seriesKey === colorKey || !!this.#seriesScaleState);
 
 			untrack(() => {
-				this.#runSetup(scalesReady);
+				// A run already in flight against these same scales would produce
+				// the same result: don't send its queries again. A different scale
+				// starts a new run, and the generation guard retires the old one.
+				const inputs = [
+					xScaleState,
+					yScaleState,
+					this.#colorScaleState,
+					this.#seriesScaleState,
+					scaleTypes.x,
+					scaleTypes.y
+				];
+				if (scalesReady && this.#setupInFlight && sameInputs(this.#setupInFlight, inputs)) return;
+				this.#runSetup(scalesReady, inputs);
 			});
 		});
 
@@ -848,7 +868,7 @@ export class MarkLifecycleV2 {
 			return () => {
 				clearTimeout(this.#tooltipWriteTimeout!);
 				this.#tooltipTableReady = false;
-				this.#queryEngine.exec(`DROP TABLE IF EXISTS "${this.#tooltipTableName}"`).catch(() => {});
+				this.#dropTooltipTable();
 			};
 		});
 
@@ -919,7 +939,12 @@ export class MarkLifecycleV2 {
 	// PHASE 1: SETUP
 	// ===========================================================================
 
-	async #runSetup(colorReady: boolean): Promise<void> {
+	/** Bumped by each setup run that queries; see #runSetup. */
+	#setupGeneration = 0;
+	/** The scales the latest querying setup run started with, while it is in flight. */
+	#setupInFlight: readonly unknown[] | null = null;
+
+	async #runSetup(colorReady: boolean, inputs: readonly unknown[]): Promise<void> {
 		if (this.#destroyed) return;
 
 		// Wait for the colour scale — and the series scale, which takes a dim the
@@ -955,9 +980,28 @@ export class MarkLifecycleV2 {
 		// a chart that was never going to get a colour scale.
 		if (!colorReady) return;
 
+		// The setup effect re-enters whenever a scale it reads settles, and an
+		// earlier run may still be awaiting its queries. Only the latest run
+		// may finish: a superseded one stops after its await, so it cannot
+		// register domains on a scale that has since been replaced, nor set
+		// setupComplete from stale scale state. Its queries are already sent.
+		const generation = ++this.#setupGeneration;
+		const superseded = () => this.#destroyed || generation !== this.#setupGeneration;
+		this.#setupInFlight = inputs;
+		try {
+			await this.#runSetupQueries(superseded);
+		} finally {
+			if (generation === this.#setupGeneration) this.#setupInFlight = null;
+		}
+	}
+
+	/** The querying part of #runSetup; `superseded` says a later run has started. */
+	async #runSetupQueries(superseded: () => boolean): Promise<void> {
 		// Passive scales: skip domain fetching but still need schema for CAST decisions
 		if (this.#config.passiveScales) {
-			this.#schema = buildSchemaMap(await this.#queryEngine.describe(this.#config.table));
+			const columns = await this.#queryEngine.describe(this.#config.table);
+			if (superseded()) return;
+			this.#schema = buildSchemaMap(columns);
 			setScalesReady(
 				this.#scaleMap,
 				this.#channelsNeedingDataDomain,
@@ -999,7 +1043,8 @@ export class MarkLifecycleV2 {
 					this.#bandDomainFromData,
 					this.#markId,
 					this.#reactiveConfig.domain,
-					this.#reactiveConfig.nulls === 'drop'
+					this.#reactiveConfig.nulls === 'drop',
+					superseded
 				),
 				fetchGlobalAggregates(
 					this.#queryEngine,
@@ -1012,13 +1057,14 @@ export class MarkLifecycleV2 {
 					this.#chartContext.xScaleState as ContinuousScaleState | null,
 					this.#chartContext.yScaleState as ContinuousScaleState | null,
 					this.#colorScaleState,
-					this.#markId
+					this.#markId,
+					superseded
 				),
 				this.#fetchFieldStats(),
 				this.#ensureIdentityColumns()
 			]);
 
-			if (this.#destroyed) return;
+			if (superseded()) return;
 
 			this.#schema = buildSchemaMap(schemaColumns);
 			if (aggResult.globalAggregatesSet) this.#globalAggregatesSet = true;
@@ -1468,6 +1514,12 @@ export class MarkLifecycleV2 {
 		// the view. Failing here gives a message naming the mark and the fields;
 		// continuing would fail at the binder with neither.
 		await this.#queryEngine.ensureColumns(this.#config.table, { categorical });
+		// Torn down while the dims were built: the scales below may have been
+		// dropped with a ChartScales the chart has since replaced. Only a
+		// destroyed lifecycle, not a superseded setup run: identity goes to the
+		// scales read live from the chart context, so a live run handing it
+		// over is harmless.
+		if (this.#destroyed) return;
 		for (const { key } of categorical) this.#identityFields.add(key);
 
 		// Tell the transforms which dim each categorical channel is identified by.
@@ -2043,6 +2095,8 @@ export class MarkLifecycleV2 {
 
 	async #writeTooltipTable(data: DataAccessor): Promise<void> {
 		const tableName = this.#tooltipTableName;
+		// Before any statement: a write that fails part way can leave a table.
+		this.#tooltipTableWritten = true;
 		try {
 			if (!this.#transformCompiler.hasJSTransforms()) {
 				// Path A: Build a query with original field names (not CAST-wrapped).
@@ -2485,6 +2539,17 @@ export class MarkLifecycleV2 {
 		// where destroy() is called synchronously before Svelte processes
 		// effect teardown.
 		this.#tooltipTableReady = false;
+		this.#dropTooltipTable();
+	}
+
+	#dropTooltipTable(): void {
+		if (!this.#tooltipTableWritten) return;
+		this.#tooltipTableWritten = false;
 		this.#queryEngine.exec(`DROP TABLE IF EXISTS "${this.#tooltipTableName}"`).catch(() => {});
 	}
+}
+
+/** Same scale states and types, compared by identity. */
+function sameInputs(a: readonly unknown[], b: readonly unknown[]): boolean {
+	return a.length === b.length && a.every((v, i) => v === b[i]);
 }

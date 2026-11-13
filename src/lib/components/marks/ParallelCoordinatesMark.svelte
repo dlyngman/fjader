@@ -124,12 +124,13 @@
 
 	const reactiveConfig = buildReactiveConfig(entry);
 
-	let xScaleId = $derived(chartContext.xScaleState?.id);
+	// Rebuild only when a scale is replaced, not on its first resolution.
+	let scaleGeneration = $derived(chartContext.scaleGeneration);
 
 	// --- SETUP LIFECYCLE ---
 	$effect(() => {
 		void config;
-		void xScaleId;
+		void scaleGeneration;
 		untrack(() => {
 			setup?.destroy();
 			setup = null;
