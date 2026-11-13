@@ -221,6 +221,15 @@ interface ChartRegistrationConfig {
 	entranceGate?: EntranceGate | null;
 }
 
+/** A chart's entrance starting, for observeEntrances. */
+export interface ChartEntrance {
+	chartId: string;
+	/** The chart's canvas, to find it in the page (a label on an ancestor). */
+	canvas: HTMLCanvasElement;
+	/** performance.now() when the entrance started. */
+	time: number;
+}
+
 /**
  * A chart's entrance once the viewer's preference is applied: under reduced
  * motion, 'auto' fades rather than grows. Opacity is not motion, so a fade
@@ -1109,6 +1118,19 @@ export class GPUCoordinator {
 	 * Started here rather than on registration, so an off-screen chart enters
 	 * when it is first drawn, which is when it can be seen.
 	 */
+	/** Debug listeners for chart entrances (observeEntrances). */
+	#entranceObservers = new Set<(entrance: ChartEntrance) => void>();
+
+	/**
+	 * Listen to every chart's entrance as it starts: when its marks have their
+	 * first data and it first draws. For measuring load (how soon charts enter);
+	 * returns the unsubscribe. Costs nothing while no one listens.
+	 */
+	observeEntrances(listener: (entrance: ChartEntrance) => void): () => void {
+		this.#entranceObservers.add(listener);
+		return () => this.#entranceObservers.delete(listener);
+	}
+
 	#startEntranceIfDrawing(chart: ChartConfig, scalesKnown: boolean): void {
 		// Every mark's first data first, so the chart enters once, whole. Only
 		// this chart's marks: a chart sharing a scale that lands later springs
@@ -1132,6 +1154,20 @@ export class GPUCoordinator {
 		}
 		if (!drawing) return;
 		chart.entranceStarted = true;
+		if (this.#entranceObservers.size > 0) {
+			const entrance: ChartEntrance = {
+				chartId: chart.chartId,
+				canvas: chart.canvas,
+				time: performance.now()
+			};
+			for (const observe of this.#entranceObservers) {
+				try {
+					observe(entrance);
+				} catch (e) {
+					console.error('[GPUCoordinator] entrance observer threw:', e);
+				}
+			}
+		}
 		if (chart.entranceMode === 'none') return;
 		const clock = new TransitionClock({
 			loop: this,
