@@ -2219,7 +2219,9 @@ export class GPUCoordinator {
 	 */
 	/**
 	 * Debug: every transition that starts, and whether it animates or lands at
-	 * once (see transition-log). Returns the unsubscribe.
+	 * once (see transition-log). Returns the unsubscribe. Forwards to the
+	 * page-wide log: records from every coordinator in the document arrive
+	 * here, so filter by chart id.
 	 */
 	observeTransitions(listener: (record: TransitionRecord) => void): () => void {
 		return observeTransitions(listener);

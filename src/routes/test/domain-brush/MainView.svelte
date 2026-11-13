@@ -1,7 +1,7 @@
 <script>
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
-	import { stackY } from '$lib';
+	import { stackY, topN } from '$lib';
 	import { count, sum } from '@uwdata/mosaic-sql';
 	import Toggle from '$lib/interactors/Toggle.svelte';
 	import {
@@ -183,9 +183,36 @@
 							fill="#4c78a8"
 							selection="series"
 							sort={{ x: 'y', order: 'desc' }}
+							transforms={[topN(5, { includeOthers: true })]}
 						/>
 					{/snippet}
 				</WebGPUCanvas>
+			{/snippet}
+		</ChartContainer>
+	</div>
+{/snippet}
+
+{#snippet bucketPicker()}
+	<!-- Same group as the bars: a bucket inside Other splits the Other bar, with
+	     no query. On screen, that split slides (a click is a change you made). -->
+	<div class="toggle-wrapper">
+		<ChartContainer xLabel="bucket (click one in Other)" yLabel="rows">
+			{#snippet canvas()}
+				<WebGPUCanvas>
+					{#snippet canvasComponents()}
+						<BarMarkY
+							table="timeseries_split"
+							x="bucket"
+							y={count()}
+							fill="#999"
+							selection="series"
+						/>
+					{/snippet}
+				</WebGPUCanvas>
+			{/snippet}
+
+			{#snippet interactors()}
+				<Toggle selection="series" field="bucket" />
 			{/snippet}
 		</ChartContainer>
 	</div>
@@ -261,7 +288,9 @@
 			down: one stacked fit, from the toggled data; the bars' morph and reorder snap. (3) Below,
 			zoom the stacked chart's y axis; scroll up, toggle, scroll back; then brush the lower
 			overview: that fit SPRINGS. (4) Reload, toggle at once, scroll down: the bars enter, with no
-			morph on top. (5) Brush the lower overview: fits SPRING.
+			morph on top. (5) Brush the lower overview: fits SPRING. (6) Toggle series b here, scroll down
+			(the bars catch up, snapped), then click a bucket in the picker below the bars that sits
+			inside their Other bar: the split slides, a bars morph SPRING.
 			<a href="?">Default layout</a>
 		</p>
 	{:else}
@@ -280,6 +309,7 @@
 			{@render detail()}
 			{@render stacked()}
 			{@render bars()}
+			{@render bucketPicker()}
 		{:else}
 			{@render detail()}
 			{@render overview()}

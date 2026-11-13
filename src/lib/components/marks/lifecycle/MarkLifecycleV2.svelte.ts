@@ -2052,13 +2052,16 @@ export class MarkLifecycleV2 {
 	}
 
 	/**
-	 * Whether the current data lands without animating: a catch-up result (the
-	 * chart came back into view stale), a change nobody just made. The mark's
-	 * renderer lands its morphs on it. Reactive through `dataVersion`, which
-	 * the cause is set with.
+	 * The data version that lands without animating, or 0: a catch-up result
+	 * (the chart came back into view stale), a change nobody just made. A
+	 * version, not a flag: the cause stays set until the next result, and a
+	 * renderer lands only its FIRST write of this version. Later writes of the
+	 * same data (an Other split on a click, a JS transform's parameter) are
+	 * changes someone just made, and animate. Reactive through `dataVersion`,
+	 * which the cause is set with.
 	 */
-	get dataLands(): boolean {
-		return this.dataVersion > 0 && this.#handle?.resultCause === 'catchUp';
+	get landsFor(): number {
+		return this.#handle?.resultCause === 'catchUp' ? this.dataVersion : 0;
 	}
 
 	/**

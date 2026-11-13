@@ -64,7 +64,7 @@
 	// A band axis's line opacity follows its layout: when that landed at once
 	// (a catch-up result), the opacity lands with it.
 	const landedOf = (scale: ScaleStateInstance | null, band: boolean) =>
-		band && !!scale && (scale as BandScaleState).slotsLanded;
+		band && scale ? (scale as BandScaleState).slotsLandedLayout : 0;
 	const xLands = $derived(landedOf(xScale, xBand));
 	const yLands = $derived(landedOf(yScale, yBand));
 </script>
@@ -74,7 +74,7 @@
 		axis="x"
 		positions={xTickValues}
 		alpha={xAlpha}
-		lands={xLands}
+		landsFor={xLands}
 		bandAxis={xBand ? 'x' : null}
 		{color}
 		{lineWidth}
@@ -86,7 +86,7 @@
 		axis="y"
 		positions={yTickValues}
 		alpha={yAlpha}
-		lands={yLands}
+		landsFor={yLands}
 		bandAxis={yBand ? 'y' : null}
 		{color}
 		{lineWidth}

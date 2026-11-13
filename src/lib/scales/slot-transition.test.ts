@@ -210,3 +210,17 @@ describe('SlotTransition instant layout', () => {
 		expect([s.slotOf(0), s.slotOf(1), s.slotOf(2)]).toEqual([1, 0, 2]);
 	});
 });
+
+describe('SlotTransition landedLayout', () => {
+	it('names an instant layout, once, and is 0 after an animated one', () => {
+		const s = laidOut();
+		expect(s.landedLayout).toBe(0);
+		s.layout('ids', [2, 1, 0], 3, true);
+		const first = s.landedLayout;
+		expect(first).toBeGreaterThan(0);
+		s.layout('ids', [0, 1, 2], 3, true);
+		expect(s.landedLayout).toBeGreaterThan(first);
+		s.layout('ids', [2, 1, 0], 3);
+		expect(s.landedLayout).toBe(0);
+	});
+});

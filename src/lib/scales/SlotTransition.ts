@@ -307,19 +307,23 @@ export class SlotTransition implements SlotSource {
 			if (id >= 0 && id < target.length) target[id] = slot;
 		}
 
-		this.#landed = instant;
+		this.#layouts++;
+		this.#landedLayout = instant ? this.#layouts : 0;
 		this.#retarget(shown, instant);
 	}
 
 	/**
-	 * Whether the latest layout landed at once (an instant layout). What
-	 * follows from a layout, like a band grid's line opacity, lands with it.
+	 * The latest layout's number if it landed at once (an instant layout), 0
+	 * otherwise. What follows from a layout, like a band grid's line opacity,
+	 * lands with it, once: a number, so a consumer lands only its first write
+	 * after that layout.
 	 */
-	get landed(): boolean {
-		return this.#landed;
+	get landedLayout(): number {
+		return this.#landedLayout;
 	}
 
-	#landed = false;
+	#layouts = 0;
+	#landedLayout = 0;
 
 	/**
 	 * Start a transition without changing what is displayed.

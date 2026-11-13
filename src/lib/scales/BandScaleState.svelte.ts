@@ -816,13 +816,13 @@ export class BandScaleState {
 	 * entering one. Changes on every layout.
 	 */
 	/**
-	 * Whether the slots' latest layout landed at once (a catch-up result): what
-	 * follows from it, like `tickVisibility`, lands too. Reactive through
-	 * `_version`, which every layout bumps.
+	 * The slots' latest layout if it landed at once (a catch-up result), else 0:
+	 * what follows from it, like `tickVisibility`, lands with it. Reactive
+	 * through `_version`, which every layout bumps.
 	 */
-	get slotsLanded(): boolean {
+	get slotsLandedLayout(): number {
 		void this._version;
-		return this.#slots.landed;
+		return this.#slots.landedLayout;
 	}
 
 	tickVisibility(): Float32Array {

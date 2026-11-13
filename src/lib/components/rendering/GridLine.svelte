@@ -44,8 +44,11 @@
 		 * way a bar's height is. Omitted, every line is fully drawn.
 		 */
 		alpha?: Float32Array | null;
-		/** The data lands without morphing: a catch-up result (MarkLifecycleV2.dataLands). */
-		lands?: boolean;
+		/**
+		 * The band layout whose first opacity write lands without morphing, or 0
+		 * (a layout that landed at once; see BandScaleState.slotsLandedLayout).
+		 */
+		landsFor?: number;
 		/** The band axis these lines belong to, when `alpha` should morph. */
 		bandAxis?: 'x' | 'y' | null;
 		color?: [number, number, number, number];
@@ -57,7 +60,7 @@
 		axis,
 		positions,
 		alpha = null,
-		lands = false,
+		landsFor = 0,
 		bandAxis = null,
 		color = [0.8, 0.8, 0.8, 0.3],
 		lineWidth = 1,
@@ -178,14 +181,15 @@ ${placement}
 	// the positions are that id list — which is what writeMorphed checks rows
 	// against.
 	const morphs = $derived(!!bandAxis && !!alpha && alpha.length === positions?.length);
+	// The landed layout last written; plain, read and set by the write alone.
+	let lastLandedLayout = 0;
 	$effect(() => {
 		if (!renderer?.resourcesCreated || !morphs) return;
-		renderer.writeMorphed(
-			bandAxis!,
-			positions,
-			[[BINDINGS.ALPHA, alpha!]],
-			lands ? 'all' : undefined
-		);
+		// Only the first write after that layout lands: the opacity it changed.
+		const first = landsFor !== lastLandedLayout;
+		lastLandedLayout = landsFor;
+		const land = first && landsFor !== 0 ? 'all' : undefined;
+		renderer.writeMorphed(bandAxis!, positions, [[BINDINGS.ALPHA, alpha!]], land);
 	});
 
 	// Otherwise every line is fully drawn. Keyed on the line COUNT alone, because

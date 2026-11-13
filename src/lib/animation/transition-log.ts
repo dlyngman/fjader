@@ -11,7 +11,11 @@
  * - `slots`: a band axis's categories moving to new slots
  *
  * The cause is not recorded: the emitters do not know it, and the page does
- * (it knows what it just did). Free while nothing observes: each emitter asks
+ * (it knows what it just did).
+ *
+ * MODULE-GLOBAL: one log per page (per module instance), not per coordinator.
+ * Two coordinators in one document (notebook cells, Streamlit iframes sharing
+ * it) see each other's records; filter by chart id. Fine for a debug hook. Free while nothing observes: each emitter asks
  * `transitionsObserved()` before building a record.
  */
 

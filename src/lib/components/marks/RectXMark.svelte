@@ -361,7 +361,7 @@
 		constantColor={markColor.constantColor}
 		facetData={setup?.facetData}
 		dataVersion={setup?.dataVersion || 0}
-		lands={setup?.dataLands ?? false}
+		landsFor={setup?.landsFor ?? 0}
 		bandAxis={setup?.alignedBand ?? null}
 		grow={hasExplicitBounds ? null : 'x'}
 		inset={entry.inset ?? 0.5}
