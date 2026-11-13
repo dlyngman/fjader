@@ -110,28 +110,30 @@
 	);
 
 	// --- ChartConfig registration (data-driven only) ---
-	const entry = $derived.by(() => {
-		if (!table) return null;
-		return chartContext.config.registerMark(markId, 'ruley', {
-			table: () => table,
-			y: () => y,
-			x1: () => x1,
-			x2: () => x2,
-			stroke: () => stroke,
-			scheme: () => scheme,
-			opacity: () => opacity,
-			transforms: () => transforms,
-			selection: () => selection,
-			selectionResponse: () => selectionResponse,
-			nulls: () => nulls,
-			limit: () => limit,
-			sort: () => sort,
-			domain: () => domain,
-			tooltip: () => tooltip,
-			tip: () => tip,
-			fitDomain: () => fitDomain
-		});
-	});
+	// Registered once, at mount, like every other mark. Not in a $derived:
+	// registering writes the config's map, and a derived must not write state.
+	// A rule without a table draws constants and has no config entry.
+	const entry = untrack(() => table)
+		? chartContext.config.registerMark(markId, 'ruley', {
+				table: () => table,
+				y: () => y,
+				x1: () => x1,
+				x2: () => x2,
+				stroke: () => stroke,
+				scheme: () => scheme,
+				opacity: () => opacity,
+				transforms: () => transforms,
+				selection: () => selection,
+				selectionResponse: () => selectionResponse,
+				nulls: () => nulls,
+				limit: () => limit,
+				sort: () => sort,
+				domain: () => domain,
+				tooltip: () => tooltip,
+				tip: () => tip,
+				fitDomain: () => fitDomain
+			})
+		: null;
 
 	const channelSelect = $derived.by(() => {
 		if (!entry) return {};
@@ -287,7 +289,7 @@
 
 	onDestroy(() => {
 		setup?.destroy();
-		if (table) chartContext.config.unregisterMark(markId);
+		if (entry) chartContext.config.unregisterMark(markId);
 		gpuCoordinator?.releaseRetained(markId);
 	});
 </script>
