@@ -68,6 +68,8 @@
 		share?: SplitProp | null;
 		facetData?: Float32Array | null;
 		dataVersion: number;
+		/** The data lands without morphing: a catch-up result (MarkLifecycleV2.dataLands). */
+		lands?: boolean;
 		zIndex?: number;
 		colorMode?: number;
 		colorScaleIndex?: number;
@@ -108,6 +110,7 @@
 		share = null,
 		facetData = null,
 		dataVersion,
+		lands = false,
 		zIndex = 0,
 		colorMode = 0,
 		colorScaleIndex = 0,
@@ -359,7 +362,7 @@
 		// split and the bar land together. A share that changes alone (a click)
 		// starts a transition of its own on that clock.
 		const split = splitData ? ([[BINDINGS.SHARE, splitData]] as const) : [];
-		const land = splitData && !splitSlides ? [BINDINGS.SHARE] : undefined;
+		const land = lands ? 'all' : splitData && !splitSlides ? [BINDINGS.SHARE] : undefined;
 		if (bandAxis === 'x') {
 			renderer.writeMorphed(
 				'x',

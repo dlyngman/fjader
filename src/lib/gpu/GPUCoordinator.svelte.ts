@@ -1,3 +1,4 @@
+import { observeTransitions, type TransitionRecord } from '$lib/animation/transition-log';
 import { setContext, getContext } from 'svelte';
 import { AnimationLoop } from '$lib/animation';
 import {
@@ -2216,6 +2217,19 @@ export class GPUCoordinator {
 	 * Effective visibility = IntersectionObserver visible AND page visible.
 	 * Used by ChartCell to toggle Mosaic client.enabled.
 	 */
+	/**
+	 * Debug: every transition that starts, and whether it animates or lands at
+	 * once (see transition-log). Returns the unsubscribe.
+	 */
+	observeTransitions(listener: (record: TransitionRecord) => void): () => void {
+		return observeTransitions(listener);
+	}
+
+	/** Whether a registered chart is visible: in view (with the 200 px margin) and the page shown. */
+	isChartVisible(chartId: string): boolean {
+		return this.#registeredCharts.get(chartId)?.visible ?? false;
+	}
+
 	setVisibilityCallback(chartId: string, callback: (visible: boolean) => void): () => void {
 		this.#visibilityCallbacks.set(chartId, callback);
 		// Callbacks hear changes only. One set after the chart was already found

@@ -370,6 +370,7 @@
 		constantColor={markColor.constantColor}
 		facetData={setup?.facetData}
 		dataVersion={setup?.dataVersion || 0}
+		lands={setup?.dataLands ?? false}
 		bandAxis={null}
 		inset={entry.inset ?? 0.5}
 		dx={entry.dx ?? 0}

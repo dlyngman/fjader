@@ -181,3 +181,32 @@ describe('SlotTransition per-id reads', () => {
 		for (let id = 0; id < 3; id++) expect(after[id]).toBeCloseTo(midway[id], 6);
 	});
 });
+
+describe('SlotTransition instant layout', () => {
+	it('lands a reorder at once: every id in its new slot, nothing animating', () => {
+		const s = laidOut();
+		s.layout('ids', [2, 0, 1], 3, true);
+		expect(s.isAnimating).toBe(false);
+		expect(s.t).toBe(1);
+		expect([s.slotOf(0), s.slotOf(1), s.slotOf(2)]).toEqual([1, 2, 0]);
+	});
+
+	it('drops a leaver and shows an entrant at once', () => {
+		const s = laidOut();
+		s.layout('ids', [0, 2], 3, true);
+		expect(s.animatedCount).toBe(2);
+		expect(s.alphaOf(1)).toBe(0);
+		s.layout('ids', [0, 1, 2], 3, true);
+		expect(s.alphaOf(1)).toBe(1);
+		expect(s.slotOf(1)).toBe(1);
+	});
+
+	it('lands from mid-flight, where a reorder was still travelling', () => {
+		const s = laidOut();
+		s.layout('ids', [2, 1, 0], 3);
+		stepTo(s, 10);
+		s.layout('ids', [1, 0, 2], 3, true);
+		expect(s.isAnimating).toBe(false);
+		expect([s.slotOf(0), s.slotOf(1), s.slotOf(2)]).toEqual([1, 0, 2]);
+	});
+});

@@ -288,6 +288,16 @@ export class TransitionClock {
 	}
 
 	/**
+	 * End the transition now, as the loop would at rest: off the loop, `t` on
+	 * 1, `onRest` called. For an update that lands without animating (a
+	 * catch-up result), including one that lands mid-flight.
+	 */
+	finish(): void {
+		if (this.#running) this.#loop?.removeAnimatedSource(this);
+		this._markAtRest();
+	}
+
+	/**
 	 * Whether the loop can stop driving this.
 	 *
 	 * One comparison, not a scan over everything animating — which is the

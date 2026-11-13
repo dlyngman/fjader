@@ -29,7 +29,7 @@ import {
 import { Preagg } from './preagg/Preagg';
 import type { ActivationSource } from './preagg/plan';
 export type { ActiveDim, ActivationSource } from './preagg/plan';
-import { MarkHandle, type QueryParams } from './MarkHandle.svelte';
+import { MarkHandle, type QueryParams, type ResultCause } from './MarkHandle.svelte';
 import {
 	CategoricalIdentity,
 	type DimValue,
@@ -920,7 +920,7 @@ export class QueryEngine {
 		handle._onActivate = () => {
 			if (!reg.stale) return false;
 			reg.stale = false;
-			this.#queryMark(markId, reg);
+			this.#queryMark(markId, reg, 'catchUp');
 			return true;
 		};
 
@@ -1006,8 +1006,15 @@ export class QueryEngine {
 	 * Query a single mark: on a filter change or a params
 	 * change (via _onParamsChange). Reads a preagg table when one answers; if
 	 * that read fails, the table is set aside and the base table is queried once.
+	 *
+	 * `cause` travels with this query's own promise chain to `_setResult`, not
+	 * on the handle: a catch-up in flight and an update waiting behind it are
+	 * two chains, so each result lands with its own cause. A filter change
+	 * during a catch-up lets the catch-up land (without animating) and the
+	 * update then animates from there; a superseded pending query rejects, and
+	 * its chain sets nothing.
 	 */
-	#queryMark(markId: string, reg: MarkRegistration): void {
+	#queryMark(markId: string, reg: MarkRegistration, cause: ResultCause = 'update'): void {
 		const { handle } = reg;
 		// Off screen and already holding data for this registration: nothing to
 		// show for it now. A registration's first query still runs (it can feed
@@ -1034,7 +1041,7 @@ export class QueryEngine {
 				if (!baseSQL) throw e;
 				return this.query(baseSQL, { callerId: markId });
 			})
-			.then((table) => handle._setResult(table))
+			.then((table) => handle._setResult(table, cause))
 			.catch((e) => {
 				if ((e as Error)?.name === 'AbortError') return;
 				handle._setError(e as Error);

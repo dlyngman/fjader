@@ -465,6 +465,15 @@ export class MarkLifecycleV2 {
 
 	// --- fitDomain ---
 	#fitDomainTimeout: ReturnType<typeof setTimeout> | null = null;
+	/**
+	 * The data version whose fit snaps instead of springing: the version the
+	 * chart came back into view with, or its catch-up result's. A spring means
+	 * the user just caused the change; a return to view is not that. Tied to a
+	 * version rather than a flag waiting for the next fit: a fit issued for any
+	 * other reason (a driving-axis zoom, later data) or skipped clears it, and
+	 * a superseded fit for the same version keeps it.
+	 */
+	#snapFitVersion: number | null = null;
 	/** Debounces a refit after a data change (#refitFromData). */
 	#refitTimeout: ReturnType<typeof setTimeout> | null = null;
 	#fitDomainLastTarget: [number, number] = [0, 0];
@@ -828,6 +837,7 @@ export class MarkLifecycleV2 {
 			untrack(() => {
 				const cameBack = visible && !handle.active;
 				const caughtUp = handle.setActive(visible);
+				if (!visible) this.#snapFitVersion = null;
 				if (cameBack && !caughtUp) this.#refitOnReturn();
 			});
 		});
@@ -941,7 +951,9 @@ export class MarkLifecycleV2 {
 				};
 				// Sent from this effect, not a timer, so it goes out before a preagg
 				// build the same pointer enter queues (see Preagg.activate).
-				if (dataChanged) this.#tooltipWriteTimeout = setTimeout(write, 300);
+				// A catch-up result is one result, with nothing to settle.
+				const catchUp = this.#handle?.resultCause === 'catchUp';
+				if (dataChanged && !catchUp) this.#tooltipWriteTimeout = setTimeout(write, 300);
 				else write();
 			});
 			return () => clearTimeout(this.#tooltipWriteTimeout!);
@@ -960,12 +972,16 @@ export class MarkLifecycleV2 {
 			// Untracked: a return to view refits from the setActive effect, which
 			// knows whether a catch-up result is coming.
 			if (!untrack(() => this.#chartContext.visible ?? true)) return;
+			// A catch-up result's fit snaps, and has no data to wait for.
+			const catchUp = untrack(() => this.#handle?.resultCause === 'catchUp');
+			this.#snapFitVersion = catchUp ? dataVersion : null;
 			// With JS transforms the fit reads the tooltip table, and a data change
 			// refits after its write (#onTooltipTableWritten).
 			if (this.#transformCompiler.hasJSTransforms()) return;
 			untrack(() => {
 				clearTimeout(this.#refitTimeout!);
-				this.#refitTimeout = setTimeout(() => this.#refitFromData(), 300);
+				if (catchUp) this.#refitFromData();
+				else this.#refitTimeout = setTimeout(() => this.#refitFromData(), 300);
 			});
 			return () => clearTimeout(this.#refitTimeout!);
 		});
@@ -975,11 +991,6 @@ export class MarkLifecycleV2 {
 			const fitDomain = this.#reactiveConfig.fitDomain;
 			if (!fitDomain) return;
 			if (!this.#dataDerivedDomainsSet) return;
-			// Off screen, like the mark's re-queries (MarkHandle.active): no fit.
-			// Read untracked: the refit-from-data effect fits once when the chart
-			// is back, at the driving axis's domain then; tracking it here too sent
-			// a second fit for the same return.
-			if (!untrack(() => this.#chartContext.visible ?? true)) return;
 
 			const fittedAxis = this.#resolveFittedAxis(fitDomain);
 			if (!fittedAxis) return;
@@ -997,6 +1008,16 @@ export class MarkLifecycleV2 {
 			const fittedUserDriven = (fittedSS as ContinuousScaleState | null)?.userDriven ?? false;
 			const drivingUserDriven = (drivingSS as ContinuousScaleState).userDriven;
 
+			// Off screen, like the mark's re-queries (MarkHandle.active): no fit.
+			// Read untracked: the return to view fits once (#refitOnReturn, or
+			// the catch-up result), at the driving axis's domain then; tracking
+			// it here too sent a second fit for the same return. Checked only
+			// AFTER the driving domain is read: an effect re-runs on what its last
+			// run read, so returning before that left the effect deaf to the
+			// driving axis after any run off screen, and brushes made once the
+			// chart was back on screen sent no fit at all.
+			if (!untrack(() => this.#chartContext.visible ?? true)) return;
+
 			if (fittedSS) {
 				(fittedSS as ContinuousScaleState).fitDomainActive = true;
 			}
@@ -1008,6 +1029,9 @@ export class MarkLifecycleV2 {
 				if (this.#fitDomainSuppressed && !drivingUserDriven) {
 					this.#fitDomainSuppressed = false;
 				}
+				// The driving axis moved: whatever fit follows is that zoom's, and
+				// springs.
+				this.#snapFitVersion = null;
 				if (this.#fitDomainSuppressed) return;
 
 				clearTimeout(this.#fitDomainTimeout!);
@@ -1460,7 +1484,7 @@ export class MarkLifecycleV2 {
 				this.#bandScaleForDomain('x'),
 				this.#bandScaleForDomain('y'),
 				this.#markId,
-				false, // isRebinning
+				this.#instantFor,
 				this.#colorScaleState
 			);
 			this.#dataDerivedDomainsSet = domainResult.dataDerivedDomainsSet;
@@ -2027,6 +2051,24 @@ export class MarkLifecycleV2 {
 		return groupIndexForResponse(this.#reactiveConfig.selectionResponse, this.#filterGroup.index);
 	}
 
+	/**
+	 * Whether the current data lands without animating: a catch-up result (the
+	 * chart came back into view stale), a change nobody just made. The mark's
+	 * renderer lands its morphs on it. Reactive through `dataVersion`, which
+	 * the cause is set with.
+	 */
+	get dataLands(): boolean {
+		return this.dataVersion > 0 && this.#handle?.resultCause === 'catchUp';
+	}
+
+	/**
+	 * Whether a scale's change from the current result lands at once: a
+	 * catch-up result, on a scale no other visible chart draws. Asked as the
+	 * result is applied, since visibility moves during a scroll.
+	 */
+	#instantFor = (scale: object): boolean =>
+		this.#handle?.resultCause === 'catchUp' && !this.#chartContext.shownElsewhere(scale);
+
 	get dataVersion(): number {
 		return this.#handle?.dataVersion ?? 0;
 	}
@@ -2459,7 +2501,9 @@ export class MarkLifecycleV2 {
 	async #issueFitDomainQuery(
 		fittedAxis: 'x' | 'y',
 		drivingDomain: [number, number] | null,
-		force: boolean = false
+		force: boolean = false,
+		/** A return-to-view fit (#snapFitVersion): lands without a spring. */
+		snap: boolean = false
 	): Promise<void> {
 		if (!force && drivingDomain) {
 			const [lastLo, lastHi] = this.#fitDomainLastTarget;
@@ -2504,10 +2548,13 @@ export class MarkLifecycleV2 {
 			const scaleState =
 				fittedAxis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState;
 			const scaleType = fittedAxis === 'x' ? this.actualXScaleType : this.actualYScaleType;
+			// Asked as it lands: a chart in view that shares the axis keeps the
+			// spring, and everything on the axis moves together through it.
+			const instant = snap && !!scaleState && !this.#chartContext.shownElsewhere(scaleState);
 			if (scaleType === 'time' && scaleState && 'addOffsetExtent' in scaleState) {
-				(scaleState as TimeScaleState).addOffsetExtent([lo, hi], this.#markId);
+				(scaleState as TimeScaleState).addOffsetExtent([lo, hi], this.#markId, { instant });
 			} else if (scaleState && 'addMark' in scaleState) {
-				(scaleState as ContinuousScaleState).addMark([lo, hi], this.#markId);
+				(scaleState as ContinuousScaleState).addMark([lo, hi], this.#markId, { instant });
 			}
 
 			if (drivingDomain) this.#fitDomainLastTarget = [...drivingDomain];
@@ -2600,7 +2647,12 @@ export class MarkLifecycleV2 {
 	#refitFromData(): void {
 		const fitDomain = this.#reactiveConfig.fitDomain;
 		if (!fitDomain) return;
+		// The fit for the snap's version, if this is it; a refit for any other
+		// version springs, and a skipped one gives the snap up.
+		const snap = this.#snapFitVersion !== null && this.#snapFitVersion === this.dataVersion;
+		this.#snapFitVersion = null;
 		if (this.#fitDomainSuppressed) return;
+		if (snap) this.#snapFitVersion = this.dataVersion;
 
 		const fittedAxis = this.#resolveFittedAxis(fitDomain);
 		if (!fittedAxis) return;
@@ -2611,14 +2663,14 @@ export class MarkLifecycleV2 {
 		if (!drivingSS) return;
 
 		if (drivingSS.scaleType === 'band') {
-			this.#issueFitDomainQuery(fittedAxis, null, true);
+			this.#issueFitDomainQuery(fittedAxis, null, true, snap);
 			return;
 		}
 
 		const target = drivingSS.domain?.target;
 		if (!target) return;
 
-		this.#issueFitDomainQuery(fittedAxis, target as [number, number], true);
+		this.#issueFitDomainQuery(fittedAxis, target as [number, number], true, snap);
 	}
 
 	/**
@@ -2629,6 +2681,7 @@ export class MarkLifecycleV2 {
 	 */
 	#refitOnReturn(): void {
 		if (!this.#reactiveConfig.fitDomain || this.dataVersion === 0) return;
+		this.#snapFitVersion = this.dataVersion;
 		if (this.#transformCompiler.hasJSTransforms() && !this.#tooltipTableReady) return;
 		clearTimeout(this.#refitTimeout!);
 		this.#refitFromData();

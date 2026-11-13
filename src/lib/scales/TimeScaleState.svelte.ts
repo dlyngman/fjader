@@ -86,7 +86,8 @@ export class TimeScaleState extends LinearScaleState {
 	 */
 	addDatetimeExtent(
 		datetimeRange: [Date | number | bigint | string, Date | number | bigint | string],
-		markId: string
+		markId: string,
+		options: { instant?: boolean } = {}
 	): void {
 		const minDate = toDate(datetimeRange[0]);
 		const maxDate = toDate(datetimeRange[1]);
@@ -105,7 +106,7 @@ export class TimeScaleState extends LinearScaleState {
 		this.#suppressUpdate = false;
 
 		// Single update with time-aware nice
-		this.updateExtentFromExtents();
+		this.updateExtentFromExtents(true, options.instant);
 	}
 
 	/**
@@ -113,14 +114,18 @@ export class TimeScaleState extends LinearScaleState {
 	 * Useful when data is already in offset form (e.g., from binned queries).
 	 * Converts offsets back to datetimes and delegates to addDatetimeExtent.
 	 */
-	addOffsetExtent(offsetRange: [number, number], markId: string): void {
+	addOffsetExtent(
+		offsetRange: [number, number],
+		markId: string,
+		options: { instant?: boolean } = {}
+	): void {
 		if (!this.#t0) {
 			console.warn(`[TimeScaleState] Cannot add offset extent: t0 not set yet`);
 			return;
 		}
 		const minDate = this.offsetToDate(offsetRange[0])!;
 		const maxDate = this.offsetToDate(offsetRange[1])!;
-		this.addDatetimeExtent([minDate, maxDate], markId);
+		this.addDatetimeExtent([minDate, maxDate], markId, options);
 	}
 
 	/**
@@ -142,12 +147,12 @@ export class TimeScaleState extends LinearScaleState {
 	 * Override: apply time-aware nice instead of linear nice.
 	 * Called by super.addMark via polymorphism.
 	 */
-	updateExtentFromExtents(nice: boolean = true): void {
+	updateExtentFromExtents(nice: boolean = true, instant: boolean = false): void {
 		if (this.#suppressUpdate) return;
 
 		// If no datetime extents, fall through to linear behavior
 		if (this.#datetimeExtents.size === 0) {
-			super.updateExtentFromExtents(nice);
+			super.updateExtentFromExtents(nice, instant);
 			return;
 		}
 
@@ -175,7 +180,7 @@ export class TimeScaleState extends LinearScaleState {
 		}
 
 		this.resetDomainLimits();
-		this.resetZoom();
+		this.resetZoom(instant);
 	}
 
 	// ===========================================================================

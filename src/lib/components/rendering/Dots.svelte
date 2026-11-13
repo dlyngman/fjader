@@ -43,6 +43,8 @@
 		alphaData: Float32Array | null;
 		facetData?: Float32Array | null;
 		dataVersion: number;
+		/** The data lands without morphing: a catch-up result (MarkLifecycleV2.dataLands). */
+		lands?: boolean;
 		zIndex?: number;
 		colorMode?: number;
 		colorScaleIndex?: number;
@@ -74,6 +76,7 @@
 		alphaData,
 		facetData = null,
 		dataVersion,
+		lands = false,
 		zIndex = 0,
 		colorMode = 0,
 		colorScaleIndex = 0,
@@ -269,8 +272,9 @@
 	// design question rather than a consequence of this one.
 	$effect(() => {
 		if (!renderer?.resourcesCreated || !bandAxis) return;
-		if (bandAxis === 'x') renderer.writeMorphed('x', xData, [[BINDINGS.Y, yData]]);
-		else renderer.writeMorphed('y', yData, [[BINDINGS.X, xData]]);
+		const land = lands ? 'all' : undefined;
+		if (bandAxis === 'x') renderer.writeMorphed('x', xData, [[BINDINGS.Y, yData]], land);
+		else renderer.writeMorphed('y', yData, [[BINDINGS.X, xData]], land);
 	});
 	$effect(() => {
 		if (renderer?.resourcesCreated && !morphX) renderer.writeAttribute(BINDINGS.X, xData);

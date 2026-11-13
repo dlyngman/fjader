@@ -379,6 +379,7 @@
 		get visible() {
 			return chartVisibility.visible;
 		},
+		shownElsewhere: (scale) => chartVisibility.shownElsewhere(scale),
 		get hovered() {
 			return chartHover.hovered;
 		},

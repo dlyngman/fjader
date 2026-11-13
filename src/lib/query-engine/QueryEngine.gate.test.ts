@@ -118,6 +118,50 @@ describe('off-screen gate', () => {
 	});
 });
 
+describe('off-screen gate, result cause', () => {
+	/** Each mark query waits for the test to settle it, in order. */
+	function deferQueries(): ((table: object) => Promise<void>)[] {
+		const settle: ((table: object) => Promise<void>)[] = [];
+		vi.spyOn(engine, 'query').mockImplementation((_sql, opts) => {
+			if (opts?.callerId) queried.push(opts.callerId);
+			return new Promise((resolve) => {
+				settle.push(async (table) => {
+					resolve(table as never);
+					// Let the chain's .then deliver it.
+					await new Promise((r) => setTimeout(r, 0));
+				});
+			});
+		});
+		return settle;
+	}
+
+	it('lands a catch-up result as a catch-up', async () => {
+		const h = mark('m', 'a');
+		landed(h);
+		h.setActive(false);
+		engine.onFilterChange(group);
+		const settle = deferQueries();
+		h.setActive(true);
+		await settle[0]({ numRows: 1 });
+		expect(h.resultCause).toBe('catchUp');
+	});
+
+	it('keeps the cause with each query: an update sent during a catch-up lands as one', async () => {
+		const h = mark('m', 'a');
+		landed(h);
+		h.setActive(false);
+		engine.onFilterChange(group);
+		const settle = deferQueries();
+		h.setActive(true);
+		engine.onFilterChange(group);
+		expect(queried).toEqual(['m', 'm']);
+		await settle[0]({ numRows: 1 });
+		expect(h.resultCause).toBe('catchUp');
+		await settle[1]({ numRows: 2 });
+		expect(h.resultCause).toBe('update');
+	});
+});
+
 describe('off-screen gate, re-registration', () => {
 	function register(markId: string, field: string): MarkHandle {
 		return mark(markId, field);

@@ -2,6 +2,7 @@
 // LinearScaleState.svelte.ts - Refactored with SpringPair physics
 // =============================================================================
 
+import { noteTransition, transitionsObserved } from '$lib/animation/transition-log';
 import { scaleLinear } from 'd3-scale';
 import type { ScaleLinear, ScaleContinuousNumeric } from 'd3-scale';
 import { extent as d3Extent } from 'd3-array';
@@ -529,6 +530,15 @@ export class LinearScaleState {
 			if (min > this.#renderMax || max < this.#renderMin) {
 				instant = true;
 			}
+		}
+
+		if (transitionsObserved()) {
+			noteTransition(
+				'domain',
+				instant || !this.entered,
+				() => this._affectedChartsArray,
+				this.name
+			);
 		}
 
 		if (instant || !this.entered) {

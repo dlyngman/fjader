@@ -1,3 +1,4 @@
+import { noteTransition, transitionsObserved } from '$lib/animation/transition-log';
 import { TransitionClock, type ClockLoop } from '$lib/animation';
 import type { SlotSource } from '$lib/gpu/identity-slot-packing';
 
@@ -280,7 +281,18 @@ export class SlotTransition implements SlotSource {
 	 * one). The space is unchanged, existing ids keep their paths, and the copy
 	 * on resize is exactly right.
 	 */
-	layout(space: 'ids' | 'positions', order: ArrayLike<number> | null, idCount: number): void {
+	layout(
+		space: 'ids' | 'positions',
+		order: ArrayLike<number> | null,
+		idCount: number,
+		/**
+		 * Land at once rather than travel: every id takes its new slot, leavers
+		 * go and entrants appear. For a catch-up result, a change nobody just
+		 * made. It settles the clock, which the marks on this axis share: their
+		 * values land with it, which is what the caller wants for its chart.
+		 */
+		instant = false
+	): void {
 		if (space !== this.#space) {
 			this.#space = space;
 			this.#discard();
@@ -295,8 +307,19 @@ export class SlotTransition implements SlotSource {
 			if (id >= 0 && id < target.length) target[id] = slot;
 		}
 
-		this.#retarget(shown);
+		this.#landed = instant;
+		this.#retarget(shown, instant);
 	}
+
+	/**
+	 * Whether the latest layout landed at once (an instant layout). What
+	 * follows from a layout, like a band grid's line opacity, lands with it.
+	 */
+	get landed(): boolean {
+		return this.#landed;
+	}
+
+	#landed = false;
 
 	/**
 	 * Start a transition without changing what is displayed.
@@ -401,7 +424,7 @@ export class SlotTransition implements SlotSource {
 	 * Fold, then point every id at its new slot, and wake the loop if anything
 	 * has somewhere to go. `shown` is how many slots are displayed.
 	 */
-	#retarget(shown: number): void {
+	#retarget(shown: number, instant = false): void {
 		const target = this.#target;
 		const from = this.#from;
 		const to = this.#to;
@@ -478,8 +501,20 @@ export class SlotTransition implements SlotSource {
 
 		// With no loop to drive it, the clock settles inside the restart, through
 		// #onClockRest — the same landing the loop would reach.
-		if (moving) {
+		if (moving && transitionsObserved()) {
+			noteTransition(
+				'slots',
+				instant || settled,
+				() => this.clock._affectedChartsArray,
+				'band slots'
+			);
+		}
+		if (moving && !instant) {
 			this.clock.restart();
+		} else if (moving) {
+			// Landed at once: the end the loop would reach, leavers retired now
+			// (finish calls #onClockRest).
+			this.clock.finish();
 		} else {
 			this.#settle();
 		}

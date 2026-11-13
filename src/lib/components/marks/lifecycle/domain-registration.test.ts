@@ -43,7 +43,7 @@ describe('registerDataDerivedDomains on a band axis', () => {
 			axis === 'x' ? band : null,
 			axis === 'y' ? band : null,
 			'mark-1',
-			false
+			null
 		);
 	}
 

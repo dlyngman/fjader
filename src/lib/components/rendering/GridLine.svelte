@@ -44,6 +44,8 @@
 		 * way a bar's height is. Omitted, every line is fully drawn.
 		 */
 		alpha?: Float32Array | null;
+		/** The data lands without morphing: a catch-up result (MarkLifecycleV2.dataLands). */
+		lands?: boolean;
 		/** The band axis these lines belong to, when `alpha` should morph. */
 		bandAxis?: 'x' | 'y' | null;
 		color?: [number, number, number, number];
@@ -55,6 +57,7 @@
 		axis,
 		positions,
 		alpha = null,
+		lands = false,
 		bandAxis = null,
 		color = [0.8, 0.8, 0.8, 0.3],
 		lineWidth = 1,
@@ -177,7 +180,12 @@ ${placement}
 	const morphs = $derived(!!bandAxis && !!alpha && alpha.length === positions?.length);
 	$effect(() => {
 		if (!renderer?.resourcesCreated || !morphs) return;
-		renderer.writeMorphed(bandAxis!, positions, [[BINDINGS.ALPHA, alpha!]]);
+		renderer.writeMorphed(
+			bandAxis!,
+			positions,
+			[[BINDINGS.ALPHA, alpha!]],
+			lands ? 'all' : undefined
+		);
 	});
 
 	// Otherwise every line is fully drawn. Keyed on the line COUNT alone, because
