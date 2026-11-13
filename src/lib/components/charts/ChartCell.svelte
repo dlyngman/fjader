@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { ScaleGeneration } from '$lib/scales/ScaleGeneration.svelte';
+	import type { ChartVisibility } from './ChartVisibility.svelte';
 	import { setContext, getContext, onMount } from 'svelte';
 	import type { Snippet } from 'svelte';
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
@@ -46,6 +47,8 @@
 		scales: ChartScales;
 		/** The chart's scale replacements; owned by the container, which outlives its ChartScales. */
 		scaleGeneration: ScaleGeneration;
+		/** Whether any of the chart's cells is on screen; this cell reports into it. */
+		chartVisibility: ChartVisibility;
 		chartConfig: ChartConfig;
 		facetingProps?: FacetingProps;
 		gpuCoordinator: GPUCoordinator;
@@ -67,6 +70,7 @@
 		clipPadding = 0,
 		scales,
 		scaleGeneration,
+		chartVisibility,
 		chartConfig,
 		facetingProps = {
 			fx: null,
@@ -226,12 +230,14 @@
 		};
 	});
 
-	// --- Viewport visibility callback (reserved for future use) ---
-	const removeVisibilityCallback = gpuCoordinator.setVisibilityCallback(
-		layout.chartId,
-		(_visible) => {}
+	// --- Viewport visibility: this cell reports into the chart's ---
+	const removeVisibilityCallback = gpuCoordinator.setVisibilityCallback(layout.chartId, (visible) =>
+		chartVisibility.set(layout.chartId, visible)
 	);
-	onMount(() => removeVisibilityCallback);
+	onMount(() => () => {
+		removeVisibilityCallback();
+		chartVisibility.remove(layout.chartId);
+	});
 	onMount(() => () => hoverSettle.leave());
 
 	// --- Scale readiness effect ---
@@ -364,6 +370,9 @@
 		},
 		get scaleGeneration() {
 			return scaleGeneration.value;
+		},
+		get visible() {
+			return chartVisibility.visible;
 		},
 		get yScaleState() {
 			return scales?.yScaleState;

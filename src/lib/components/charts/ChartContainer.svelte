@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { ScaleGeneration } from '$lib/scales/ScaleGeneration.svelte';
+	import { ChartVisibility } from './ChartVisibility.svelte';
 	import { setContext, getContext, onDestroy } from 'svelte';
 	import type { Snippet } from 'svelte';
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
@@ -222,6 +223,8 @@
 	let scales = $state<ChartScales | null>(null);
 	// Survives `scales` being recreated: see ScaleGeneration.
 	const scaleGeneration = new ScaleGeneration(() => scales);
+	// Whether any cell is on screen; the cells report into it.
+	const chartVisibility = new ChartVisibility();
 
 	// Queue for scale registrations that arrive before ChartScales is created.
 	// Marks mount synchronously during render, but ChartScales is created in an
@@ -389,6 +392,9 @@
 		get scaleGeneration() {
 			return scaleGeneration.value;
 		},
+		get visible() {
+			return chartVisibility.visible;
+		},
 		get yScaleState() {
 			return scales?.yScaleState;
 		},
@@ -510,6 +516,7 @@
 						margin={{ top: 20, right: 10, bottom: 35, left: 55 }}
 						{scales}
 						{scaleGeneration}
+						{chartVisibility}
 						{chartConfig}
 						{facetingProps}
 						{gpuCoordinator}
@@ -533,6 +540,7 @@
 			{clipPadding}
 			{scales}
 			{scaleGeneration}
+			{chartVisibility}
 			{chartConfig}
 			{facetingProps}
 			{gpuCoordinator}

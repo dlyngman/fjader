@@ -33,9 +33,20 @@
 	import { bin } from '$lib/sql/bin';
 	import { attachQueryLog } from '$lib/query-engine/debug/query-log';
 
-	const { queryEngine } = initFjader();
+	const { queryEngine, gpuCoordinator } = initFjader();
 	const log = attachQueryLog(queryEngine);
 	let mountedAt = 0;
+	/** When each chart's entrance started, labelled by its section: { chart, time }. */
+	const entrances = [];
+	gpuCoordinator.observeEntrances(({ canvas, chartId, time }) => {
+		const label = canvas.closest('[data-chart]')?.dataset.chart;
+		entrances.push({ chart: label ?? chartId, time });
+	});
+	function report() {
+		log.report();
+		console.log('[query-load] entrances, ms after the charts mounted:');
+		console.table(entrances.map((e) => ({ chart: e.chart, ms: +(e.time - mountedAt).toFixed(0) })));
+	}
 	const mount = page.url.searchParams.get('mount') ?? 'all';
 	let isLoaded = $state(false);
 
@@ -68,8 +79,10 @@
 <div class="page">
 	<p class="note">
 		mount={mount}: {shown.length} charts. Brush chart 1.
-		<button onclick={() => log.report()}>Report (console)</button>
-		<button onclick={() => log.download(`qlog-${mount}.json`, { mountedAt })}>Save log</button>
+		<button onclick={report}>Report (console)</button>
+		<button onclick={() => log.download(`qlog-${mount}.json`, { mountedAt, entrances })}>
+			Save log
+		</button>
 	</p>
 	{#if isLoaded}
 		<div class="grid">

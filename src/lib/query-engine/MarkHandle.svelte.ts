@@ -40,6 +40,29 @@ export class MarkHandle {
 	_onParamsChange: (() => void) | null = null;
 
 	/**
+	 * Whether the mark is on screen (or about to be). The engine does not
+	 * re-query an inactive mark that has its first result: a filter or params
+	 * change only marks it stale, and it queries once, with whatever is current,
+	 * when it becomes active again. Its first query always runs, since the
+	 * first result can feed domains other charts share. Not reactive: the
+	 * engine reads it when it would send.
+	 */
+	get active(): boolean {
+		return this.#active;
+	}
+
+	setActive(active: boolean): void {
+		if (active === this.#active) return;
+		this.#active = active;
+		if (active) this._onActivate?.();
+	}
+
+	#active = true;
+
+	// Engine sets this during registration: query a mark that went stale.
+	_onActivate: (() => void) | null = null;
+
+	/**
 	 * Engine-internal: called to deliver query results.
 	 *
 	 * The table it already holds changes nothing, so it bumps nothing: a cache
