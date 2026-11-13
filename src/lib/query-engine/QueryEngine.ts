@@ -30,6 +30,7 @@ import { Preagg } from './preagg/Preagg';
 import type { ActivationSource } from './preagg/plan';
 export type { ActiveDim, ActivationSource } from './preagg/plan';
 import { MarkHandle, type QueryParams, type ResultCause } from './MarkHandle.svelte';
+import type { SlicedLane } from './sliced-lane';
 import {
 	CategoricalIdentity,
 	type DimValue,
@@ -195,6 +196,13 @@ export interface DuckDBConnection {
 		data: Uint8Array,
 		options: { name: string; create: boolean }
 	): Promise<void>;
+	/**
+	 * Open another connection on the same database whose statements run
+	 * sliced (see SlicedLane): a slow read there no longer blocks this
+	 * connection's queries. DuckDB-WASM via `connectionFrom`; a connection
+	 * without it keeps everything on itself.
+	 */
+	openSlicedLane?(): Promise<SlicedLane>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1152,8 +1160,33 @@ export class QueryEngine {
 			pending.reject(new DOMException('Engine destroyed', 'AbortError'));
 		}
 		this.#pending.clear();
+		// Lanes first: each rejects what it has queued and cancels what runs.
+		await Promise.all([...this.#lanes].map((lane) => lane.close().catch(() => {})));
+		this.#lanes.clear();
 		const conn = this.#conn ?? (this.#connPromise ? await this.#connPromise : null);
 		if (conn) await conn.close();
+	}
+
+	/** Sliced lanes this engine opened, closed with it. */
+	#lanes = new Set<SlicedLane>();
+
+	/**
+	 * Open a sliced lane on the connection, or null when it cannot (a custom
+	 * connection without `openSlicedLane`). The engine owns it: `destroy`
+	 * closes it.
+	 */
+	async openSlicedLane(): Promise<SlicedLane | null> {
+		if (this.#destroyed) throw new Error('QueryEngine has been destroyed');
+		if (!this.#conn) await this.#ensureConnection();
+		const open = this.#conn?.openSlicedLane;
+		if (!open) return null;
+		const lane = await open.call(this.#conn);
+		if (this.#destroyed) {
+			await lane.close();
+			throw new Error('QueryEngine has been destroyed');
+		}
+		this.#lanes.add(lane);
+		return lane;
 	}
 }
 

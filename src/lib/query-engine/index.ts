@@ -48,6 +48,7 @@ export function getFilterGroups(): FilterGroupRegistry {
 
 // Re-exports
 export { initDuckDB, connectionFrom } from './duckdb';
+export type { SlicedLane } from './sliced-lane';
 export type { InitDuckDBOptions } from './duckdb';
 export { QueryEngine } from './QueryEngine';
 export type {

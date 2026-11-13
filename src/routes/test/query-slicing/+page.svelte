@@ -18,6 +18,8 @@
 	import ehWorker from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url';
 	import { onMount } from 'svelte';
 	import { tableFromIPC } from '@uwdata/flechette';
+	import { connectionFrom } from '$lib/query-engine';
+	import type { SlicedLane } from '$lib/query-engine';
 
 	type Conn = duckdb.AsyncDuckDBConnection;
 	let a: Conn;
@@ -43,6 +45,7 @@
 		}
 		a = await db.connect();
 		b = await db.connect();
+		lane = null;
 		ready = true;
 	}
 
@@ -309,6 +312,78 @@
 			add('8 scratch catalog', `${version.get(0)?.v}: ${view}; ${other}; ${txn}`);
 		});
 
+	// 9. fjader's own lane (connectionFrom(a).openSlicedLane): the slow query
+	//    sliced on the lane, a small one on the main connection 50 ms in; then
+	//    the same with an abort at 200 ms; then the batches a lane result
+	//    decodes into against runQuery's, for a 200k-row read.
+	let lane: SlicedLane | null = null;
+	const fjaderLane = () =>
+		exp(async () => {
+			const fj = connectionFrom(a);
+			lane ??= await fj.openSlicedLane!();
+			let t0 = now();
+			const slow = lane.query(SLOW).then((r) => ({ t: now() - t0, polls: r.polls }));
+			await new Promise((r) => setTimeout(r, 50));
+			let ts = now();
+			await fj.queryIPC!(SMALL);
+			const small = now() - ts;
+			const s = await slow;
+			add(
+				'9a fjader lane',
+				`small on the main connection took ${fmt(small)}; slow on the lane ended at ${fmt(s.t)} after ${s.polls} polls`
+			);
+
+			t0 = now();
+			const ctl = new AbortController();
+			const aborted = lane.query(SLOW, ctl.signal).then(
+				() => `completed at ${fmt(now() - t0)}`,
+				(e) => `${e?.name} at ${fmt(now() - t0)}`
+			);
+			await new Promise((r) => setTimeout(r, 200));
+			ctl.abort();
+			const result = await aborted;
+			ts = now();
+			await lane.exec(SMALL);
+			add(
+				'9b fjader lane, abort at 200 ms',
+				`slow: ${result}; next statement on the lane took ${fmt(now() - ts)}`
+			);
+
+			await fj.exec!(
+				'CREATE OR REPLACE TABLE big AS SELECT random()::REAL AS x, random()::REAL AS y FROM range(200000)'
+			);
+			const viaRun = tableFromIPC(await fj.queryIPC!('SELECT x, y FROM big'));
+			const viaLane = tableFromIPC((await lane.query('SELECT x, y FROM big')).ipc);
+			add(
+				'9c batches, 200k rows',
+				`runQuery ${viaRun.getChild('x')!.data.length} batches, lane ${viaLane.getChild('x')!.data.length} batches; ` +
+					`rows ${viaRun.numRows} / ${viaLane.numRows}`
+			);
+		});
+
+	// 10. How types come back, under the current polling setting: run it at
+	//     "default" and at "5 ms" (the select reopens the database with only the
+	//     polling interval in its query config) and compare.
+	const types = () =>
+		exp(async () => {
+			const ipc = await runQuery(
+				a,
+				`SELECT count(*) AS n, sum(i)::BIGINT AS big, 12.345::DECIMAL(10, 3) AS dec,
+				 TIMESTAMP '2024-03-01 12:34:56' AS ts, INTERVAL 90 MINUTE AS dur
+				 FROM range(10) t(i)`
+			);
+			const t = tableFromIPC(ipc);
+			const row = t.get(0) as Record<string, unknown>;
+			const desc = t.schema.fields
+				.map((f) => {
+					const v = row[f.name];
+					const shown = typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v);
+					return `${f.name}: type ${f.type.typeId} ${typeof v} ${shown}`;
+				})
+				.join('; ');
+			add('10 types', desc);
+		});
+
 	onMount(open);
 </script>
 
@@ -336,6 +411,8 @@
 		<button disabled={!ready || running} onclick={largeResult}>7 large result</button>
 		<button disabled={!ready || running} onclick={largeResultBusy}>7b large result, busy</button>
 		<button disabled={!ready || running} onclick={scratchCatalog}>8 scratch catalog</button>
+		<button disabled={!ready || running} onclick={fjaderLane}>9 fjader lane</button>
+		<button disabled={!ready || running} onclick={types}>10 types</button>
 	</div>
 	<p>{ready ? (running ? 'running…' : 'ready') : 'starting DuckDB…'}</p>
 	<table>
