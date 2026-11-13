@@ -71,6 +71,14 @@
 	 * steady state), then sweeps the brush's far edge from 20% to 80% of the
 	 * plot and back over 2 s, one move per frame. Recorded in the log as
 	 * `drag: { start, end }`.
+	 *
+	 * Pointer id 1 is the mouse, always an active pointer, so the brush's
+	 * setPointerCapture succeeds (a failure would start no drag, and the log
+	 * would show no brush queries). That capture is real: the REAL mouse's moves
+	 * also go to chart 1 until the script's pointerup, so don't move the mouse
+	 * during a run. Both pointermove and pointerrawupdate are fired; ChartCell
+	 * handles exactly one of them (rawupdate where the browser has it, outside
+	 * an iframe), so the brush gets one move per frame either way.
 	 */
 	let drag = null;
 	let dragging = $state(false);
@@ -175,6 +183,7 @@
 		<button disabled={!isLoaded || dragging} onclick={scriptedDrag}>
 			{dragging ? 'dragging…' : 'Scripted drag'}
 		</button>
+		{#if dragging}<span>don't move the mouse</span>{/if}
 	</p>
 	{#if isLoaded}
 		<div class="grid">
