@@ -164,10 +164,10 @@
 	<h2>Overview + Detail (Brush-Linked Domain)</h2>
 	{#if below}
 		<p>
-			The fitted charts are below the fold. Scroll down once so they load, back up, brush the
-			overview (or move the brush), then scroll down: each y axis should fit once to the brushed
-			range, with no second animation. To come back stale, also toggle a series before scrolling
-			down: still one stacked fit, from the toggled data.
+			The fitted charts are below the fold. Brush the overview (or move the brush), then scroll
+			down: each y axis should fit once to the brushed range, with no second animation. To come back
+			stale, also toggle a series before scrolling down: still one stacked fit, from the toggled
+			data.
 			<a href="?">Default layout</a>
 		</p>
 	{:else}
