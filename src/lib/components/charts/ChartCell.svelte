@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { ScaleGeneration } from '$lib/scales/ScaleGeneration.svelte';
 	import { setContext, getContext, onMount } from 'svelte';
 	import type { Snippet } from 'svelte';
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
@@ -43,6 +44,8 @@
 		height?: number;
 		clipPadding?: number;
 		scales: ChartScales;
+		/** The chart's scale replacements; owned by the container, which outlives its ChartScales. */
+		scaleGeneration: ScaleGeneration;
 		chartConfig: ChartConfig;
 		facetingProps?: FacetingProps;
 		gpuCoordinator: GPUCoordinator;
@@ -63,6 +66,7 @@
 		height = 250,
 		clipPadding = 0,
 		scales,
+		scaleGeneration,
 		chartConfig,
 		facetingProps = {
 			fx: null,
@@ -357,6 +361,9 @@
 		// Scale states + types — shared
 		get xScaleState() {
 			return scales?.xScaleState;
+		},
+		get scaleGeneration() {
+			return scaleGeneration.value;
 		},
 		get yScaleState() {
 			return scales?.yScaleState;

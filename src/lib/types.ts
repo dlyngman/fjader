@@ -646,6 +646,11 @@ export interface ChartContext {
 
 	// Scale states
 	readonly xScaleState: ScaleStateInstance | null | undefined;
+	/**
+	 * How many times the chart's x or y scale has been replaced by another (not
+	 * its first resolution). Marks rebuild their lifecycle when it changes.
+	 */
+	readonly scaleGeneration: number;
 	readonly yScaleState: ScaleStateInstance | null | undefined;
 	readonly scaleTypes: { x: string; y: string } | null | undefined;
 	readonly scalesReady: boolean | undefined;

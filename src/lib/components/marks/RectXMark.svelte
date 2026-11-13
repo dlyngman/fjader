@@ -207,8 +207,8 @@
 		resolveFitDomain: () => resolvedFitAxis
 	});
 
-	let xScaleId = $derived(chartContext.xScaleState?.id);
-	let yScaleId = $derived(chartContext.yScaleState?.id);
+	// Rebuild only when a scale is replaced, not on its first resolution.
+	let scaleGeneration = $derived(chartContext.scaleGeneration);
 
 	let instanceCount = $derived(computeInstanceCount(setup?.data, x2));
 
@@ -285,7 +285,7 @@
 	// --- SETUP LIFECYCLE ---
 
 	$effect(() => {
-		(void config, xScaleId, yScaleId);
+		(void config, scaleGeneration);
 		untrack(() => {
 			if (setup) {
 				gpuCoordinator?.markForRetain(markId);

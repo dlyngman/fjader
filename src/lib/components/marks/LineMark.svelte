@@ -234,8 +234,8 @@
 		resolveFitDomain: () => (_isOverlay ? undefined : resolvedFitAxis)
 	});
 
-	let xScaleId = $derived(chartContext.xScaleState?.id);
-	let yScaleId = $derived(chartContext.yScaleState?.id);
+	// Rebuild only when a scale is replaced, not on its first resolution.
+	let scaleGeneration = $derived(chartContext.scaleGeneration);
 
 	let instanceCount = $derived(computeInstanceCount(setup?.data, entry.x, entry.y));
 
@@ -270,8 +270,7 @@
 		// changes via setRungParam (LOD window size adjustments should re-query,
 		// not recreate the lifecycle).
 		void channelSelect;
-		void xScaleId;
-		void yScaleId;
+		void scaleGeneration;
 		void effectiveXScaleType;
 		void effectiveYScaleType;
 		untrack(() => {
