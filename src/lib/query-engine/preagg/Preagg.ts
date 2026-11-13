@@ -118,8 +118,13 @@ export class Preagg {
 				// they run at once, and interaction still comes first on its own:
 				// each slice of a build is a poll, a message at the back of the
 				// worker's queue, so mark queries already waiting there are served
-				// before the next slice. A brush query waits at most one slice
-				// (~5 ms) behind a build instead of the whole build.
+				// before the next slice. One query waits at most a slice (~5 ms)
+				// behind a build, not the whole build: measured on 2M rows, an
+				// update's first queries 3-9 ms during a build, 52-57 ms on one
+				// connection. A burst of queries still stretches: the build takes a
+				// slice between two of them, and its polls need main-thread turns
+				// while results decode (+~65 ms on that burst, still under the one
+				// connection's 195 ms median); the build is the one that waits.
 				busy: () => !host.sliced() && host.busy(),
 				stillWanted: (item) => this.#stillWanted(item),
 				dropped: ({ markId, sourceId, build }) => {
