@@ -30,6 +30,7 @@ import { Preagg } from './preagg/Preagg';
 import type { ActivationSource } from './preagg/plan';
 export type { ActiveDim, ActivationSource } from './preagg/plan';
 import { MarkHandle, type QueryParams, type ResultCause } from './MarkHandle.svelte';
+import type { SlicedLane } from './sliced-lane';
 import {
 	CategoricalIdentity,
 	type DimValue,
@@ -195,6 +196,15 @@ export interface DuckDBConnection {
 		data: Uint8Array,
 		options: { name: string; create: boolean }
 	): Promise<void>;
+	/**
+	 * Open another connection on the same database whose statements run
+	 * sliced (see SlicedLane): a slow read there no longer blocks this
+	 * connection's queries. DuckDB-WASM via `connectionFrom`; a connection
+	 * without it keeps everything on itself. The engine opens lanes itself and
+	 * sends through them from `#send`, so every statement keeps its record,
+	 * class and accounting; nothing hands a raw lane to an app.
+	 */
+	openSlicedLane?(): Promise<SlicedLane>;
 }
 
 // ---------------------------------------------------------------------------

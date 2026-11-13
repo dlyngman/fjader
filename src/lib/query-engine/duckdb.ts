@@ -14,6 +14,14 @@
 
 import type { AsyncDuckDBConnection, DuckDBBundles } from '@duckdb/duckdb-wasm';
 import type { DuckDBConnection } from './QueryEngine';
+import { PendingQueryLane, type SlicedLane } from './sliced-lane';
+
+/**
+ * How long the worker runs a sliced statement before serving other messages:
+ * a quick query on another connection waits at most about this long behind a
+ * slow one. Measured in Phase 0: 1 ms at 5 ms, ~50 ms at the default (~100 ms).
+ */
+export const QUERY_POLLING_INTERVAL_MS = 5;
 
 export interface InitDuckDBOptions {
 	/**
@@ -32,14 +40,26 @@ export interface InitDuckDBOptions {
 
 /**
  * Adapt a duckdb-wasm connection to the DuckDBConnection QueryEngine expects,
- * with the fast IPC query path.
+ * with the fast IPC query path, and sliced lanes: further connections on the
+ * same database (`openSlicedLane`).
  *
  *   const db = new duckdb.AsyncDuckDB(logger, worker);
  *   await db.instantiate(…);
+ *   await db.open({ query: { queryPollingInterval: 5 } }); // short slices, see below
  *   await db.registerFileBuffer('cached.parquet', bytes);
- *   initFjader(connectionFrom(await db.connect()));
+ *   initFjader(connectionFrom(await db.connect(), { pollingIntervalMs: 5 }));
+ *
+ * Sliced statements run in slices of the database's `queryPollingInterval`.
+ * At DuckDB's default (~100 ms) a quick query can wait ~50 ms behind a slow
+ * one; open the database with ~5 ms, as `initDuckDB` does. It is a setting of
+ * the database, which this function cannot change or read: say what you set
+ * as `pollingIntervalMs`. Without it, lanes measure their slices and warn if
+ * they run long.
  */
-export function connectionFrom(conn: AsyncDuckDBConnection): DuckDBConnection {
+export function connectionFrom(
+	conn: AsyncDuckDBConnection,
+	options: { pollingIntervalMs?: number } = {}
+): DuckDBConnection {
 	// useUnsafe + bindings.runQuery bypasses Arrow JS deserialization entirely,
 	// returning raw IPC bytes that flechette decodes into zero-copy typed arrays.
 	return {
@@ -60,6 +80,17 @@ export function connectionFrom(conn: AsyncDuckDBConnection): DuckDBConnection {
 		},
 		insertArrowFromIPCStream(data: Uint8Array, options: { name: string; create: boolean }) {
 			return conn.insertArrowFromIPCStream(data, options);
+		},
+		async openSlicedLane(): Promise<SlicedLane> {
+			// Another connection on the same AsyncDuckDB: one catalog, its own
+			// pending query.
+			const lane = await conn.bindings.connect();
+			return lane.useUnsafe(
+				(bindings, connId) =>
+					new PendingQueryLane(bindings, connId, () => lane.close(), {
+						pollingIntervalMs: options.pollingIntervalMs
+					})
+			);
 		}
 	};
 }
@@ -102,5 +133,9 @@ async function doInit({ bundles }: InitDuckDBOptions): Promise<DuckDBConnection>
 	} finally {
 		URL.revokeObjectURL(workerUrl);
 	}
-	return connectionFrom(await db.connect());
+	// Short slices for sliced lanes. Only the polling interval: the query
+	// config's other fields decide how big integers, decimals, timestamps and
+	// durations come back, and stay at their defaults.
+	await db.open({ query: { queryPollingInterval: QUERY_POLLING_INTERVAL_MS } });
+	return connectionFrom(await db.connect(), { pollingIntervalMs: QUERY_POLLING_INTERVAL_MS });
 }
