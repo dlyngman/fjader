@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from ._convert import serialize_value, to_camel_case
 from .interactors import InteractorSpec
@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 _PLOT_FIELDS = (
     "width", "height", "margin", "x_label", "y_label", "fx", "columns", "legend",
     "interactors", "use_selection", "zoom_limit", "pan_limit", "disable_zoom",
+    "entrance",
 )
 
 
@@ -37,6 +38,7 @@ class Plot:
     zoom_limit: int | float | tuple[int | float, int | float] | None = None
     pan_limit: int | float | tuple[int | float, int | float] | None = None
     disable_zoom: str | bool | None = None  # 'x', 'y', 'xy', or True (both)
+    entrance: Literal["auto", "fade", "none"] | None = None
 
     def __init__(self, *marks: Mark, **kwargs: Any) -> None:
         unexpected = set(kwargs) - set(_PLOT_FIELDS)
@@ -174,6 +176,7 @@ def plot(
     zoom_limit: int | float | tuple[int | float, int | float] | None = None,
     pan_limit: int | float | tuple[int | float, int | float] | None = None,
     disable_zoom: str | bool | None = None,
+    entrance: Literal["auto", "fade", "none"] | None = None,
 ) -> Plot:
     """Create a chart with one or more marks and chart-level configuration.
 
@@ -198,6 +201,11 @@ def plot(
         disable_zoom: Disable user zoom/pan on axes — ``'x'``, ``'y'``,
             ``'xy'``, or ``True`` (both). Useful for auto-scaled axes
             driven by ``fit_domain``.
+        entrance: How the marks enter when their data first draws. ``"auto"``
+            (default) grows bars, histograms and areas from 0 and fades the
+            rest; ``"fade"`` fades everything; ``"none"`` shows them at once.
+            The axes never move on load. Reduced motion turns ``"auto"`` into
+            ``"fade"``.
     """
     return Plot(
         *marks,
@@ -207,4 +215,5 @@ def plot(
         use_selection=use_selection,
         zoom_limit=zoom_limit, pan_limit=pan_limit,
         disable_zoom=disable_zoom,
+        entrance=entrance,
     )

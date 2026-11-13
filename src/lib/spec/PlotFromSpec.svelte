@@ -74,6 +74,7 @@
 		yPanLimit={spec.yPanLimit}
 		xDisableZoom={spec.xDisableZoom}
 		yDisableZoom={spec.yDisableZoom}
+		entrance={spec.entrance}
 		{legendPosition}
 	>
 		{#snippet background()}

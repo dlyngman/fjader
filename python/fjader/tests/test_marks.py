@@ -226,3 +226,20 @@ class TestNoneStripping:
         assert "tip" not in d
         assert "tooltipProximity" not in d
         assert set(d.keys()) == {"mark", "table", "x", "y"}
+
+
+class TestEntrance:
+    def test_holds_entrance_serializes_camel_case(self):
+        mark = fj.dot(table="t", x="a", y="b", holds_entrance=False)
+        assert mark.to_mark_dict()["holdsEntrance"] is False
+
+    def test_holds_entrance_omitted_by_default(self):
+        assert "holdsEntrance" not in fj.bar_y(table="t", x="a", y=fj.count()).to_mark_dict()
+
+    def test_plot_entrance(self):
+        spec = fj.plot(fj.dot(table="t", x="a", y="b"), entrance="fade").to_dict()
+        assert spec["plot"]["entrance"] == "fade"
+
+    def test_opts_entrance(self):
+        p = fj.plot(fj.dot(table="t", x="a", y="b")).opts(entrance="none")
+        assert p.to_dict()["plot"]["entrance"] == "none"
