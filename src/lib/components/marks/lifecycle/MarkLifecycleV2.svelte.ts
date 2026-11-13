@@ -465,6 +465,8 @@ export class MarkLifecycleV2 {
 
 	// --- fitDomain ---
 	#fitDomainTimeout: ReturnType<typeof setTimeout> | null = null;
+	/** The chart's visibility as the refit effect last saw it, to notice a return. */
+	#refitSawVisible = true;
 	/** Debounces a refit after a data change (#refitFromData). */
 	#refitTimeout: ReturnType<typeof setTimeout> | null = null;
 	#fitDomainLastTarget: [number, number] = [0, 0];
@@ -943,8 +945,20 @@ export class MarkLifecycleV2 {
 			if (!fitDomain) return;
 			const dataVersion = this.dataVersion;
 			if (dataVersion === 0) return;
-			if (!(this.#chartContext.visible ?? true)) return;
-			if (this.#transformCompiler.hasJSTransforms()) return;
+			const visible = this.#chartContext.visible ?? true;
+			const cameBack = visible && !this.#refitSawVisible;
+			this.#refitSawVisible = visible;
+			if (!visible) return;
+			// With JS transforms the fit reads the tooltip table, and a data change
+			// refits after its write (#onTooltipTableWritten). Coming back into view
+			// with no new data (a shared axis zoomed from another chart meanwhile)
+			// writes nothing, so refit here from the table, which is current.
+			if (this.#transformCompiler.hasJSTransforms()) {
+				if (cameBack && untrack(() => this.#tooltipTableReady)) {
+					untrack(() => this.#refitFromData());
+				}
+				return;
+			}
 			untrack(() => {
 				clearTimeout(this.#refitTimeout!);
 				this.#refitTimeout = setTimeout(() => this.#refitFromData(), 300);
@@ -2213,12 +2227,14 @@ export class MarkLifecycleV2 {
 				const replaceClause =
 					replaceExprs.length > 0 ? ` REPLACE (${replaceExprs.join(', ')})` : '';
 
-				// ORDER BY for zone-map skipping in bounding-box queries: off unless
-				// asked for (tooltip: { sortTable: true }). The table is written when
-				// the pointer enters the chart, so the write is hover latency. Measured
-				// on a 200k-row scatter: 41 ms sorted against 12 ms unsorted, while
-				// hover lookups stayed within a frame either way (median 2.2 against
-				// 2.9 ms, p90 7.3 against 7.5 ms). Much larger tables may want it.
+				// ORDER BY x, so a hover lookup's bounding box could skip row groups
+				// (zone maps): only when asked (`tooltip: { sortTable: true }`). Since
+				// lazy writes the sort is hover latency, and the lookups did not get
+				// faster for it. Measured on a scatter, sorted against unsorted:
+				// 200k rows, write 41 against 12 ms, lookup median 2.2 against 2.9 ms;
+				// 2M rows (17 row groups), write 273 against 70 ms, lookup median 11.3
+				// against 11.4 ms, p90 35 against 30 ms. The lookup's box is wide and
+				// holds most of the cost on dense data, sorted or not.
 				let orderClause = '';
 				const tooltipSortTable =
 					typeof this.#reactiveConfig.tooltip === 'object' &&

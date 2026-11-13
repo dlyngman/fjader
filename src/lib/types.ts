@@ -470,7 +470,16 @@ export interface BaseMarkProps {
 	transforms?: Transform[];
 	sort?: SortConfig | null;
 	domain?: DomainConfig | null;
-	tooltip?: boolean;
+	/**
+	 * Hover tooltips. `true` (the default) or `false`, or options:
+	 *
+	 * - `sortTable`: write the mark's tooltip table sorted by x, so a hover
+	 *   lookup can skip DuckDB row groups outside the pointer's box. Off by
+	 *   default: the sort delays the first hover (the table is written when the
+	 *   pointer enters the chart), and measured up to 2M rows it did not make
+	 *   lookups faster.
+	 */
+	tooltip?: boolean | { sortTable?: boolean };
 	tooltipProximity?: 'x' | 'y' | 'xy';
 	tip?: (FieldRef | '*')[] | false;
 	fitDomain?: 'x' | 'y' | boolean;

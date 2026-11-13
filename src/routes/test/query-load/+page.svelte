@@ -52,7 +52,16 @@
 	const mount = page.url.searchParams.get('mount') ?? 'all';
 	// ?tooltipSort=on: the scatters' tooltip tables written with ORDER BY (the
 	// default is unsorted), to compare write and hover lookup times.
-	const tooltip = page.url.searchParams.get('tooltipSort') === 'on' ? { sortTable: true } : true;
+	const tooltipSort = page.url.searchParams.get('tooltipSort');
+	const tooltip =
+		tooltipSort === 'on'
+			? { sortTable: true }
+			: tooltipSort === 'off'
+				? { sortTable: false }
+				: true;
+	// ?scale=10: the flights table times ten (2M rows), each copy jittered, to
+	// measure on data the size users have.
+	const scale = Math.max(1, Number(page.url.searchParams.get('scale') ?? 1) || 1);
 	let isLoaded = $state(false);
 
 	const charts = [
@@ -76,6 +85,16 @@
 		await queryEngine.exec(
 			msql.loadParquet('flights', `${location.origin}/data/flights-200k.parquet`).toString()
 		);
+		if (scale > 1) {
+			await queryEngine.exec(`
+				CREATE OR REPLACE TABLE flights AS
+				SELECT
+					(delay + CASE WHEN k = 0 THEN 0 ELSE round((random() - 0.5) * 6) END)::SMALLINT AS delay,
+					(distance + CASE WHEN k = 0 THEN 0 ELSE round((random() - 0.5) * 20) END)::SMALLINT AS distance,
+					(time + CASE WHEN k = 0 THEN 0 ELSE (random() - 0.5) * 0.2 END)::FLOAT AS time
+				FROM flights, range(${scale}) r(k)
+			`);
+		}
 		mountedAt = performance.now();
 		isLoaded = true;
 	});
@@ -83,15 +102,18 @@
 
 <div class="page">
 	<p class="note">
-		mount={mount}: {shown.length} charts. Brush chart 1.
+		mount={mount}: {shown.length} charts, {scale * 200}k rows. Brush chart 1.
 		<button onclick={report}>Report (console)</button>
 		<button
 			onclick={() =>
-				log.download(`qlog-${mount}${tooltip === true ? '' : '-sorted'}.json`, {
-					mountedAt,
-					entrances,
-					hovers
-				})}
+				log.download(
+					`qlog-${mount}${scale > 1 ? `-x${scale}` : ''}${tooltipSort ? `-sort-${tooltipSort}` : ''}.json`,
+					{
+						mountedAt,
+						entrances,
+						hovers
+					}
+				)}
 		>
 			Save log
 		</button>
