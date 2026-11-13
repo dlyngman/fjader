@@ -381,4 +381,35 @@ describe('QueryEngine source lanes', () => {
 		expect(opened()).toBe(2);
 		await engine.destroy();
 	});
+
+	it('reads an in-memory base table on the main connection from its first read (the prior)', async () => {
+		const { tableToIPC, tableFromArrays } = await import('@uwdata/flechette');
+		const { conn, log } = laneConnection(() => 30);
+		const ipcOf = conn.queryIPC!;
+		conn.queryIPC = async (sql: string) => {
+			if (sql.includes('information_schema.tables')) {
+				const t = tableFromArrays({ table_type: ['BASE TABLE'], path: [':memory:'] });
+				return tableToIPC(t, { format: 'stream' })!;
+			}
+			if (sql.startsWith('DESCRIBE')) {
+				const t = tableFromArrays({ column_name: ['a'], column_type: ['INTEGER'], null: ['YES'] });
+				return tableToIPC(t, { format: 'stream' })!;
+			}
+			return ipcOf(sql);
+		};
+		const engine = new QueryEngine(conn);
+		await engine.describe('flights');
+		log.length = 0;
+		await engine.query('SELECT min(a)', { source: 'flights' });
+		await engine.query('SELECT a', { source: 'flights', data: true });
+		expect(log).toEqual(['main SELECT min(a)', 'main SELECT a']);
+	});
+
+	it('reads a source the app calls slow on a lane', async () => {
+		const { conn, log } = laneConnection(() => 30);
+		const engine = new QueryEngine(conn);
+		engine.sourceCost('big', 'slow');
+		await engine.query('SELECT a', { source: 'big', data: true });
+		expect(log[0]).toMatch(/^lane/);
+	});
 });

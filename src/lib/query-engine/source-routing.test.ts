@@ -74,4 +74,24 @@ describe('SourceRouting', () => {
 		expect(r.cost('t')).toBe('unknown');
 		expect(r.route('t')).not.toBeNull();
 	});
+
+	it('applies a prior only to an unmeasured, unhinted source', () => {
+		const r = new SourceRouting(4);
+		r.prior('flights', 'fast');
+		expect(r.route('flights')).toBeNull();
+		r.noteLaneRead('view', 40, 200, 1);
+		r.prior('view', 'fast');
+		expect(r.cost('view')).toBe('slow');
+	});
+
+	it("keeps an app's hint over the prior and across a reload, and still lets a read correct it", () => {
+		const r = new SourceRouting(4);
+		r.hint('big_table', 'slow');
+		r.prior('big_table', 'fast');
+		expect(r.cost('big_table')).toBe('slow');
+		r.reset();
+		expect(r.cost('big_table')).toBe('slow');
+		r.noteLaneRead('big_table', 0, 2, 10);
+		expect(r.cost('big_table')).toBe('fast');
+	});
 });

@@ -944,11 +944,12 @@ export class QueryEngine {
 
 	async #fetchDescribe(table: string): Promise<ColumnInfo[]> {
 		const escaped = table.replaceAll('"', '""');
-		const result = await this.#queryRaw(
-			`DESCRIBE "${escaped}"`,
-			{ class: 'interaction' },
-			'describe'
-		);
+		// The source's prior, set before describe() resolves: a mark's setup
+		// reads wait for its schema, so the first of them is routed by it.
+		const [result] = await Promise.all([
+			this.#queryRaw(`DESCRIBE "${escaped}"`, { class: 'interaction' }, 'describe'),
+			this.#classifySource(table)
+		]);
 		const columns: ColumnInfo[] = [];
 		for (let i = 0; i < result.numRows; i++) {
 			const row = result.get(i);
@@ -959,6 +960,46 @@ export class QueryEngine {
 			});
 		}
 		return columns;
+	}
+
+	/**
+	 * Set a source's prior from what it is (SourceRouting): a base or
+	 * temporary table in an in-memory catalog starts fast; a view, or a
+	 * table in an attached database with a path (a file, a URL), stays
+	 * unknown and is read sliced until measured. Only where lanes exist: a
+	 * single connection has nothing to route.
+	 */
+	async #classifySource(table: string): Promise<void> {
+		if (!this.#conn?.openSlicedLane) return;
+		const name = table.replaceAll("'", "''");
+		try {
+			const rows = await this.#queryRaw(
+				`SELECT t.table_type, d.path FROM information_schema.tables t ` +
+					`JOIN duckdb_databases() d ON d.database_name = t.table_catalog ` +
+					`WHERE t.table_name = '${name}'`,
+				{ class: 'interaction' }
+			);
+			if (rows.numRows === 0) return;
+			for (let i = 0; i < rows.numRows; i++) {
+				const row = rows.get(i) as { table_type?: string; path?: string | null };
+				const inMemory = !row.path || row.path === ':memory:';
+				const isTable = row.table_type === 'BASE TABLE' || row.table_type === 'LOCAL TEMPORARY';
+				if (!inMemory || !isTable) return;
+			}
+			this.#routing.prior(table, 'fast');
+		} catch {
+			// Unknown stays unknown: read sliced until measured.
+		}
+	}
+
+	/**
+	 * Tell the engine how a source reads, overriding its prior: `'slow'` for a
+	 * table that is slow to query (it reads sliced, so it never holds up
+	 * other charts), `'fast'` for a view that is cheap (it reads on the main
+	 * connection from its first query). A measured read still corrects it.
+	 */
+	sourceCost(source: string, cost: 'fast' | 'slow'): void {
+		this.#routing.hint(source, cost);
 	}
 
 	/** Clear cached DESCRIBE results. Pass a table name to clear one, or omit for all. */
@@ -1209,6 +1250,8 @@ export class QueryEngine {
 
 		// Use the public query() path — its execute-latest logic ensures
 		// at most 1 inflight + 1 pending per callerId during rapid brushing.
+		// A preagg table is built in memory by fjader: fast until measured.
+		if (preagg) this.#routing.prior(preagg.table, 'fast');
 		// Routed by the table this read reads (SourceRouting): the preagg table
 		// when one answers, else the mark's BASE table. Its identity view reads
 		// the same rows, and the mark's range and stats reads name the base
