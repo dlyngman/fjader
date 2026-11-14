@@ -68,6 +68,7 @@ export type {
 	StatementRecord
 } from './QueryEngine';
 export { mapSqlTypeToJs, buildSchemaMap } from './QueryEngine';
+export type { BuildEvent } from './preagg/Preagg';
 export { MarkHandle } from './MarkHandle.svelte';
 export type { QueryParams } from './MarkHandle.svelte';
 export { FilterGroupRegistry } from './FilterGroupRegistry.svelte';

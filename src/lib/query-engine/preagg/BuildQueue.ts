@@ -40,12 +40,19 @@ export interface BuildQueueHost {
 	 */
 	busy(): boolean;
 	/**
-	 * Whether a build is still wanted, checked when it would be sent: a mark
-	 * re-registered, the view moved or a baked filter changed while it waited.
+	 * Why a build is no longer wanted, checked when it would be sent (a mark
+	 * re-registered, the view moved or a baked filter changed while it
+	 * waited), or null when it still is.
 	 */
-	stillWanted(item: QueuedBuild): boolean;
-	/** A queued build was dropped before it ran, so the next activation plans it again. */
-	dropped(item: QueuedBuild): void;
+	unwanted(item: QueuedBuild): string | null;
+	/** A build is being sent. */
+	started?(item: QueuedBuild): void;
+	/**
+	 * A build was dropped before it ran, or cancelled while running, so the
+	 * next activation plans it again. `reason` says which: a check that
+	 * failed (`unwanted`), 'newer batch', 'cleared' or 'cancelled'.
+	 */
+	dropped(item: QueuedBuild, reason: string): void;
 	built(item: QueuedBuild): void;
 	failed(item: QueuedBuild, error: unknown): void;
 }
@@ -75,6 +82,11 @@ export class BuildQueue {
 	constructor(host: BuildQueueHost, maxWaitMs: number) {
 		this.#host = host;
 		this.#maxWaitMs = maxWaitMs;
+	}
+
+	/** The current hover batch's number, for build records. */
+	get batch(): number {
+		return this.#batch;
 	}
 
 	/** Run a hover's activations as one batch. Nested calls join the outer batch. */
@@ -132,12 +144,14 @@ export class BuildQueue {
 				}
 			}
 			const item = this.#queue.shift()!;
-			if (!this.#host.stillWanted(item)) {
-				this.#drop(item);
+			const reason = this.#host.unwanted(item);
+			if (reason !== null) {
+				this.#drop(item, reason);
 				continue;
 			}
 
 			this.#running = true;
+			this.#host.started?.(item);
 			const abort = new AbortController();
 			this.#current = { item, abort };
 			this.#host
@@ -145,11 +159,11 @@ export class BuildQueue {
 				.then(() => {
 					// Cancelled but finished anyway (the cancel lost the race): the
 					// caller gave it up, so it does not land.
-					if (abort.signal.aborted) this.#host.dropped(item);
+					if (abort.signal.aborted) this.#host.dropped(item, 'cancelled');
 					else this.#host.built(item);
 				})
 				.catch((e) => {
-					if (abort.signal.aborted) this.#host.dropped(item);
+					if (abort.signal.aborted) this.#host.dropped(item, 'cancelled');
 					else this.#host.failed(item, e);
 				})
 				.finally(() => {
@@ -174,7 +188,7 @@ export class BuildQueue {
 
 	/** Drop every queued build and cancel the running one (a data reload). */
 	clear(): void {
-		for (const item of this.#queue) this.#drop(item);
+		for (const item of this.#queue) this.#drop(item, 'cleared');
 		this.#queue = [];
 		this.abortRunning(() => true);
 	}
@@ -194,13 +208,13 @@ export class BuildQueue {
 		const keep: QueuedBuild[] = [];
 		for (const item of this.#queue) {
 			if (item.batch === this.#batch) keep.push(item);
-			else this.#drop(item);
+			else this.#drop(item, 'newer batch');
 		}
 		this.#queue = keep;
 	}
 
-	#drop(item: QueuedBuild): void {
-		this.#host.dropped(item);
+	#drop(item: QueuedBuild, reason: string): void {
+		this.#host.dropped(item, reason);
 		item.done();
 	}
 }

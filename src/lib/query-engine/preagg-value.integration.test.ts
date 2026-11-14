@@ -15,6 +15,7 @@ import {
 	type QueryDescriptor,
 	type QueryEngineOptions
 } from './QueryEngine';
+import type { BuildEvent } from './preagg/Preagg';
 import { FilterGroup } from './FilterGroup.svelte';
 import type { MarkHandle } from './MarkHandle.svelte';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
@@ -1210,5 +1211,137 @@ describe('a failed preagg read', () => {
 		legend.set([['b']]);
 		await vi.waitFor(() => expect(hist.error).not.toBeNull());
 		await conn.exec!(`ALTER TABLE t_gone RENAME TO t`);
+	});
+});
+
+describe('observeBuilds', () => {
+	/** Every build step from now on, and how to stop listening. */
+	function record() {
+		const events: BuildEvent[] = [];
+		const off = engine.observeBuilds((e) => events.push(e));
+		return {
+			events,
+			off,
+			kinds: (markId: string) => events.filter((e) => e.markId === markId).map((e) => e.kind)
+		};
+	}
+
+	/** A brush source on x, with a view callback the test can move. */
+	function brushSource(view: [number, number, number]) {
+		return {
+			sourceId: 'interval-x-A',
+			categoricalKey: null,
+			dims: [
+				{
+					kind: 'bin' as const,
+					columnRef: column('x'),
+					domain: [view[0], view[1]] as [number, number],
+					pixelExtent: view[2],
+					extent: [0, 999] as [number, number]
+				}
+			],
+			view: (out: Float64Array) => {
+				out[0] = view[0];
+				out[1] = view[1];
+				out[2] = view[2];
+			}
+		};
+	}
+
+	it('records each step of a build, with its table and batch', async () => {
+		await mark('by-g', { g: column('g'), n: count() });
+		const { events, kinds } = record();
+		await activateToggle(['cat']);
+		expect(kinds('by-g')).toEqual(['planned', 'queued', 'started', 'built']);
+		const queued = events.find((e) => e.kind === 'queued')!;
+		expect(queued.sourceId).toBe('toggle-cat');
+		expect(queued.table).toMatch(/^__dplot_preagg_/);
+		expect(queued.batch).toBeGreaterThan(0);
+		expect(new Set(events.map((e) => e.table)).size).toBe(1);
+	});
+
+	it('records a skip by the size guard with the numbers it compared', async () => {
+		await engine.ensureColumns('t', { categorical: ['x'] });
+		await mark('small', { g: column('g'), n: count() });
+		await vi.waitFor(() =>
+			expect(conn.queries.some((q) => q.startsWith('SELECT count(*)'))).toBe(true)
+		);
+		await new Promise((r) => setTimeout(r, 20));
+		const { events } = record();
+		await activateToggle(['x']);
+		const skipped = events.find((e) => e.kind === 'skipped')!;
+		expect(skipped.reason).toBe('too large');
+		expect(skipped.detail).toMatchObject({ cap: 250 });
+		expect((skipped.detail as { groups: number }).groups).toBeGreaterThan(250);
+	});
+
+	it('records a build a newer hover batch dropped', async () => {
+		await mark('by-g', { g: column('g'), n: count() });
+		await mark('by-kind', { kind: column('kind'), n: count() });
+		const release = holdBuilds();
+		const { events } = record();
+		const first = activateToggle(['cat']);
+		await vi.waitFor(() => expect(events.some((e) => e.kind === 'started')).toBe(true));
+		let second!: Promise<unknown>;
+		engine.batch(() => {
+			second = activateToggle(['kind']);
+		});
+		release();
+		await Promise.all([first, second]);
+		const dropped = events.filter((e) => e.kind === 'dropped');
+		expect(dropped.length).toBeGreaterThan(0);
+		expect(dropped.every((e) => e.reason === 'newer batch')).toBe(true);
+		// The queued record names the batch the build was pushed into: a drop's
+		// batch is the one its queued record said, older than the newer hover's.
+		const queued = events.filter((e) => e.kind === 'queued');
+		for (const drop of dropped) {
+			const own = queued.find((q) => q.table === drop.table && q.markId === drop.markId)!;
+			expect(own.batch).toBe(drop.batch);
+		}
+		const newer = queued.filter((q) => q.sourceId === 'toggle-kind');
+		expect(newer.length).toBeGreaterThan(0);
+		for (const q of newer) expect(q.batch).toBeGreaterThan(dropped[0].batch!);
+	});
+
+	it('records the bins and the view when the view moved while the build waited', async () => {
+		await mark('by-g', { g: column('g'), n: count() });
+		await mark('by-kind', { kind: column('kind'), n: count() });
+		const release = holdBuilds();
+		const { events } = record();
+		const view: [number, number, number] = [0, 1000, 20];
+		const building = engine.activate(group, brushSource(view));
+		// The first build runs and is held; the second waits in the queue.
+		await vi.waitFor(() => expect(events.filter((e) => e.kind === 'started')).toHaveLength(1));
+		// Zoom in far past the built resolution before the second is sent.
+		view[0] = 100;
+		view[1] = 110;
+		release();
+		await building;
+		const dropped = events.find((e) => e.kind === 'dropped')!;
+		expect(dropped.reason).toBe('bins do not fit the view');
+		const [dim] = (dropped.detail as { dims: Record<string, unknown>[] }).dims;
+		expect(dim).toMatchObject({ view: { v0: 100, v1: 110, pixelExtent: 20 }, fits: false });
+		expect(dim.built).toMatchObject({ bins: expect.any(Number), d0: expect.any(Number) });
+	});
+
+	it('a listener that throws neither fails the build nor stops the others', async () => {
+		await mark('by-g', { g: column('g'), n: count() });
+		const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+		engine.observeBuilds(() => {
+			throw new Error('listener');
+		});
+		const { kinds } = record();
+		await activateToggle(['cat']);
+		expect(kinds('by-g')).toContain('built');
+		expect(errors).toHaveBeenCalled();
+		errors.mockRestore();
+	});
+
+	it('stops after unsubscribe', async () => {
+		await mark('by-g', { g: column('g'), n: count() });
+		const { events, off } = record();
+		off();
+		await activateToggle(['cat']);
+		expect(events).toHaveLength(0);
 	});
 });

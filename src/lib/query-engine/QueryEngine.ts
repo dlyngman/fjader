@@ -26,7 +26,7 @@ import {
 	splitWindowSelect,
 	type QueryParts
 } from '$lib/components/marks/lifecycle/query-builder';
-import { Preagg } from './preagg/Preagg';
+import { Preagg, type BuildEvent } from './preagg/Preagg';
 import type { ActivationSource } from './preagg/plan';
 export type { ActiveDim, ActivationSource } from './preagg/plan';
 import { MarkHandle, type QueryParams, type ResultCause } from './MarkHandle.svelte';
@@ -500,7 +500,9 @@ export class QueryEngine {
 				sliced: () => this.#slicedReady(),
 				identity: this.#identity,
 				mark: (markId) => this.#marks.get(markId),
-				marks: () => this.#marks
+				marks: () => this.#marks,
+				observingBuilds: () => this.#buildObservers.size > 0,
+				onBuild: (event) => this.#notifyBuild(event)
 			},
 			options.buildMaxWaitMs ?? BUILD_MAX_WAIT_MS
 		);
@@ -958,6 +960,32 @@ export class QueryEngine {
 	}
 
 	#identityObservers = new Set<(request: IdentityRequest) => void>();
+
+	/**
+	 * Debug: every step of every preagg build (BuildEvent): planned or
+	 * skipped (with the size guard's numbers), queued (with its hover batch),
+	 * started, then built, failed or dropped (with the check that failed and
+	 * the values it compared). Returns the unsubscribe; costs nothing while no
+	 * one listens, and a listener that throws is logged without failing the
+	 * build.
+	 */
+	observeBuilds(listener: (event: BuildEvent) => void): () => void {
+		this.#buildObservers.add(listener);
+		return () => this.#buildObservers.delete(listener);
+	}
+
+	#buildObservers = new Set<(event: BuildEvent) => void>();
+
+	/** Each listener in its own try/catch: a debugging hook must not fail a build. */
+	#notifyBuild(event: BuildEvent): void {
+		for (const observe of this.#buildObservers) {
+			try {
+				observe(event);
+			} catch (e) {
+				console.error('[QueryEngine] build observer threw:', e);
+			}
+		}
+	}
 
 	/** Each listener in its own try/catch: a debugging hook must not fail identity work. */
 	#notifyIdentity(request: IdentityRequest): void {

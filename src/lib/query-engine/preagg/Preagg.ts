@@ -58,6 +58,34 @@ export interface PreaggMark {
 	filterGroup: FilterGroup;
 }
 
+/**
+ * One step of a preagg build, for `QueryEngine.observeBuilds` (debugging and
+ * measurement). In order for one build: planned, queued, started, then built,
+ * failed or dropped. A planning that builds nothing is `skipped`.
+ */
+export interface BuildEvent {
+	kind: 'skipped' | 'planned' | 'queued' | 'started' | 'built' | 'failed' | 'dropped';
+	markId: string;
+	sourceId: string;
+	/** The preagg table, once planned. */
+	table: string | null;
+	/** performance.now(). */
+	time: number;
+	/** The hover batch the build was queued in. */
+	batch?: number;
+	/**
+	 * skipped: 'unplannable' or 'too large'. dropped: the check that failed
+	 * ('unregistered', 'inactive', 'superseded', 'parts changed', 'bins do not
+	 * fit the view', 'baked clauses changed'), or 'newer batch', 'cleared',
+	 * 'cancelled'.
+	 */
+	reason?: string;
+	/** The values the failed check compared (see #dropDetail), or the size guard's. */
+	detail?: Record<string, unknown>;
+	/** failed: the error. */
+	error?: unknown;
+}
+
 /** What Preagg needs from the engine. */
 export interface PreaggHost {
 	exec(sql: string, signal?: AbortSignal): Promise<void>;
@@ -73,6 +101,12 @@ export interface PreaggHost {
 	/** The mark's current registration, which a re-setup replaces. */
 	mark(markId: string): PreaggMark | undefined;
 	marks(): Iterable<[string, PreaggMark]>;
+	/**
+	 * Whether anything listens to onBuild. Checked first, so with no
+	 * listener no record is built.
+	 */
+	observingBuilds?(): boolean;
+	onBuild?(event: BuildEvent): void;
 }
 
 /** One mark's tables. */
@@ -126,18 +160,28 @@ export class Preagg {
 				// while results decode (+~65 ms on that burst, still under the one
 				// connection's 195 ms median); the build is the one that waits.
 				busy: () => !host.sliced() && host.busy(),
-				stillWanted: (item) => this.#stillWanted(item),
-				dropped: ({ markId, sourceId, build }) => {
+				unwanted: (item) => this.#unwanted(item),
+				started: (item) => this.#emitFor('started', item),
+				dropped: (item, reason) => {
+					// Before the bookkeeping below: the detail reads it.
+					if (this.#observing()) {
+						this.#emitFor('dropped', item, { reason, detail: this.#dropDetail(item, reason) });
+					}
+					const { markId, sourceId, build } = item;
 					const own = this.#marks.get(markId);
 					if (own?.building.get(sourceId) === build) own.building.delete(sourceId);
 				},
-				built: ({ markId, sourceId, build }) => {
+				built: (item) => {
+					this.#emitFor('built', item);
+					const { markId, sourceId, build } = item;
 					const own = this.#marks.get(markId);
 					if (own?.building.get(sourceId) !== build) return;
 					own.building.delete(sourceId);
 					own.tables.set(sourceId, build);
 				},
-				failed: ({ markId, sourceId, build }, e) => {
+				failed: (item, e) => {
+					this.#emitFor('failed', item, { error: e });
+					const { markId, sourceId, build } = item;
 					if (!(e instanceof DOMException && e.name === 'AbortError')) {
 						console.warn(`[QueryEngine] preagg failed for ${markId}:`, e);
 					}
@@ -218,8 +262,25 @@ export class Preagg {
 			own.building.delete(activeSourceId);
 
 			const plan = planPreagg(reg.descriptor, dims, this.#host.identity);
-			if (!plan) continue;
-			if (this.#tooLarge(reg, plan.activeKeys)) continue;
+			if (!plan) {
+				if (this.#observing()) {
+					this.#emit({ kind: 'skipped', markId, sourceId: activeSourceId, reason: 'unplannable' });
+				}
+				continue;
+			}
+			const size = this.#size(reg, plan.activeKeys);
+			if (size.groups != null && size.groups > size.cap) {
+				if (this.#observing()) {
+					this.#emit({
+						kind: 'skipped',
+						markId,
+						sourceId: activeSourceId,
+						reason: 'too large',
+						detail: { ...size, markKeys: size.markKeys, activeKeys: plan.activeKeys }
+					});
+				}
+				continue;
+			}
 
 			// Bake every other clause into the preagg table. Sorted by source ID,
 			// so the same filters always give the same SQL, and so the same table.
@@ -255,6 +316,11 @@ export class Preagg {
 			// Most recently planned last, for the cap on unused tables.
 			this.#tables.delete(preaggTable);
 			this.#tables.add(preaggTable);
+			if (this.#observing()) {
+				const event = { markId, sourceId: activeSourceId, table: preaggTable };
+				this.#emit({ kind: 'planned', ...event, detail: { groups: size.groups, cap: size.cap } });
+				this.#emit({ kind: 'queued', ...event, batch: this.#builds.batch });
+			}
 			promises.push(this.#builds.push({ markId, sourceId: activeSourceId, build, createSQL }));
 		}
 
@@ -407,28 +473,94 @@ export class Preagg {
 	}
 
 	/**
-	 * Whether a queued build is still wanted when it would be sent: checked
-	 * against the mark's current registration, which a re-setup replaces,
-	 * against the view now (a zoom in or a long pan while it waited means a
-	 * table settling would only rebuild), and against the filters now: a clause
-	 * baked into the table may have changed.
+	 * Why a queued build is no longer wanted when it would be sent, or null if
+	 * it still is: checked against the mark's current registration, which a
+	 * re-setup replaces, against the view now (a zoom in or a long pan while it
+	 * waited means a table settling would only rebuild), and against the
+	 * filters now: a clause baked into the table may have changed. The reason
+	 * goes into the drop's build record.
 	 */
-	#stillWanted({ markId, sourceId, build }: QueuedBuild): boolean {
+	#unwanted({ markId, sourceId, build }: QueuedBuild): string | null {
 		const reg = this.#host.mark(markId);
-		return (
-			!!reg &&
-			// Gone off screen while the build waited.
-			reg.handle.active &&
-			this.#marks.get(markId)?.building.get(sourceId) === build &&
-			reg.descriptor.parts === build.basis.parts &&
-			this.#binsFitCurrentView(build) &&
-			bakedClausesHold(reg.descriptor.route ?? NO_ROUTE, reg.filterGroup.selection, build)
-		);
+		if (!reg) return 'unregistered';
+		// Gone off screen while the build waited.
+		if (!reg.handle.active) return 'inactive';
+		if (this.#marks.get(markId)?.building.get(sourceId) !== build) return 'superseded';
+		if (reg.descriptor.parts !== build.basis.parts) return 'parts changed';
+		if (!this.#binsFitCurrentView(build)) return 'bins do not fit the view';
+		if (!bakedClausesHold(reg.descriptor.route ?? NO_ROUTE, reg.filterGroup.selection, build)) {
+			return 'baked clauses changed';
+		}
+		return null;
+	}
+
+	// --- Build records (observeBuilds) ---
+
+	#observing(): boolean {
+		return !!this.#host.observingBuilds?.();
+	}
+
+	#emit(event: Omit<BuildEvent, 'time' | 'table'> & { table?: string | null }): void {
+		this.#host.onBuild?.({ table: null, ...event, time: performance.now() });
+	}
+
+	#emitFor(
+		kind: BuildEvent['kind'],
+		item: QueuedBuild,
+		extra: Pick<BuildEvent, 'reason' | 'detail' | 'error'> = {}
+	): void {
+		if (!this.#observing()) return;
+		this.#emit({
+			kind,
+			markId: item.markId,
+			sourceId: item.sourceId,
+			table: item.build.table,
+			batch: item.batch,
+			...extra
+		});
 	}
 
 	/**
-	 * The size guard: whether a planned table would hold more than a quarter of
-	 * its base table's rows (a fixed 100,000 until the row count has been read).
+	 * The values a failed check compared, for a drop's record. For the bin
+	 * check, each bin dim's built window against the view it was checked
+	 * against: the domain read now, through the source's view callback.
+	 */
+	#dropDetail(item: QueuedBuild, reason: string): Record<string, unknown> | undefined {
+		const { build } = item;
+		if (reason === 'bins do not fit the view') {
+			const out = this.#viewScratch;
+			out.fill(NaN);
+			build.basis.view?.(out);
+			const dims: Record<string, unknown>[] = [];
+			let bin = 0;
+			for (const meta of build.activeMeta) {
+				if (meta.kind !== 'bin') continue;
+				const i = 3 * bin++;
+				const width = meta.bins / meta.scaleFactor;
+				dims.push({
+					built: {
+						d0: meta.d0,
+						d1: meta.d0 + width,
+						bins: meta.bins,
+						scaleFactor: meta.scaleFactor
+					},
+					view: { v0: out[i], v1: out[i + 1], pixelExtent: out[i + 2] },
+					fits: binFitsView(meta, out[i], out[i + 1], out[i + 2]),
+					fineEnough: binsFineEnough(meta.scaleFactor, out[i + 1] - out[i], out[i + 2])
+				});
+			}
+			return { dims };
+		}
+		if (reason === 'parts changed') return { sameParts: false };
+		if (reason === 'baked clauses changed') return { baked: build.basis.bakedClauses.length };
+		return undefined;
+	}
+
+	/**
+	 * The size guard's numbers: the groups a planned table would hold, and the
+	 * cap it must not exceed, a quarter of its base table's rows (a fixed
+	 * 100,000 until the row count has been read). activate() skips a table
+	 * over the cap.
 	 *
 	 * Measured on 1M rows (DuckDB-WASM, one thread): a toggle click on a table a
 	 * quarter the size of the base table is still ~3.7× faster than on the base
@@ -437,17 +569,17 @@ export class Preagg {
 	 * when the connection is idle, so their cost shows only as the wait of a
 	 * click that lands mid-build, and as memory; past a quarter that outweighs
 	 * the gain. The groups are estimated by estimateGroups; an unknown estimate
-	 * builds.
+	 * (null) builds.
 	 */
-	#tooLarge(reg: PreaggMark, activeKeys: GroupKey[]): boolean {
-		const groups = estimateGroups(
-			markKeys(reg.descriptor, reg.handle, this.#host.identity),
-			activeKeys
-		);
-		if (groups == null) return false;
+	#size(
+		reg: PreaggMark,
+		activeKeys: GroupKey[]
+	): { groups: number | null; cap: number; markKeys: GroupKey[] } {
+		const keys = markKeys(reg.descriptor, reg.handle, this.#host.identity);
+		const groups = estimateGroups(keys, activeKeys);
 		const rows = this.#rowCounts.get(reg.descriptor.baseTable);
 		const cap = typeof rows === 'number' ? rows / 4 : 100_000;
-		return groups > cap;
+		return { groups, cap, markKeys: keys };
 	}
 
 	/** Read a base table's row count once, for the size guard. */

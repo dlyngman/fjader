@@ -13,6 +13,7 @@
  * "work" includes slices spent serving the other.
  */
 import type { IdentityRequest, QueryEngine, StatementRecord } from '../QueryEngine';
+import type { BuildEvent } from '../preagg/Preagg';
 
 /** What a statement is for, from its text: a coarse grouping for reports. */
 export type StatementPurpose = 'describe' | 'ddl' | 'insert' | 'range' | 'data' | 'batch';
@@ -69,9 +70,15 @@ export function attachQueryLog(engine: QueryEngine): QueryLog {
 	const detachIdentity = engine.observeIdentityRequests((request) => {
 		identityRequests.push(request);
 	});
+	/** Every preagg build step, in order (observeBuilds). Errors as text, for JSON. */
+	const builds: Array<BuildEvent | (Omit<BuildEvent, 'error'> & { error: string })> = [];
+	const detachBuilds = engine.observeBuilds((event) => {
+		builds.push(event.error === undefined ? event : { ...event, error: String(event.error) });
+	});
 	const detach = () => {
 		detachStatements();
 		detachIdentity();
+		detachBuilds();
 	};
 
 	const report = (): ReportRow[] => {
@@ -106,7 +113,7 @@ export function attachQueryLog(engine: QueryEngine): QueryLog {
 	};
 
 	const download = (name: string, extra: Record<string, unknown> = {}) => {
-		const json = JSON.stringify({ ...extra, statements, identityRequests }, null, 1);
+		const json = JSON.stringify({ ...extra, statements, identityRequests, builds }, null, 1);
 		const a = document.createElement('a');
 		a.href = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
 		a.download = name;
@@ -121,6 +128,7 @@ export function attachQueryLog(engine: QueryEngine): QueryLog {
 		reset: () => {
 			statements.length = 0;
 			identityRequests.length = 0;
+			builds.length = 0;
 		},
 		detach
 	};
