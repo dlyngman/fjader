@@ -1,44 +1,6 @@
 import { Spring } from './Spring';
 
 /**
- * One data-update transition: a spring driving a normalised `t` from 0 to 1.
- *
- * Everything affected by the same data update runs on one of these, and shares
- * it. That is the feature rather than a compromise — elements with different
- * displacements move at proportionally different speeds and ARRIVE TOGETHER,
- * where independent springs finish raggedly. In a racing bar chart it is the
- * difference between a bar reaching its new rank as it finishes growing, and
- * reaching it visibly before or after.
- *
- * NOT THE SAME THING AS A PAN OR ZOOM SPRING, which is the distinction worth
- * holding on to. A continuous scale animates its domain because the VIEWPORT
- * moved; that spring belongs to the scale, drives its GPU state directly, and
- * has nothing to do with data. This one exists because a query RESULT landed.
- * They are both springs living near scales, which makes them look like one
- * concept, and driving a data morph from a pan spring would make panning morph
- * the data.
- *
- * WHO OWNS ONE. A data transition belongs to the mark whose data changed. The
- * exception is a categorical scale, which owns a SHARED clock that every mark
- * drawn against that axis adopts — because where a category sits is a property
- * of the axis and has to be arbitrated across the marks and facet cells that
- * share it. A mark adopts that clock when there is one and owns a clock
- * otherwise; never both, because two springs with two velocities are exactly
- * what the arrive-together property exists to prevent.
- *
- * WHY SHARING IS SAFE. A consumer folds when the clock restarts — its current
- * position becomes its new start. A consumer with no new data folds to where it
- * already is, so its start and destination are equal and it does not move,
- * whatever the clock does. That is why a dozen facet cells landing at a dozen
- * different times all behave, and it is a property of the fold rather than of
- * timing.
- *
- * THE COST, stated because it is real and nobody designed it: a consumer's
- * transition duration is decided by whoever restarts the clock. A sibling
- * restarting it every frame makes this consumer re-fold every frame, so it
- * converges by decelerating rather than along the curve the spring intended.
- */
-/**
  * Stiffness for a data-update transition, and how to think about changing it.
  *
  * The spring is critically damped, so it never overshoots and the only knob is
@@ -96,6 +58,44 @@ export interface ClockLoop {
  */
 const NO_CHARTS: string[] = [];
 
+/**
+ * One data-update transition: a spring driving a normalised `t` from 0 to 1.
+ *
+ * Everything affected by the same data update runs on one of these, and shares
+ * it. That is the feature rather than a compromise — elements with different
+ * displacements move at proportionally different speeds and ARRIVE TOGETHER,
+ * where independent springs finish raggedly. In a racing bar chart it is the
+ * difference between a bar reaching its new rank as it finishes growing, and
+ * reaching it visibly before or after.
+ *
+ * NOT THE SAME THING AS A PAN OR ZOOM SPRING, which is the distinction worth
+ * holding on to. A continuous scale animates its domain because the VIEWPORT
+ * moved; that spring belongs to the scale, drives its GPU state directly, and
+ * has nothing to do with data. This one exists because a query RESULT landed.
+ * They are both springs living near scales, which makes them look like one
+ * concept, and driving a data morph from a pan spring would make panning morph
+ * the data.
+ *
+ * WHO OWNS ONE. A data transition belongs to the mark whose data changed. The
+ * exception is a categorical scale, which owns a SHARED clock that every mark
+ * drawn against that axis adopts — because where a category sits is a property
+ * of the axis and has to be arbitrated across the marks and facet cells that
+ * share it. A mark adopts that clock when there is one and owns a clock
+ * otherwise; never both, because two springs with two velocities are exactly
+ * what the arrive-together property exists to prevent.
+ *
+ * WHY SHARING IS SAFE. A consumer folds when the clock restarts — its current
+ * position becomes its new start. A consumer with no new data folds to where it
+ * already is, so its start and destination are equal and it does not move,
+ * whatever the clock does. That is why a dozen facet cells landing at a dozen
+ * different times all behave, and it is a property of the fold rather than of
+ * timing.
+ *
+ * THE COST, stated because it is real and nobody designed it: a consumer's
+ * transition duration is decided by whoever restarts the clock. A sibling
+ * restarting it every frame makes this consumer re-fold every frame, so it
+ * converges by decelerating rather than along the curve the spring intended.
+ */
 export class TransitionClock {
 	#spring: Spring;
 	#precision: number;

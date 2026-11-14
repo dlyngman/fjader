@@ -31,13 +31,13 @@ import { immediatesSupported } from './immediates';
  * a mark with no new data folds to where it already is and does not move.
  */
 
+/** No bindings: the default for `write`'s `land`. */
+const NO_BINDINGS: readonly number[] = [];
+
 /**
  * The coordinator's slice this needs. Structural, so tests can supply a fake.
  * It is also the loop an owned clock joins — the clock does that itself.
  */
-/** No bindings: the default for `write`'s `land`. */
-const NO_BINDINGS: readonly number[] = [];
-
 export interface MorphHost extends ClockLoop {
 	registerComputeWork(key: string, fn: (encoder: GPUCommandEncoder) => void): void;
 	removeComputeWork(key: string): void;

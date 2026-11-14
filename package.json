@@ -41,7 +41,7 @@
 		"prepack": "svelte-package",
 		"prepare": "svelte-kit sync || echo ''",
 		"format": "prettier --write .",
-		"lint": "prettier --check . && eslint .",
+		"lint": "prettier --check . && eslint . && node scripts/check-doc-blocks.mjs",
 		"test": "vitest",
 		"typecheck": "svelte-check --tsconfig ./jsconfig.json",
 		"build:widget": "vite build --config vite.widget.config.js",

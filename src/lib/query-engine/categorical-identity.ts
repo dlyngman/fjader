@@ -1032,14 +1032,6 @@ export class CategoricalIdentity {
 	}
 
 	/**
-	 * Re-read the dim into the field's value array, mutating in place.
-	 *
-	 * Re-reading the whole dim rather than only the new rows: categorical
-	 * cardinality is small, this runs once per (field, table) pair at setup, and
-	 * a full read cannot drift out of sync with the ids the way an incremental
-	 * one can if an append is ever missed.
-	 */
-	/**
 	 * Bumped whenever a dim's rows change: a table folding in, an Other bucket
 	 * reserved, a reset. A query that reads a dim (dense padding, an id join)
 	 * returns different rows afterwards under the same SQL text, so whatever
@@ -1051,7 +1043,14 @@ export class CategoricalIdentity {
 
 	#version = 0;
 
-	/** Re-read the dim's values into the JS cache. */
+	/**
+	 * Re-read the dim into the field's value array, mutating in place.
+	 *
+	 * Re-reading the whole dim rather than only the new rows: categorical
+	 * cardinality is small, this runs once per (field, table) pair at setup, and
+	 * a full read cannot drift out of sync with the ids the way an incremental
+	 * one can if an append is ever missed.
+	 */
 	async #refreshValues(field: string): Promise<void> {
 		const rows = await this.#exec.queryRows(
 			`SELECT id, value, label FROM ${quote(this.dimTable(field))} ORDER BY id`

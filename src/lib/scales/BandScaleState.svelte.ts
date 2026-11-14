@@ -810,12 +810,6 @@ export class BandScaleState {
 	}
 
 	/**
-	 * Where each grid line is headed: 1 for a displayed category, 0 otherwise,
-	 * row-aligned with `getTicks`. A grid morphs its lines' opacity toward this on
-	 * the axis's clock, so a line fades out with a leaving bar and in with an
-	 * entering one. Changes on every layout.
-	 */
-	/**
 	 * The slots' latest layout if it landed at once (a catch-up result), else 0:
 	 * what follows from it, like `tickVisibility`, lands with it. Reactive
 	 * through `_version`, which every layout bumps.
@@ -825,6 +819,12 @@ export class BandScaleState {
 		return this.#slots.landedLayout;
 	}
 
+	/**
+	 * Where each grid line is headed: 1 for a displayed category, 0 otherwise,
+	 * row-aligned with `getTicks`. A grid morphs its lines' opacity toward this on
+	 * the axis's clock, so a line fades out with a leaving bar and in with an
+	 * entering one. Changes on every layout.
+	 */
 	tickVisibility(): Float32Array {
 		void this._version;
 		if (!this.hasIdentity) return new Float32Array(this.effectiveDomain.length).fill(1);

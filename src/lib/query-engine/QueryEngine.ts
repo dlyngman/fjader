@@ -1119,11 +1119,6 @@ export class QueryEngine {
 	}
 
 	/**
-	 * Execute DDL/DML statements (CREATE TABLE, DROP TABLE, INSERT, etc.).
-	 * Accepts a single SQL string or an array of statements to execute
-	 * sequentially.
-	 */
-	/**
 	 * Run several statements as ONE message on the main connection, returning
 	 * the last statement's rows. Each statement commits on its own and
 	 * execution stops at the first failure, as when sent one by one (measured
@@ -1161,6 +1156,11 @@ export class QueryEngine {
 		return result;
 	}
 
+	/**
+	 * Execute DDL/DML statements (CREATE TABLE, DROP TABLE, INSERT, etc.).
+	 * Accepts a single SQL string or an array of statements to execute
+	 * sequentially.
+	 */
 	async exec(
 		sql: string | string[],
 		opts?: { class?: StatementClass; connectionLocal?: boolean; signal?: AbortSignal }

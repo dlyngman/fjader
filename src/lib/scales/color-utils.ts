@@ -420,9 +420,6 @@ export function getOrdinalColors(scheme: string): readonly string[] | null {
 }
 
 /**
- * Determine if a scheme is ordinal (discrete) or continuous.
- */
-/**
  * All available scheme names, grouped by type.
  */
 export function getAllSchemeNames(): {
