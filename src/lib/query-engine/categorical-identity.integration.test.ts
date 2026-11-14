@@ -505,6 +505,22 @@ describe('CategoricalIdentity', () => {
 		expect(exec.reads.some((q) => q.includes('stats('))).toBe(false);
 	});
 
+	it('builds the other fields of a drain when one is refused, and reports the refusal', async () => {
+		await db.run(
+			`CREATE TABLE mixed AS SELECT i::VARCHAR AS k, ['a', 'b', 'c'][(i % 3) + 1] AS small FROM range(20000) t(i)`
+		);
+		exec.baseTables.add('mixed');
+		// Both fields in one drain: built together, `k` refused.
+		await expect(identity.ensureColumns('mixed', { categorical: ['k', 'small'] })).rejects.toThrow(
+			/distinct values/
+		);
+		expect(identity.viewHas('mixed', 'small')).toBe(true);
+		expect(identity.viewHas('mixed', 'k')).toBe(false);
+		expect(identity.identity('small').values).toEqual(['a', 'b', 'c']);
+		const cols = await db.all(`DESCRIBE "${identity.sourceFor('mixed')}"`);
+		expect(cols.map((c) => c.column_name)).toContain(identity.idColumn('small'));
+	});
+
 	it('allows an ordinary categorical without complaint', async () => {
 		await expect(
 			identity.ensureColumns('penguins', { categorical: ['species'] })
