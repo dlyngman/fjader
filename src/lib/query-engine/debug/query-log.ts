@@ -12,7 +12,7 @@
  * sliced lane interleave with the main connection's in the worker, so their
  * "work" includes slices spent serving the other.
  */
-import type { QueryEngine, StatementRecord } from '../QueryEngine';
+import type { IdentityRequest, QueryEngine, StatementRecord } from '../QueryEngine';
 
 /** What a statement is for, from its text: a coarse grouping for reports. */
 export type StatementPurpose = 'describe' | 'ddl' | 'insert' | 'range' | 'data' | 'batch';
@@ -61,9 +61,18 @@ function tableOf(sql: string): string {
 /** Attach a statement log to an engine. Costs nothing once detached. */
 export function attachQueryLog(engine: QueryEngine): QueryLog {
 	const statements: LoggedStatement[] = [];
-	const detach = engine.observeStatements((record) => {
+	/** Categorical identity requests, in order: when marks asked for which fields. */
+	const identityRequests: IdentityRequest[] = [];
+	const detachStatements = engine.observeStatements((record) => {
 		statements.push({ ...record, purpose: purposeOf(record), table: tableOf(record.sql) });
 	});
+	const detachIdentity = engine.observeIdentityRequests((request) => {
+		identityRequests.push(request);
+	});
+	const detach = () => {
+		detachStatements();
+		detachIdentity();
+	};
 
 	const report = (): ReportRow[] => {
 		const sorted = [...statements].sort((a, b) => a.start - b.start);
@@ -97,7 +106,7 @@ export function attachQueryLog(engine: QueryEngine): QueryLog {
 	};
 
 	const download = (name: string, extra: Record<string, unknown> = {}) => {
-		const json = JSON.stringify({ ...extra, statements }, null, 1);
+		const json = JSON.stringify({ ...extra, statements, identityRequests }, null, 1);
 		const a = document.createElement('a');
 		a.href = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
 		a.download = name;
@@ -111,6 +120,7 @@ export function attachQueryLog(engine: QueryEngine): QueryLog {
 		download,
 		reset: () => {
 			statements.length = 0;
+			identityRequests.length = 0;
 		},
 		detach
 	};

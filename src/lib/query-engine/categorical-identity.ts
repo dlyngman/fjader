@@ -82,6 +82,22 @@ export interface IdentityExec {
 	 * queryRows, with the same result.
 	 */
 	execBatch?(statements: string[]): Promise<Array<Record<string, unknown>>>;
+	/**
+	 * Debug: told of every ensureColumns call (the table, the fields asked for,
+	 * performance.now()), before anything is deduplicated. For measuring when
+	 * marks ask, e.g. whether one table's fields arrive close enough together
+	 * to share a drain.
+	 */
+	onRequest?(table: string, fields: string[], time: number): void;
+	/** Debug: one pass of a table's drain started, with the fields it took. */
+	onDrain?(table: string, fields: string[], time: number): void;
+	/**
+	 * Whether anything listens to onRequest and onDrain. Checked first, so with
+	 * no listener their arguments (a field list, a timestamp) are never built.
+	 * The callbacks fire ONLY when this returns true: a host that implements
+	 * them must implement this too, or it is never called.
+	 */
+	observing?(): boolean;
 }
 
 /**
@@ -542,6 +558,13 @@ export class CategoricalIdentity {
 	): Promise<void> {
 		const categorical = (fields.categorical ?? []).map(asField);
 		if (categorical.length === 0) return;
+		if (this.#exec.observing?.()) {
+			this.#exec.onRequest?.(
+				table,
+				categorical.map((f) => f.key),
+				performance.now()
+			);
+		}
 
 		let entry = this.#views.get(table);
 		if (!entry) {
@@ -635,6 +658,9 @@ export class CategoricalIdentity {
 
 				const batch = [...entry.pending];
 				entry.pending.clear();
+				// Per pass: a request arriving during the first build is a second
+				// pass (and a second view build) inside this same call.
+				if (this.#exec.observing?.()) this.#exec.onDrain?.(table, batch, performance.now());
 
 				const succeeded: string[] = [];
 				for (const field of batch) {

@@ -139,6 +139,21 @@ export interface StatementPlacement {
  */
 export type StatementClass = 'interaction' | 'background';
 
+/**
+ * For `observeIdentityRequests`: a mark asking for categorical identity
+ * columns, or a table's drain starting (when its dims actually begin to build,
+ * which is what a chart's first read waits on).
+ */
+export interface IdentityRequest {
+	/** 'request': a mark's ensureColumns call; 'drain': one pass of a table's drain started. */
+	kind: 'request' | 'drain';
+	table: string;
+	/** For a request, the fields asked for; for a drain pass, the fields it took. */
+	fields: string[];
+	/** performance.now() when asked. */
+	time: number;
+}
+
 /** One statement as it reached the connection, for `observeStatements`. */
 export interface StatementRecord {
 	sql: string;
@@ -450,6 +465,13 @@ export class QueryEngine {
 			// Seen created as a table through the engine, or listed in the catalog
 			// (which lists tables, not views).
 			isBaseTable: (table) => this.#known.get(table) === 'table' || !!this.#catalog?.has(table),
+			observing: () => this.#identityObservers.size > 0,
+			onRequest: (table, fields, time) => {
+				this.#notifyIdentity({ kind: 'request', table, fields, time });
+			},
+			onDrain: (table, fields, time) => {
+				this.#notifyIdentity({ kind: 'drain', table, fields, time });
+			},
 			execBatch: async (statements) => {
 				const table = await this.execBatch(statements);
 				const rows: Array<Record<string, unknown>> = [];
@@ -922,6 +944,31 @@ export class QueryEngine {
 		() => new LaneSlot(this.#openLaneFn, this.#laneFailed)
 	);
 	#routing = new SourceRouting(SOURCE_LANES);
+
+	/**
+	 * Debug: every categorical identity request (a mark's ensureColumns call),
+	 * with its table, fields and time, before deduplication, and every drain
+	 * start (a table's dims beginning to build, with the fields it found
+	 * pending). Returns the unsubscribe; costs nothing while no one listens, and
+	 * a listener that throws is logged without failing identity work.
+	 */
+	observeIdentityRequests(listener: (request: IdentityRequest) => void): () => void {
+		this.#identityObservers.add(listener);
+		return () => this.#identityObservers.delete(listener);
+	}
+
+	#identityObservers = new Set<(request: IdentityRequest) => void>();
+
+	/** Each listener in its own try/catch: a debugging hook must not fail identity work. */
+	#notifyIdentity(request: IdentityRequest): void {
+		for (const observe of this.#identityObservers) {
+			try {
+				observe(request);
+			} catch (e) {
+				console.error('[QueryEngine] identity observer threw:', e);
+			}
+		}
+	}
 
 	/**
 	 * Listen to every statement sent to the connection, as it settles. For

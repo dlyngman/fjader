@@ -518,6 +518,51 @@ describe('CategoricalIdentity', () => {
 		expect(identity.identity('small').values).toEqual(['a', 'b', 'c']);
 	});
 
+	it('reports every request before deduplication, and each drain with its fields', async () => {
+		const events: { kind: string; table: string; fields: string[] }[] = [];
+		const observed = new CategoricalIdentity(
+			{
+				...exec,
+				observing: () => true,
+				onRequest: (table, fields) => events.push({ kind: 'request', table, fields }),
+				onDrain: (table, fields) => events.push({ kind: 'drain', table, fields })
+			},
+			SESSION
+		);
+		await Promise.all([
+			observed.ensureColumns('penguins', { categorical: ['species'] }),
+			observed.ensureColumns('penguins', { categorical: ['species', 'island'] })
+		]);
+		expect(events).toEqual([
+			{ kind: 'request', table: 'penguins', fields: ['species'] },
+			{ kind: 'request', table: 'penguins', fields: ['species', 'island'] },
+			{ kind: 'drain', table: 'penguins', fields: ['species', 'island'] }
+		]);
+	});
+
+	it('records each pass of a drain: a request arriving during a build is a second one', async () => {
+		const drains: string[][] = [];
+		const observed = new CategoricalIdentity(
+			{ ...exec, observing: () => true, onDrain: (_t, fields) => drains.push(fields) },
+			SESSION
+		);
+		const first = observed.ensureColumns('penguins', { categorical: ['species'] });
+		await vi.waitFor(() => expect(exec.statements.length).toBeGreaterThan(0));
+		const second = observed.ensureColumns('penguins', { categorical: ['island'] });
+		await Promise.all([first, second]);
+		expect(drains).toEqual([['species'], ['island']]);
+	});
+
+	it('builds no arguments when nothing observes', async () => {
+		let calls = 0;
+		const quiet = new CategoricalIdentity(
+			{ ...exec, observing: () => false, onRequest: () => calls++, onDrain: () => calls++ },
+			SESSION
+		);
+		await quiet.ensureColumns('penguins', { categorical: ['species'] });
+		expect(calls).toBe(0);
+	});
+
 	it('allows an ordinary categorical without complaint', async () => {
 		await expect(
 			identity.ensureColumns('penguins', { categorical: ['species'] })
