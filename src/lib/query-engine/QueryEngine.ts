@@ -352,6 +352,28 @@ interface MarkRegistration {
 // ---------------------------------------------------------------------------
 
 /**
+ * How a mark's data read is placed. Routed by the table it reads
+ * (SourceRouting): the preagg table when one answers, else the mark's BASE
+ * table (its identity view reads the same rows, and its range and stats reads
+ * name the base table: one record per source). `slow` (holdsEntrance={false})
+ * applies to the base query only: a preagg read is ~1 ms, and forced onto a
+ * lane during a brush it would cost ~20 ms of round trips in exactly the case
+ * preagg exists to make fast.
+ */
+export function markReadOptions(
+	markId: string,
+	descriptor: Pick<QueryDescriptor, 'baseTable' | 'slow'>,
+	preaggTable: string | null
+): QueryOpts {
+	return {
+		callerId: markId,
+		source: preaggTable ?? descriptor.baseTable,
+		data: true,
+		slow: !preaggTable && descriptor.slow
+	};
+}
+
+/**
  * DuckDB's catalog error for a table or view this connection cannot see.
  * Matched by its wording, which an upgrade could change: the integration
  * test missing-relation.integration.test.ts checks it against real DuckDB.
@@ -1506,27 +1528,13 @@ export class QueryEngine {
 		// at most 1 inflight + 1 pending per callerId during rapid brushing.
 		// A preagg table is built in memory by fjader: fast until measured.
 		if (preagg) this.#routing.prior(preagg.table, 'fast');
-		// Routed by the table this read reads (SourceRouting): the preagg table
-		// when one answers, else the mark's BASE table. Its identity view reads
-		// the same rows, and the mark's range and stats reads name the base
-		// table: one record per source, kept by the data reads.
-		this.query(sqlStr, {
-			callerId: markId,
-			source: preagg?.table ?? reg.descriptor.baseTable,
-			data: true,
-			slow: reg.descriptor.slow
-		})
+		this.query(sqlStr, markReadOptions(markId, reg.descriptor, preagg?.table ?? null))
 			.catch((e) => {
 				if (!preagg || (e as Error)?.name === 'AbortError') throw e;
 				this.#preagg.readFailed(markId, preagg.table, e);
 				const baseSQL = this.#baseSQL(markId, reg);
 				if (!baseSQL) throw e;
-				return this.query(baseSQL, {
-					callerId: markId,
-					source: reg.descriptor.baseTable,
-					data: true,
-					slow: reg.descriptor.slow
-				});
+				return this.query(baseSQL, markReadOptions(markId, reg.descriptor, null));
 			})
 			.then((table) => handle._setResult(table, cause))
 			.catch((e) => {

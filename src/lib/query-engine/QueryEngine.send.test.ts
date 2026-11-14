@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { QueryEngine } from './QueryEngine';
+import { QueryEngine, markReadOptions } from './QueryEngine';
 import type { DuckDBConnection, StatementRecord } from './QueryEngine';
 
 /**
@@ -632,5 +632,27 @@ describe('QueryEngine slow marks', () => {
 		// Another mark on the same table: still the main connection.
 		await engine.query('SELECT light', { source: 'fast_t', data: true });
 		expect(log).toEqual(['lane SELECT heavy', 'main SELECT light']);
+	});
+
+	it('reads a slow mark on the main connection while a preagg table answers it', async () => {
+		const descriptor = { baseTable: 'flights', slow: true };
+		// A preagg read: the preagg table, not forced slow.
+		expect(markReadOptions('m', descriptor, '__dplot_preagg_1')).toEqual({
+			callerId: 'm',
+			source: '__dplot_preagg_1',
+			data: true,
+			slow: false
+		});
+		// Its base query (and the fallback after a failed preagg read): slow.
+		expect(markReadOptions('m', descriptor, null)).toMatchObject({
+			source: 'flights',
+			slow: true
+		});
+
+		const { conn, log } = heldLane();
+		const engine = new QueryEngine(conn);
+		engine.sourceCost('__dplot_preagg_1', 'fast');
+		await engine.query('SELECT n', markReadOptions('m', descriptor, '__dplot_preagg_1'));
+		expect(log).toEqual(['main SELECT n']);
 	});
 });
