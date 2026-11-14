@@ -473,13 +473,13 @@ export class Preagg {
 	}
 
 	/**
-	 * Whether a queued build is still wanted when it would be sent: checked
-	 * against the mark's current registration, which a re-setup replaces,
-	 * against the view now (a zoom in or a long pan while it waited means a
-	 * table settling would only rebuild), and against the filters now: a clause
-	 * baked into the table may have changed.
+	 * Why a queued build is no longer wanted when it would be sent, or null if
+	 * it still is: checked against the mark's current registration, which a
+	 * re-setup replaces, against the view now (a zoom in or a long pan while it
+	 * waited means a table settling would only rebuild), and against the
+	 * filters now: a clause baked into the table may have changed. The reason
+	 * goes into the drop's build record.
 	 */
-	/** Why a queued build is no longer wanted, checked when it would be sent; null if it is. */
 	#unwanted({ markId, sourceId, build }: QueuedBuild): string | null {
 		const reg = this.#host.mark(markId);
 		if (!reg) return 'unregistered';
