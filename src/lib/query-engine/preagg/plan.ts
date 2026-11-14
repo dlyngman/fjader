@@ -459,7 +459,9 @@ function plainColumn(source: string): string | null {
  * coloured by a category) the same holds per value of the other columns: a
  * bin dim on a column the mark bins into `d` bins makes each group of the
  * rest hold about `d + bins` groups instead of `d`, so the key's groups grow
- * by `1 + bins / d`.
+ * by `1 + bins / d`. Only one bin dim merges into a mark key, on purpose: a
+ * 2D brush over two binned columns of the same mark multiplies the second,
+ * which overestimates (the guard then skips rather than builds too much).
  */
 export function estimateGroups(markKeys: GroupKey[], activeKeys: GroupKey[]): number | null {
 	if (activeKeys.some((key) => key.groups == null)) return null;
