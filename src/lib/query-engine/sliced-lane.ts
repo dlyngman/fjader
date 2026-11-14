@@ -75,19 +75,12 @@ export interface SlicedLane {
 }
 
 /**
- * The longest a lane waits to run its next slice while `hold` asks it to:
- * a source read sliced still gets a slice at least this often, so a long
- * brush on fast charts updates the slow chart slowly, never not at all.
+ * Asked before each call that executes (start, poll): a promise that
+ * resolves when this lane may run its next slice, or null to run it now. The
+ * engine decides, across all its lanes (see QueryEngine #sliceGrant): freely
+ * while its main connection is quiet, a share of the worker while it works.
  */
-export const HOLD_CAP_MS = 75;
-
-/**
- * Asked before each call that executes (start, poll): a promise to wait on
- * before running the next slice, at most `maxMs`, or null to go now. The
- * engine holds while its main connection is busy, so the slices run between
- * its statements instead of in them (see QueryEngine #mainQuiet).
- */
-export type LaneHold = (maxMs: number) => Promise<void> | null;
+export type LaneHold = () => Promise<void> | null;
 
 /** Slices longer than this warn once: the polling interval is long. */
 const SLOW_SLICE_MS = 25;
@@ -123,15 +116,14 @@ export class PendingQueryLane implements SlicedLane {
 	#hold: LaneHold | null;
 
 	/**
-	 * Wait as `hold` asks before a call that executes, at most HOLD_CAP_MS
-	 * each time, so a held source still runs a slice that often. Fetches are
-	 * not held: they move finished bytes, nearly no worker time, and holding
-	 * them would only delay the slow result. Returns the wait, which is not
-	 * execution, or null when there is none: then the caller goes on in the
-	 * same tick, as a lane without a hold always did.
+	 * Wait as `hold` asks before a call that executes. Fetches are not held:
+	 * they move finished bytes, nearly no worker time, and holding them would
+	 * only delay the slow result. Returns the wait, which is not execution, or
+	 * null when there is none: then the caller goes on in the same tick, as a
+	 * lane without a hold always did.
 	 */
 	#beforeSlice(): Promise<number> | null {
-		const wait = this.#hold?.(HOLD_CAP_MS);
+		const wait = this.#hold?.();
 		if (!wait) return null;
 		const t = performance.now();
 		return wait.then(() => performance.now() - t);

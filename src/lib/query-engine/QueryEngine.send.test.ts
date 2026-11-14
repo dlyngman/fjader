@@ -382,7 +382,27 @@ describe('QueryEngine source lanes', () => {
 		await engine.destroy();
 	});
 
-	it('reads an in-memory base table on the main connection from its first read (the prior)', async () => {
+	it('reads a table created through the engine on the main connection from its first read', async () => {
+		const { conn, log } = laneConnection(() => 30);
+		const engine = new QueryEngine(conn);
+		await engine.exec('CREATE TABLE flights AS SELECT 1 AS a');
+		await engine.query('SELECT min(a)', { source: 'flights' });
+		await engine.query('SELECT a', { source: 'flights', data: true });
+		expect(log).toEqual(['main SELECT min(a)', 'main SELECT a']);
+	});
+
+	it('reads a view created through the engine sliced, and forgets a dropped table', async () => {
+		const { conn, log } = laneConnection(() => 30);
+		const engine = new QueryEngine(conn);
+		await engine.exec('CREATE VIEW v AS SELECT 1 AS a');
+		await engine.exec('CREATE TABLE t AS SELECT 1 AS a');
+		await engine.exec('DROP TABLE t');
+		await engine.query('SELECT a', { source: 'v', data: true });
+		await engine.query('SELECT a', { source: 't', data: true });
+		expect(log.map((l) => l.replace(/\d/, ''))).toEqual(['lane SELECT a', 'lane SELECT a']);
+	});
+
+	it('looks up a table made elsewhere in the catalog, off the critical path', async () => {
 		const { tableToIPC, tableFromArrays } = await import('@uwdata/flechette');
 		const { conn, log } = laneConnection(() => 30);
 		const ipcOf = conn.queryIPC!;
@@ -399,10 +419,20 @@ describe('QueryEngine source lanes', () => {
 		};
 		const engine = new QueryEngine(conn);
 		await engine.describe('flights');
+		// The catalog answer lands after describe; once it has, reads go main.
+		await new Promise((r) => setTimeout(r, 0));
 		log.length = 0;
-		await engine.query('SELECT min(a)', { source: 'flights' });
 		await engine.query('SELECT a', { source: 'flights', data: true });
-		expect(log).toEqual(['main SELECT min(a)', 'main SELECT a']);
+		expect(log).toEqual(['main SELECT a']);
+	});
+
+	it('records an Arrow insert that creates a table as a table', async () => {
+		const { conn, log } = laneConnection(() => 30);
+		conn.insertArrowFromIPCStream = async () => {};
+		const engine = new QueryEngine(conn);
+		await engine.insertArrowFromIPCStream(new Uint8Array(8), { name: 'widget_t', create: true });
+		await engine.query('SELECT a', { source: 'widget_t', data: true });
+		expect(log).toEqual(['main SELECT a']);
 	});
 
 	it('reads a source the app calls slow on a lane', async () => {
@@ -413,8 +443,8 @@ describe('QueryEngine source lanes', () => {
 		expect(log[0]).toMatch(/^lane/);
 	});
 
-	it('holds a lane while the main connection is busy, until it has been quiet', async () => {
-		let hold: ((maxMs: number) => Promise<void> | null) | undefined;
+	it('shares slices while the main connection is busy, and frees them once it is quiet', async () => {
+		let hold: (() => Promise<void> | null) | undefined;
 		let release!: () => void;
 		const conn: DuckDBConnection = {
 			async query() {
@@ -435,22 +465,29 @@ describe('QueryEngine source lanes', () => {
 		};
 		const engine = new QueryEngine(conn);
 		await engine.query('SELECT 1', { source: 'a', data: true });
-		expect(hold!(75)).toBeNull();
+		expect(hold!()).toBeNull();
 
 		const main = engine.exec('CREATE TABLE x (a INT)');
 		await new Promise((r) => setTimeout(r, 0));
-		let resolved = false;
-		hold!(75)!.then(() => (resolved = true));
-		await new Promise((r) => setTimeout(r, 10));
-		expect(resolved).toBe(false);
+		// Busy: the first ask takes the share's slice, the next waits for the next one.
+		expect(hold!()).toBeNull();
+		let granted = false;
+		hold!()!.then(() => (granted = true));
+		await new Promise((r) => setTimeout(r, 5));
+		expect(granted).toBe(false);
+		await new Promise((r) => setTimeout(r, 40));
+		expect(granted).toBe(true);
+
+		// Quiet again: free.
 		release();
 		await main;
-		await new Promise((r) => setTimeout(r, 10));
-		expect(resolved).toBe(true);
+		await new Promise((r) => setTimeout(r, 5));
+		expect(hold!()).toBeNull();
+		expect(hold!()).toBeNull();
 	});
 
 	it("does not count a lane's own reads as the main connection being busy", async () => {
-		let hold: ((maxMs: number) => Promise<void> | null) | undefined;
+		let hold: (() => Promise<void> | null) | undefined;
 		let finish!: () => void;
 		const { conn } = laneConnection(() => 30);
 		const open = conn.openSlicedLane!;
@@ -468,7 +505,8 @@ describe('QueryEngine source lanes', () => {
 		const engine = new QueryEngine(conn);
 		const slow = engine.query('SELECT v', { source: 'slow', data: true });
 		await new Promise((r) => setTimeout(r, 5));
-		expect(hold!(75)).toBeNull();
+		expect(hold!()).toBeNull();
+		expect(hold!()).toBeNull();
 		finish();
 		await slow;
 	});

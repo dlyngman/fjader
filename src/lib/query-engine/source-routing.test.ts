@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SourceRouting } from './source-routing';
+import { SourceRouting, sourceDDL } from './source-routing';
 
 describe('SourceRouting', () => {
 	it('reads an unknown source on a lane, and a fast one on the main connection', () => {
@@ -93,5 +93,33 @@ describe('SourceRouting', () => {
 		expect(r.cost('big_table')).toBe('slow');
 		r.noteLaneRead('big_table', 0, 2, 10);
 		expect(r.cost('big_table')).toBe('fast');
+	});
+});
+
+describe('sourceDDL', () => {
+	it.each([
+		['CREATE TABLE flights AS SELECT 1', { kind: 'table', name: 'flights' }],
+		['create or replace temp table "My ""T""" (a INT)', { kind: 'table', name: 'My "T"' }],
+		['CREATE TEMPORARY TABLE IF NOT EXISTS t2(a INT)', { kind: 'table', name: 't2' }],
+		['  CREATE OR REPLACE VIEW slow_rule AS SELECT 1', { kind: 'view', name: 'slow_rule' }],
+		['CREATE VIEW IF NOT EXISTS v AS SELECT 1', { kind: 'view', name: 'v' }],
+		['DROP TABLE IF EXISTS "__dplot_preagg_1"', { kind: 'drop', name: '__dplot_preagg_1' }],
+		['DROP VIEW v', { kind: 'drop', name: 'v' }]
+	])('reads %s', (sql, expected) => {
+		expect(sourceDDL(sql)).toEqual(expected);
+	});
+
+	it.each([
+		'CREATE TABLE remote.flights AS SELECT 1',
+		'CREATE TABLE "db"."t" (a INT)',
+		'CREATE MACRO m(x) AS x + 1',
+		"CREATE TYPE mood AS ENUM ('a')",
+		'CREATE SEQUENCE s',
+		'CREATE UNIQUE INDEX i ON t (a)',
+		'SELECT * FROM t',
+		'DROP SCHEMA s',
+		'INSERT INTO t VALUES (1)'
+	])('leaves %s alone', (sql) => {
+		expect(sourceDDL(sql)).toBeNull();
 	});
 });

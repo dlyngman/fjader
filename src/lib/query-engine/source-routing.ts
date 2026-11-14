@@ -104,6 +104,17 @@ export class SourceRouting {
 		if (r.cost === 'unknown' && !r.hinted) r.cost = cost;
 	}
 
+	/**
+	 * The source was dropped or replaced by something else: back to unknown,
+	 * unless the app hinted it.
+	 */
+	forget(source: string): void {
+		const r = this.#records.get(source);
+		if (!r || r.hinted) return;
+		r.cost = 'unknown';
+		r.mainSlow = 0;
+	}
+
 	/** The app knows better than the prior: a slow table, a cheap view. */
 	hint(source: string, cost: 'fast' | 'slow'): void {
 		const r = this.#of(source);
@@ -156,4 +167,40 @@ export class SourceRouting {
 			r.mainSlow = 0;
 		}
 	}
+}
+
+/**
+ * What a statement does to the set of sources, read from its text: a table or
+ * view created under a plain name, or one dropped. Narrow on purpose: a wrong
+ * "table" (fast) is the expensive mistake, a wrong "unknown" costs one sliced
+ * read (~20 ms) before the first quick one corrects it. Qualified names
+ * (an attached database), CREATE MACRO, TYPE, SEQUENCE and anything else
+ * return null.
+ */
+export function sourceDDL(
+	sql: string
+): { kind: 'table' | 'view'; name: string } | { kind: 'drop'; name: string } | null {
+	const name = String.raw`("(?:[^"]|"")+"|[A-Za-z_][A-Za-z0-9_$]*)`;
+	const end = String.raw`(?=\s|\(|;|$)`;
+	const create = new RegExp(
+		String.raw`^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:TEMP|TEMPORARY)\s+)?(TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?` +
+			name +
+			end,
+		'i'
+	).exec(sql);
+	if (create)
+		return {
+			kind: create[1].toUpperCase() === 'TABLE' ? 'table' : 'view',
+			name: unquote(create[2])
+		};
+	const drop = new RegExp(
+		String.raw`^\s*DROP\s+(?:TABLE|VIEW)\s+(?:IF\s+EXISTS\s+)?` + name + end,
+		'i'
+	).exec(sql);
+	if (drop) return { kind: 'drop', name: unquote(drop[1]) };
+	return null;
+}
+
+function unquote(name: string): string {
+	return name.startsWith('"') ? name.slice(1, -1).replaceAll('""', '"') : name;
 }

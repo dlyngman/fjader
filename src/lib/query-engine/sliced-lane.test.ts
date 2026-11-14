@@ -255,9 +255,8 @@ describe('PendingQueryLane hold', () => {
 	it('holds before the calls that execute (start, poll), never before a fetch', async () => {
 		const fake = fakeBindings({ q: { slices: 2, chunks: [new Uint8Array([1])] } });
 		const asked: string[] = [];
-		const hold = (maxMs: number) => {
+		const hold = () => {
 			asked.push(fake.calls.at(-1) ?? 'none');
-			expect(maxMs).toBeGreaterThan(0);
 			return null;
 		};
 		const l = new PendingQueryLane(fake.bindings, 1, async () => {}, { hold });
@@ -276,20 +275,6 @@ describe('PendingQueryLane hold', () => {
 		const l = new PendingQueryLane(fake.bindings, 1, async () => {}, { hold });
 		const { execMs } = await l.query('q');
 		expect(execMs).toBeLessThan(25);
-	});
-
-	it('caps a hold so a slow source still runs a slice', async () => {
-		const fake = fakeBindings({ q: { slices: 3 } });
-		const budgets: number[] = [];
-		const hold = (maxMs: number) => {
-			budgets.push(maxMs);
-			// A main connection that never goes quiet: only the cap ends the wait.
-			return new Promise<void>((r) => setTimeout(r, maxMs));
-		};
-		const l = new PendingQueryLane(fake.bindings, 1, async () => {}, { hold });
-		await l.exec('q');
-		expect(budgets.length).toBe(4);
-		for (const b of budgets) expect(b).toBe(75);
 	});
 });
 

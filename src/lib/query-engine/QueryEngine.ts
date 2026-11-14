@@ -31,7 +31,7 @@ import type { ActivationSource } from './preagg/plan';
 export type { ActiveDim, ActivationSource } from './preagg/plan';
 import { MarkHandle, type QueryParams, type ResultCause } from './MarkHandle.svelte';
 import { LaneSlot, type LaneHold, type LaneResult, type SlicedLane } from './sliced-lane';
-import { SourceRouting } from './source-routing';
+import { SourceRouting, sourceDDL } from './source-routing';
 import {
 	CategoricalIdentity,
 	type DimValue,
@@ -105,6 +105,11 @@ export interface StatementPlacement {
 	source?: string;
 	/** See QueryOpts.data. */
 	data?: boolean;
+	/**
+	 * When the read was asked for (query() called): for a mark's
+	 * execute-latest read, the state it reflects. Recorded, for data age.
+	 */
+	requestedAt?: number;
 }
 
 /**
@@ -132,6 +137,11 @@ export interface StatementRecord {
 	connection: 'main' | 'lane';
 	/** The source it was routed by, when it named one. */
 	source?: string;
+	/**
+	 * When the read was asked for (StatementPlacement.requestedAt). With
+	 * `end`, how old the state a result reflects is when it lands.
+	 */
+	requested?: number;
 	/** performance.now() when handed to the connection, and when it settled. */
 	start: number;
 	end: number;
@@ -161,6 +171,15 @@ const SOURCE_LANES = 4;
  * instead of letting one slice in at every gap.
  */
 const MAIN_QUIET_MS = 2;
+
+/**
+ * While the main connection works, all lanes together get one slice per this
+ * many ms: ~20% of the worker at 5 ms slices. A slow source keeps a minimum
+ * rate, and a fast query waits at most one slice for it. One budget for
+ * every lane, the background lane too: a budget per lane would let five busy
+ * lanes take the whole worker between them.
+ */
+const SLICE_SHARE_MS = 25;
 
 export interface QueryEngineOptions {
 	/** Overrides BUILD_MAX_WAIT_MS; tests use it to make the queue deterministic. */
@@ -600,6 +619,7 @@ export class QueryEngine {
 					class: cls,
 					connection: lane ? 'lane' : 'main',
 					source: place.source,
+					requested: place.requestedAt,
 					start,
 					end: performance.now(),
 					error
@@ -687,7 +707,7 @@ export class QueryEngine {
 	#openLaneFn = (): Promise<SlicedLane> | null => {
 		const conn = this.#conn;
 		if (!conn?.openSlicedLane || this.#destroyed) return null;
-		return conn.openSlicedLane({ hold: this.#mainQuiet });
+		return conn.openSlicedLane({ hold: this.#sliceGrant });
 	};
 
 	// --- Holding lanes while the main connection works ---
@@ -695,18 +715,21 @@ export class QueryEngine {
 	// A lane's slice is a message at the back of the worker's queue, so it
 	// runs between two main-connection statements; in a dependent chain (a
 	// mark's setup: dims, views, then data) every step then waits a slice.
-	// Lanes hold their next slice (LaneHold) until the main connection has
-	// been idle for MAIN_QUIET_MS, capped by the lane (HOLD_CAP_MS) so a slow
-	// source still moves. Counted here, per connection: a slow source's reads
-	// are interaction class too, and a lane waiting on #interactionInFlight
-	// would wait for itself.
+	// So while the main connection works, lanes share a budget of slices
+	// (SLICE_SHARE_MS, across all of them); once it has been idle for
+	// MAIN_QUIET_MS they run freely. Counted here, per connection: a slow
+	// source's reads are interaction class too, and a lane waiting on
+	// #interactionInFlight would wait for itself.
 
 	/** Statements on the main connection, sent and not settled. */
 	#mainInFlight = 0;
 	/** When the main connection last went idle. */
 	#mainIdleAt = 0;
-	/** Lanes waiting for quiet; each resolves itself at its own cap. */
-	#quietWaiters: (() => void)[] = [];
+	/** When any lane last took a slice from the share. */
+	#lastSliceAt = -Infinity;
+	/** Lanes waiting for a slice, first come first served. */
+	#sliceWaiters: (() => void)[] = [];
+	#shareTimer: ReturnType<typeof setTimeout> | null = null;
 	#quietTimer: ReturnType<typeof setTimeout> | null = null;
 
 	#mainBusy(): void {
@@ -720,10 +743,14 @@ export class QueryEngine {
 	#mainIdle(): void {
 		if (--this.#mainInFlight > 0) return;
 		this.#mainIdleAt = performance.now();
-		if (this.#quietWaiters.length > 0) this.#armQuiet();
+		if (this.#sliceWaiters.length > 0) this.#armQuiet();
 	}
 
-	/** Release the waiting lanes once the main connection has stayed idle long enough. */
+	#mainQuietNow(): boolean {
+		return this.#mainInFlight === 0 && performance.now() - this.#mainIdleAt >= MAIN_QUIET_MS;
+	}
+
+	/** Once the main connection has stayed idle long enough, every waiting lane goes. */
 	#armQuiet(): void {
 		if (this.#quietTimer) clearTimeout(this.#quietTimer);
 		const left = MAIN_QUIET_MS - (performance.now() - this.#mainIdleAt);
@@ -731,25 +758,42 @@ export class QueryEngine {
 			() => {
 				this.#quietTimer = null;
 				if (this.#mainInFlight > 0) return;
-				for (const release of [...this.#quietWaiters]) release();
+				const waiting = this.#sliceWaiters;
+				this.#sliceWaiters = [];
+				for (const go of waiting) go();
 			},
 			Math.max(0, left)
 		);
 	}
 
-	#mainQuiet: LaneHold = (maxMs) => {
-		if (this.#mainInFlight === 0 && performance.now() - this.#mainIdleAt >= MAIN_QUIET_MS) {
+	/** The next waiting lane gets the share's next slice. */
+	#armShare(): void {
+		if (this.#shareTimer) return;
+		const left = this.#lastSliceAt + SLICE_SHARE_MS - performance.now();
+		this.#shareTimer = setTimeout(
+			() => {
+				this.#shareTimer = null;
+				const go = this.#sliceWaiters.shift();
+				if (!go) return;
+				this.#lastSliceAt = performance.now();
+				go();
+				if (this.#sliceWaiters.length > 0) this.#armShare();
+			},
+			Math.max(0, left)
+		);
+	}
+
+	/** LaneHold: may a lane run its next slice now? */
+	#sliceGrant: LaneHold = () => {
+		if (this.#mainQuietNow()) return null;
+		const now = performance.now();
+		if (this.#sliceWaiters.length === 0 && now - this.#lastSliceAt >= SLICE_SHARE_MS) {
+			this.#lastSliceAt = now;
 			return null;
 		}
 		return new Promise<void>((resolve) => {
-			const release = () => {
-				clearTimeout(cap);
-				const i = this.#quietWaiters.indexOf(release);
-				if (i >= 0) this.#quietWaiters.splice(i, 1);
-				resolve();
-			};
-			const cap = setTimeout(release, maxMs);
-			this.#quietWaiters.push(release);
+			this.#sliceWaiters.push(resolve);
+			this.#armShare();
 			if (this.#mainInFlight === 0) this.#armQuiet();
 		});
 	};
@@ -811,7 +855,8 @@ export class QueryEngine {
 			class: opts?.class ?? 'interaction',
 			connectionLocal: opts?.connectionLocal,
 			source: opts?.source,
-			data: opts?.data
+			data: opts?.data,
+			requestedAt: performance.now()
 		};
 
 		// Cache check: return cached result immediately, bypassing
@@ -993,8 +1038,33 @@ export class QueryEngine {
 				},
 				signal
 			});
+			this.#noteDDL(stmt);
 		}
 	}
+
+	/**
+	 * Learn what a source is from the statement that made it (SourceRouting's
+	 * prior), at no cost: a table created under a plain name starts fast, a
+	 * view unknown, a dropped name forgets. Covers everything created through
+	 * the engine (loadParquet, Arrow inserts, fjader's own tables); a source
+	 * made elsewhere falls back to the catalog (#classifySource).
+	 */
+	#noteDDL(sql: string): void {
+		const ddl = sourceDDL(sql);
+		if (!ddl) return;
+		if (ddl.kind === 'drop') {
+			this.#known.delete(ddl.name);
+			this.#routing.forget(ddl.name);
+			return;
+		}
+		this.#known.set(ddl.name, ddl.kind);
+		// Replacing a name re-opens its record: a view over a table, a new table.
+		this.#routing.forget(ddl.name);
+		if (ddl.kind === 'table') this.#routing.prior(ddl.name, 'fast');
+	}
+
+	/** Sources seen created through the engine, by name. */
+	#known = new Map<string, 'table' | 'view'>();
 
 	/**
 	 * Get column info for a table via DESCRIBE.
@@ -1019,12 +1089,14 @@ export class QueryEngine {
 
 	async #fetchDescribe(table: string): Promise<ColumnInfo[]> {
 		const escaped = table.replaceAll('"', '""');
-		// The source's prior, set before describe() resolves: a mark's setup
-		// reads wait for its schema, so the first of them is routed by it.
-		const [result] = await Promise.all([
-			this.#queryRaw(`DESCRIBE "${escaped}"`, { class: 'interaction' }, 'describe'),
-			this.#classifySource(table)
-		]);
+		// A source not seen created through the engine is looked up in the
+		// catalog, off the critical path: until the answer it reads sliced.
+		void this.#classifySource(table);
+		const result = await this.#queryRaw(
+			`DESCRIBE "${escaped}"`,
+			{ class: 'interaction' },
+			'describe'
+		);
 		const columns: ColumnInfo[] = [];
 		for (let i = 0; i < result.numRows; i++) {
 			const row = result.get(i);
@@ -1046,6 +1118,7 @@ export class QueryEngine {
 	 */
 	async #classifySource(table: string): Promise<void> {
 		if (!this.#conn?.openSlicedLane) return;
+		if (this.#known.has(table)) return;
 		let known = this.#catalog?.get(table);
 		if (known === undefined) known = (await this.#refreshCatalog()).get(table);
 		if (known === 'fast') this.#routing.prior(table, 'fast');
@@ -1194,6 +1267,8 @@ export class QueryEngine {
 				}
 			}
 		);
+		// The notebook widget's load path: a table made from Arrow is a table.
+		if (options.create) this.#noteDDL(`CREATE TABLE "${options.name.replaceAll('"', '""')}" (x)`);
 	}
 
 	// -----------------------------------------------------------------
