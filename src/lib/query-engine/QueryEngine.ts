@@ -86,8 +86,14 @@ export interface QueryOpts {
 	source?: string;
 	/** A mark's data read: its cost updates the source's record. */
 	data?: boolean;
-	/** Read sliced whatever the source's cost (QueryDescriptor.slow). */
-	sliced?: boolean;
+	/**
+	 * This read is known to be slow (a heavy query on whatever table, as a
+	 * mark with `holdsEntrance={false}` says). The engine reads it where a
+	 * slow read cannot hold up others (on DuckDB-WASM, sliced on its source's
+	 * lane) and does not learn the source's cost from it: the source's other
+	 * reads may be quick. A backend with one connection can ignore it.
+	 */
+	slow?: boolean;
 }
 
 /**
@@ -114,8 +120,8 @@ export interface StatementPlacement {
 	requestedAt?: number;
 	/** The caller (a mark's id), for the log. */
 	callerId?: string;
-	/** Read sliced on its source's lane whatever the source's cost (a slow mark). */
-	sliced?: boolean;
+	/** See QueryOpts.slow. */
+	slow?: boolean;
 }
 
 /**
@@ -738,13 +744,15 @@ export class QueryEngine {
 		if (place.class === 'background') return this.#backgroundLane;
 		if (!place.source || !this.#conn?.openSlicedLane) return null;
 		if (this.#localSources.has(place.source)) return null;
-		const i = place.sliced ? this.#routing.laneOf(place.source) : this.#routing.route(place.source);
+		const i = place.slow ? this.#routing.laneOf(place.source) : this.#routing.route(place.source);
 		return i == null ? null : this.#sourceLanes[i];
 	}
 
 	/** Whether a read's cost goes into its source's record: interaction data reads. */
 	#notesCost(place: StatementPlacement): boolean {
-		return place.class === 'interaction' && !!place.data && !!place.source;
+		// A read known to be slow says nothing about its source: a slow mark's
+		// heavy query would otherwise turn a fast table slow for every mark.
+		return place.class === 'interaction' && !!place.data && !!place.source && !place.slow;
 	}
 
 	/**
@@ -912,7 +920,7 @@ export class QueryEngine {
 			data: opts?.data,
 			requestedAt: performance.now(),
 			callerId: opts?.callerId,
-			sliced: opts?.sliced
+			slow: opts?.slow
 		};
 
 		// Cache check: return cached result immediately, bypassing
@@ -1506,7 +1514,7 @@ export class QueryEngine {
 			callerId: markId,
 			source: preagg?.table ?? reg.descriptor.baseTable,
 			data: true,
-			sliced: reg.descriptor.slow
+			slow: reg.descriptor.slow
 		})
 			.catch((e) => {
 				if (!preagg || (e as Error)?.name === 'AbortError') throw e;
@@ -1517,7 +1525,7 @@ export class QueryEngine {
 					callerId: markId,
 					source: reg.descriptor.baseTable,
 					data: true,
-					sliced: reg.descriptor.slow
+					slow: reg.descriptor.slow
 				});
 			})
 			.then((table) => handle._setResult(table, cause))

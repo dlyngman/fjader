@@ -613,10 +613,24 @@ describe('QueryEngine slow marks', () => {
 		const { conn, log } = heldLane();
 		const engine = new QueryEngine(conn);
 		await engine.exec('CREATE TABLE fast_t AS SELECT 1 AS a');
-		void engine.query('SELECT a', { source: 'fast_t', data: true, sliced: true }).catch(() => {});
+		void engine.query('SELECT a', { source: 'fast_t', data: true, slow: true }).catch(() => {});
 		await engine.query('SELECT b', { source: 'fast_t', data: true });
 		await wait(0);
 		// The mark's read sliced, the other read of the same fast table on main.
 		expect(log.sort()).toEqual(['lane SELECT a', 'main SELECT b']);
+	});
+
+	it("does not let a slow mark's slow read turn its fast source slow", async () => {
+		const { conn, log, releases } = heldLane();
+		const engine = new QueryEngine(conn);
+		await engine.exec('CREATE TABLE fast_t AS SELECT 1 AS a');
+		// The slow mark's read takes 30 polls on its lane.
+		const slow = engine.query('SELECT heavy', { source: 'fast_t', data: true, slow: true });
+		await wait(0);
+		releases[0]();
+		await slow;
+		// Another mark on the same table: still the main connection.
+		await engine.query('SELECT light', { source: 'fast_t', data: true });
+		expect(log).toEqual(['lane SELECT heavy', 'main SELECT light']);
 	});
 });
