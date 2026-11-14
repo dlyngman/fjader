@@ -56,7 +56,7 @@ afterEach(async () => {
 describe('main connection queue: barriers', () => {
 	it('an identity reset drops the view after its queued read, and the dims after the view', async () => {
 		conn = openConn();
-		const engine = new QueryEngine(conn, { mainInFlightCap: 1 });
+		const engine = new QueryEngine(conn, { mainInFlightCap: 1, mainHold: 'always' });
 		await engine.exec(
 			`CREATE TABLE t AS SELECT i AS x, CASE WHEN i % 2 = 0 THEN 'a' ELSE 'b' END AS cat FROM range(10) r(i)`
 		);
@@ -87,5 +87,46 @@ describe('main connection queue: barriers', () => {
 		expect(readAt).toBeGreaterThan(-1);
 		expect(dropViewAt).toBeGreaterThan(readAt);
 		expect(dropDimAt).toBeGreaterThan(dropViewAt);
+	});
+
+	describe('the hold window (holding while a drain runs)', () => {
+		const SEED = `CREATE TABLE t AS SELECT i AS x, CASE WHEN i % 2 = 0 THEN 'a' ELSE 'b' END AS cat FROM range(10) r(i)`;
+
+		/** With one statement held on the connection, whether another is sent rather than held. */
+		async function holdsNothing(engine: QueryEngine): Promise<boolean> {
+			let release!: () => void;
+			conn.gate = new Promise((r) => (release = r));
+			conn.gateOn = 'blocker';
+			const blocker = engine.query('SELECT 1 AS blocker', { cache: false });
+			await vi.waitFor(() => expect(conn.sent.at(-1)).toContain('blocker'));
+			const probe = engine.query('SELECT 2 AS probe', { cache: false });
+			await new Promise((r) => setTimeout(r, 20));
+			const sent = conn.sent.some((s) => s.includes('probe'));
+			conn.gate = null;
+			release();
+			await Promise.all([blocker, probe]);
+			return sent;
+		}
+
+		it('ends after a drain whose field fails', async () => {
+			conn = openConn();
+			const engine = new QueryEngine(conn, { mainInFlightCap: 1 });
+			await engine.exec(SEED);
+			await expect(
+				engine.ensureColumns('t', { categorical: ['no_such_column'] })
+			).rejects.toThrow();
+			expect(await holdsNothing(engine)).toBe(true);
+		});
+
+		it('ends after a reset lands mid-drain', async () => {
+			conn = openConn();
+			const engine = new QueryEngine(conn, { mainInFlightCap: 1 });
+			await engine.exec(SEED);
+			const building = engine.ensureColumns('t', { categorical: ['cat'] }).catch((e) => e);
+			await vi.waitFor(() => expect(conn.sent.some((s) => s.includes('"cat"'))).toBe(true));
+			await engine.clearQueryCache();
+			await building;
+			expect(await holdsNothing(engine)).toBe(true);
+		});
 	});
 });

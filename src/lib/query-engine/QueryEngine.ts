@@ -107,6 +107,11 @@ export interface QueryOpts {
 	 * `callerId`, 0 otherwise.
 	 */
 	rank?: StatementRank;
+	/**
+	 * Within rank 1, lower goes first (MainStatement.order): a mark's mount
+	 * time, so first reads load in mount order.
+	 */
+	order?: number;
 }
 
 /**
@@ -137,6 +142,8 @@ export interface StatementPlacement {
 	slow?: boolean;
 	/** See QueryOpts.rank. */
 	rank?: StatementRank;
+	/** See QueryOpts.order. */
+	order?: number;
 	/**
 	 * The relations it creates, drops or replaces when its text does not say
 	 * (MainQueue barriers): an Arrow insert creating its table, a batch.
@@ -265,6 +272,12 @@ export interface QueryEngineOptions {
 	/** Advanced. A rank-2 or -3 statement rises one rank per this wait (MAIN_MAX_WAIT_MS). */
 	mainMaxWaitMs?: number;
 	/**
+	 * Debug. When the main connection holds statements in JS: 'drain' (the
+	 * default) while a categorical drain runs, 'always' for tests and for
+	 * measuring against it (see MainQueue, Holding).
+	 */
+	mainHold?: 'drain' | 'always';
+	/**
 	 * Debug. The rank of reads that name a source without a caller (a mark's
 	 * domain, range and stats reads), 0 by default like other setup. For
 	 * measuring whether they belong with setup: they are cached and cheap.
@@ -391,6 +404,11 @@ export interface QueryDescriptor {
 	 * source: other marks on a fast table keep reading on the main connection.
 	 */
 	slow?: boolean;
+	/**
+	 * When the mark mounted (performance.now()). Its first read goes in mount
+	 * order among first reads waiting on the main connection (MainStatement.order).
+	 */
+	mountedAt?: number;
 }
 
 interface MarkRegistration {
@@ -547,7 +565,9 @@ export class QueryEngine {
 		this.#mainQueue = new MainQueue(
 			options.mainInFlightCap ?? MAIN_IN_FLIGHT_CAP,
 			options.mainMaxWaitMs ?? MAIN_MAX_WAIT_MS,
-			() => this.#mainBusy()
+			() => this.#mainBusy(),
+			// Only a categorical chain gains from holding; see MainQueue, Holding.
+			options.mainHold === 'always' ? () => true : () => this.#identity.draining
 		);
 		this.#unbatch = options.unbatch ?? false;
 		if (connection instanceof Promise) {
@@ -781,6 +801,7 @@ export class QueryEngine {
 					rank: rank!,
 					sql,
 					barrier: place.barrier,
+					order: place.order,
 					signal,
 					start: (r) => {
 						ranAt = r;
@@ -1107,7 +1128,8 @@ export class QueryEngine {
 			requestedAt: performance.now(),
 			callerId: opts?.callerId,
 			slow: opts?.slow,
-			rank: opts?.rank
+			rank: opts?.rank,
+			order: opts?.order
 		};
 
 		// Cache check: return cached result immediately, bypassing
@@ -1740,6 +1762,7 @@ export class QueryEngine {
 		// Only once a first query actually goes out. A first read is what the
 		// chart's entrance waits on; a re-query is not (StatementRank).
 		const rank: StatementRank = reg.needsFirst ? 1 : 2;
+		const order = rank === 1 ? reg.descriptor.mountedAt : undefined;
 		reg.needsFirst = false;
 
 		// Use the public query() path — its execute-latest logic ensures
@@ -1748,14 +1771,19 @@ export class QueryEngine {
 		if (preagg) this.#routing.prior(preagg.table, 'fast');
 		this.query(sqlStr, {
 			...markReadOptions(markId, reg.descriptor, preagg?.table ?? null),
-			rank
+			rank,
+			order
 		})
 			.catch((e) => {
 				if (!preagg || (e as Error)?.name === 'AbortError') throw e;
 				this.#preagg.readFailed(markId, preagg.table, e);
 				const baseSQL = this.#baseSQL(markId, reg);
 				if (!baseSQL) throw e;
-				return this.query(baseSQL, { ...markReadOptions(markId, reg.descriptor, null), rank });
+				return this.query(baseSQL, {
+					...markReadOptions(markId, reg.descriptor, null),
+					rank,
+					order
+				});
 			})
 			.then((table) => handle._setResult(table, cause))
 			.catch((e) => {

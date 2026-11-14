@@ -28,11 +28,15 @@ export type StatementRank = 0 | 1 | 2 | 3;
 export const MAIN_IN_FLIGHT_CAP = 1;
 
 /**
- * A rank-2 or rank-3 statement rises one rank per this many ms waited, so a
- * stream that never ends (hover lookups, a brush's re-queries) cannot starve
- * what queues behind it. Ranks 0 and 1 never rise: setup at load is finite,
- * so nothing starves behind it, and a short limit on first reads would put
- * every 2M-row first read back ahead of the setup chain it waits on.
+ * A rank-3 statement rises to 2, and a rank-2 one to 1, per this many ms
+ * waited, so a stream that never ends (a brush's re-queries) cannot starve
+ * background work behind it. Never above rank 1: at load a rank-2 read
+ * (DensityHost's count) that rose to 0 overtook every waiting first read
+ * (measured). Ranks 0 and 1 never rise: setup at load is finite, so nothing
+ * starves behind it.
+ *
+ * Not covered: a rank-2 statement behind a stream of rank-0 statements that
+ * never ends. Theoretical while hover lookups take ~1 ms each.
  */
 export const MAIN_MAX_WAIT_MS = 100;
 
@@ -48,6 +52,16 @@ export interface MainStatement {
 	barrier?: readonly string[];
 	/** Aborted while queued: dropped before it is sent. */
 	signal?: AbortSignal;
+	/**
+	 * Within rank 1, lower goes first: the mark's mount time, so first reads
+	 * load in MOUNT ORDER (usually document order, top of the page first).
+	 * Absent: when it was queued. Mount order is not "finish the chart closest
+	 * to entering": a chart whose setup takes longer (a categorical chain)
+	 * gains only if it mounted before the charts it would otherwise queue
+	 * behind. On /test/query-load?cat=1 the categorical charts are second and
+	 * third; on a page where they are last it does nothing for them.
+	 */
+	order?: number;
 	/**
 	 * Sends it, called synchronously when it takes a slot, with the rank it
 	 * ran at (lower than `rank` when it rose for its wait). Synchronous on
@@ -66,11 +80,25 @@ interface Entry {
 	/** Lowercased text, made only when a barrier needs it. */
 	lower: string | null;
 	queuedAt: number;
+	/** MainStatement.order, else queuedAt. */
+	order: number;
 }
 
 /**
  * The queue in front of the main connection: at most `cap` statements on it,
- * the rest in rank order, first come first served within a rank.
+ * the rest in rank order, first come first served within a rank (rank 1 in
+ * mount order, see MainStatement.order).
+ *
+ * HOLDING, only while `holding()` says (a categorical drain running). Holding
+ * a statement in JS costs a main-thread turn at each hand-off, and at load the
+ * main thread is busy: always on, it idled the worker and made pages without
+ * anything to reorder load later, and brushing slower (measured). Outside the
+ * window a statement goes straight to the connection. Once anything is
+ * queued, the queue drains at `cap` until it is empty, window or not: the
+ * reads a chain unblocks are sent after the drain ends, and ending the hold
+ * with the drain would flush every held first read into the worker ahead of
+ * them. So the window ends by itself once the queue empties, also after a
+ * failed drain or a reset.
  *
  * BARRIERS. A statement that creates, drops or replaces a relation keeps
  * first-in, first-out for that relation: it does not overtake statements
@@ -98,14 +126,25 @@ export class MainQueue {
 	#cap: number;
 	#maxWaitMs: number;
 	#onGrant: () => void;
+	#holding: () => boolean;
 	#inFlight = 0;
 	#queue: Entry[] = [];
 
-	/** `onGrant` runs as a statement takes a slot, before it is sent. */
-	constructor(cap: number, maxWaitMs: number, onGrant: () => void) {
+	/**
+	 * `onGrant` runs as a statement takes a slot, before it is sent.
+	 * `holding`: whether to start holding statements now (see Holding);
+	 * always, by default.
+	 */
+	constructor(
+		cap: number,
+		maxWaitMs: number,
+		onGrant: () => void,
+		holding: () => boolean = () => true
+	) {
 		this.#cap = Math.max(1, cap);
 		this.#maxWaitMs = maxWaitMs;
 		this.#onGrant = onGrant;
+		this.#holding = holding;
 	}
 
 	/** Statements waiting for a slot. */
@@ -119,15 +158,17 @@ export class MainQueue {
 	 * paired with one `release()`.
 	 */
 	enqueue(statement: MainStatement): void {
-		if (this.#queue.length === 0 && this.#inFlight < this.#cap) {
+		if (this.#queue.length === 0 && (this.#inFlight < this.#cap || !this.#holding())) {
 			this.#grant(statement, statement.rank);
 			return;
 		}
+		const queuedAt = performance.now();
 		this.#queue.push({
 			statement,
 			barrier: lowerNames(statement.barrier ?? ddlNames(statement.sql)),
 			lower: null,
-			queuedAt: performance.now()
+			queuedAt,
+			order: statement.order ?? queuedAt
 		});
 	}
 
@@ -168,13 +209,19 @@ export class MainQueue {
 		}
 	}
 
-	/** The free entry with the lowest rank after its wait, the earliest on a tie. */
+	/**
+	 * The free entry with the lowest rank after its wait; on a tie the
+	 * earliest queued, or in rank 1 the lowest order (mount order).
+	 */
 	#pick(now: number): { index: number; rank: StatementRank } {
 		let best = 0;
 		let bestRank = this.#rankOf(this.#queue[0], now);
 		for (let i = 1; i < this.#queue.length && bestRank > 0; i++) {
-			const rank = this.#rankOf(this.#queue[i], now);
-			if (rank < bestRank && !this.#blocked(i)) {
+			const entry = this.#queue[i];
+			const rank = this.#rankOf(entry, now);
+			const better =
+				rank < bestRank || (rank === 1 && bestRank === 1 && entry.order < this.#queue[best].order);
+			if (better && !this.#blocked(i)) {
 				best = i;
 				bestRank = rank;
 			}
@@ -187,7 +234,7 @@ export class MainQueue {
 		const { rank } = entry.statement;
 		if (rank < 2) return rank;
 		const steps = Math.floor((now - entry.queuedAt) / this.#maxWaitMs);
-		return Math.max(0, rank - steps) as StatementRank;
+		return Math.max(1, rank - steps) as StatementRank;
 	}
 
 	/** Whether an entry queued earlier must go first (see Barriers). */

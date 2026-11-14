@@ -2,15 +2,19 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { MainQueue, type StatementRank } from './main-queue';
 
 /** A queue with a manual clock, recording the order statements start in. */
-function setup(cap = 1, maxWaitMs = 100) {
+function setup(cap = 1, maxWaitMs = 100, holding: () => boolean = () => true) {
 	let now = 0;
 	vi.spyOn(performance, 'now').mockImplementation(() => now);
 	const started: string[] = [];
 	const ranks: Record<string, StatementRank> = {};
 	const dropped: string[] = [];
 	let grants = 0;
-	const queue = new MainQueue(cap, maxWaitMs, () => grants++);
-	const send = (sql: string, rank: StatementRank, more: { signal?: AbortSignal } = {}) =>
+	const queue = new MainQueue(cap, maxWaitMs, () => grants++, holding);
+	const send = (
+		sql: string,
+		rank: StatementRank,
+		more: { signal?: AbortSignal; order?: number } = {}
+	) =>
 		queue.enqueue({
 			sql,
 			rank,
@@ -102,19 +106,36 @@ describe('MainQueue', () => {
 			expect(q.ranks['background']).toBe(2);
 		});
 
-		it('a stream of rank 0 cannot starve a rank-2 statement', () => {
+		it('rises at most to rank 1: a long-waiting read never overtakes setup', () => {
 			const q = setup();
 			q.send('running', 0);
-			q.send('re-query', 2);
-			for (let i = 0; i < 5; i++) {
-				q.advance(50);
-				q.send(`hover ${i}`, 0);
-				q.next();
-			}
-			// After two limits it reached rank 0, older than every hover queued.
-			expect(q.started).toContain('re-query');
-			expect(q.ranks['re-query']).toBe(0);
-			expect(q.started.indexOf('re-query')).toBeLessThan(q.started.length);
+			q.send('lod count', 2);
+			q.advance(10_000);
+			q.send('setup', 0);
+			q.next();
+			expect(q.started.at(-1)).toBe('setup');
+			q.next();
+			expect(q.ranks['lod count']).toBe(1);
+		});
+
+		it('a risen read takes its place in rank 1 by when it was queued', () => {
+			const q = setup();
+			q.send('running', 0);
+			q.send('first read, mounted at 5', 1, { order: 5 });
+			q.advance(50);
+			q.send('lod count', 2);
+			q.advance(200);
+			q.send('first read, mounted at 500', 1, { order: 500 });
+			q.next();
+			q.next();
+			q.next();
+			// Risen to 1, queued at 50: after the mark mounted at 5, before the one at 500.
+			expect(q.started).toEqual([
+				'running',
+				'first read, mounted at 5',
+				'lod count',
+				'first read, mounted at 500'
+			]);
 		});
 
 		it('never raises a first read: setup still goes ahead of it however long it waited', () => {
@@ -127,6 +148,46 @@ describe('MainQueue', () => {
 			expect(q.started).toEqual(['running', 'setup']);
 			q.next();
 			expect(q.ranks['first read']).toBe(1);
+		});
+	});
+
+	it('loads first reads in mount order, not queue order', () => {
+		const q = setup();
+		q.send('running', 0);
+		q.send('chart 4', 1, { order: 40 });
+		q.send('chart 5', 1, { order: 50 });
+		// A categorical chart mounted second: its read comes after its chain.
+		q.send('chart 2', 1, { order: 20 });
+		for (let i = 0; i < 3; i++) q.next();
+		expect(q.started).toEqual(['running', 'chart 2', 'chart 4', 'chart 5']);
+	});
+
+	describe('holding', () => {
+		it('sends at once, past the cap, while not holding', () => {
+			const q = setup(1, 100, () => false);
+			q.send('a', 1);
+			q.send('b', 1);
+			q.send('c', 0);
+			expect(q.started).toEqual(['a', 'b', 'c']);
+			expect(q.queue.waiting).toBe(0);
+		});
+
+		it('once something is queued, drains at the cap after holding ends', () => {
+			let holding = true;
+			const q = setup(1, 100, () => holding);
+			q.send('running', 0);
+			q.send('chart 4', 1, { order: 40 });
+			holding = false;
+			// The drain ended; the chain's read still queues behind the held ones, in order.
+			q.send('chart 2', 1, { order: 20 });
+			expect(q.started).toEqual(['running']);
+			q.next();
+			q.next();
+			expect(q.started).toEqual(['running', 'chart 2', 'chart 4']);
+			// Queue empty: the window is over, nothing is held.
+			q.send('x', 2);
+			q.send('y', 2);
+			expect(q.started.slice(-2)).toEqual(['x', 'y']);
 		});
 	});
 

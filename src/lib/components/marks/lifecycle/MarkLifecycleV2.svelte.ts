@@ -172,6 +172,11 @@ export interface ReactiveConfig {
 export class MarkLifecycleV2 {
 	// --- Public Reactive State ---
 	setupComplete = $state(false);
+	/**
+	 * When this mark mounted: its first read waits in mount order among first
+	 * reads on the main connection (QueryDescriptor.mountedAt).
+	 */
+	#mountedAt = performance.now();
 
 	// --- Private Properties ---
 	#config: MarkLifecycleV2Config;
@@ -814,7 +819,8 @@ export class MarkLifecycleV2 {
 						transformCompiler: this.#transformCompiler,
 						route: this.#route,
 						// holdsEntrance={false}: the author knows this mark is slow.
-						slow: this.#reactiveConfig.holdsEntrance === false
+						slow: this.#reactiveConfig.holdsEntrance === false,
+						mountedAt: this.#mountedAt
 					},
 					this.#filterGroup
 				);

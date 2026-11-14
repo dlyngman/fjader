@@ -650,6 +650,7 @@ export class CategoricalIdentity {
 	 * column.
 	 */
 	async #drain(table: string, entry: ViewEntry, generation: number): Promise<void> {
+		this.#drainsRunning++;
 		try {
 			while (entry.pending.size > 0) {
 				// Superseded by a reset: stop before issuing more DDL, which would
@@ -689,8 +690,20 @@ export class CategoricalIdentity {
 				entry.current = all;
 			}
 		} finally {
+			this.#drainsRunning--;
 			entry.inflight = null;
 		}
+	}
+
+	/** Drains running: while any does, the engine holds main-connection statements (MainQueue). */
+	#drainsRunning = 0;
+
+	/**
+	 * Whether a drain is running, on any table. Ends with every drain, also
+	 * one that failed or stopped for a reset (the count is kept in a finally).
+	 */
+	get draining(): boolean {
+		return this.#drainsRunning > 0;
 	}
 
 	/**
