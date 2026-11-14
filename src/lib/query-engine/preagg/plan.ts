@@ -155,6 +155,12 @@ export type ActiveMeta =
 export interface GroupKey {
 	column: string | null;
 	groups: number | null;
+	/**
+	 * For a mark's key over several columns: the mark's own bins per binned
+	 * source column (from its query parts, see binCounts), so a bin dim on one
+	 * of them merges into the key instead of multiplying it.
+	 */
+	columns?: ReadonlyMap<string, number>;
 }
 
 export interface PreaggState {
@@ -399,6 +405,13 @@ export function markKeys(
 		if (field == null) allIds = false;
 		else fields.add(field);
 	}
+	// A bin() channel resolves to SQL text that collectColumns cannot see into,
+	// so its column comes from the plan: the mark groups by it too.
+	const bins = binCounts(parts);
+	if (bins) {
+		allIds = false;
+		for (const name of bins.keys()) columns.add(name);
+	}
 	if (allIds) {
 		return [...fields].map((field) => ({
 			column: null,
@@ -406,7 +419,33 @@ export function markKeys(
 		}));
 	}
 	const rows = handle.params.limit == null ? handle.arrowTable?.numRows : undefined;
-	return [{ column: columns.size === 1 ? [...columns][0] : null, groups: rows ?? 1 }];
+	if (columns.size === 1) return [{ column: [...columns][0], groups: rows ?? 1 }];
+	return [{ column: null, groups: rows ?? 1, columns: bins }];
+}
+
+/**
+ * The mark's own bins per source column, from its query parts: each `bin()`
+ * channel records its binned source and how many bins it has (`parts.bins`,
+ * what `dense()` pads by). Read from the plan, never from the data. Only
+ * plain columns count; an expression's bins, or a mark without bin metadata,
+ * give no entry, and the estimate then multiplies as before.
+ */
+function binCounts(parts: QueryDescriptor['parts']): Map<string, number> | undefined {
+	if (!parts.bins) return undefined;
+	const counts = new Map<string, number>();
+	for (const padding of Object.values(parts.bins)) {
+		const name = plainColumn(padding.source);
+		if (name == null || !(padding.count > 0)) continue;
+		counts.set(name, Math.max(counts.get(name) ?? 0, padding.count));
+	}
+	return counts.size > 0 ? counts : undefined;
+}
+
+/** The column a bin's source SQL names, when it is a plain (optionally quoted) column. */
+function plainColumn(source: string): string | null {
+	const quoted = /^"((?:[^"]|"")+)"$/.exec(source);
+	if (quoted) return quoted[1].replaceAll('""', '"');
+	return /^[A-Za-z_][A-Za-z0-9_]*$/.test(source) ? source : null;
 }
 
 /**
@@ -416,13 +455,30 @@ export function markKeys(
  * mark with x and fill on the same field has that field's groups, not their
  * square, and a bin dim on a column the mark already groups by adds its bins
  * to that key's (each pixel bin falls in about one of the mark's bins)
- * instead of multiplying.
+ * instead of multiplying. For a mark key over several columns (a histogram
+ * coloured by a category) the same holds per value of the other columns: a
+ * bin dim on a column the mark bins into `d` bins makes each group of the
+ * rest hold about `d + bins` groups instead of `d`, so the key's groups grow
+ * by `1 + bins / d`. Only one bin dim merges into a mark key, on purpose: a
+ * 2D brush over two binned columns of the same mark multiplies the second,
+ * which overestimates (the guard then skips rather than builds too much).
  */
 export function estimateGroups(markKeys: GroupKey[], activeKeys: GroupKey[]): number | null {
 	if (activeKeys.some((key) => key.groups == null)) return null;
 	const merged = new Set<GroupKey>();
 	let groups = 1;
 	for (const key of markKeys) {
+		if (key.column == null && key.columns) {
+			const within = activeKeys.find(
+				(active) => active.column != null && key.columns!.has(active.column) && !merged.has(active)
+			);
+			if (within) {
+				merged.add(within);
+				const d = Math.max(1, key.columns.get(within.column!)!);
+				groups *= Math.ceil(key.groups! * (1 + within.groups! / d));
+				continue;
+			}
+		}
 		const same =
 			key.column == null
 				? undefined
