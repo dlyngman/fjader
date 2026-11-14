@@ -469,6 +469,98 @@
 			);
 		});
 
+	// 13. Several ;-separated statements in one runQuery message, on the main
+	//     connection (identity DDL stays there: one connection per table). For
+	//     the dims chain's phase 1a: one message per field instead of six.
+	const multiStatement = () =>
+		exp(async () => {
+			const run = (sql: string) => runQuery(a, sql);
+			const exists = async (names: string[]) => {
+				const list = names.map((n) => `'${n}'`).join(', ');
+				const t = tableFromIPC(
+					await run(`SELECT table_name FROM duckdb_tables() WHERE table_name IN (${list})`)
+				);
+				return Array.from(
+					{ length: t.numRows },
+					(_, i) => (t.get(i) as { table_name: string }).table_name
+				);
+			};
+			await run(
+				'DROP TABLE IF EXISTS m13_src; DROP TABLE IF EXISTS m13_dim; DROP TABLE IF EXISTS m13_present'
+			);
+			await run(
+				"CREATE TABLE m13_src AS SELECT ['a', 'b', 'c', NULL][(i % 4) + 1] AS cat FROM range(1000) t(i)"
+			);
+
+			// a. A first-table field batch: returns the LAST statement's rows?
+			const batch = [
+				'CREATE TABLE IF NOT EXISTS m13_dim AS SELECT row_number() OVER (ORDER BY v) - 1 AS id, v AS value, CASE WHEN v IS NULL THEN NULL ELSE v END AS label FROM (SELECT DISTINCT cat AS v FROM m13_src)',
+				'CREATE UNIQUE INDEX IF NOT EXISTS m13_dim_uq ON m13_dim(value)',
+				'CREATE TABLE m13_present AS SELECT id FROM m13_dim WHERE label IS NOT NULL OR value IS NULL',
+				'SELECT id, value, label FROM m13_dim ORDER BY id'
+			].join(';\n');
+			let a13: string;
+			try {
+				const t = tableFromIPC(await run(batch));
+				a13 = `ok: ${t.numRows} rows, columns ${t.schema.fields.map((f) => f.name).join(',')}; tables now: ${(await exists(['m13_dim', 'm13_present'])).join(', ')}`;
+			} catch (e) {
+				a13 = `FAILED: ${String(e).slice(0, 120)}`;
+			}
+			add('13a field batch, one message', a13);
+
+			// b + c. A failing middle statement: what ran, what committed, what the error says.
+			await run(
+				'DROP TABLE IF EXISTS m13_x1; DROP TABLE IF EXISTS m13_x2; DROP TABLE IF EXISTS m13_x4'
+			);
+			let err = 'no error';
+			try {
+				await run(
+					[
+						'CREATE TABLE m13_x1 AS SELECT 1 AS x',
+						'CREATE TABLE m13_x2 AS SELECT 2 AS x',
+						'CREATE TABLE m13_x3 AS SELECT * FROM m13_no_such_table',
+						'CREATE TABLE m13_x4 AS SELECT 4 AS x'
+					].join('; ')
+				);
+			} catch (e) {
+				err = String(e);
+			}
+			const left = await exists(['m13_x1', 'm13_x2', 'm13_x3', 'm13_x4']);
+			add(
+				'13b failing 3rd of 4: tables after',
+				`${left.length ? left.join(', ') : 'none'} (1 and 2 present: each commits; none: one transaction; 4 present: it went on)`
+			);
+			add('13c the error', err.slice(0, 300));
+
+			// d. Cost: ten small statements, one message against ten awaited
+			//    messages, idle and with the main thread busy (as in 7b).
+			const stmt = (i: number) => `CREATE OR REPLACE TABLE m13_t${i} AS SELECT ${i} AS x`;
+			const ten = Array.from({ length: 10 }, (_, i) => i);
+			const med = (xs: number[]) => [...xs].sort((p, q) => p - q)[Math.floor(xs.length / 2)];
+			for (const busy of [false, true]) {
+				const stop = busy ? busyMainThread() : () => {};
+				const one: number[] = [];
+				const many: number[] = [];
+				try {
+					for (let r = 0; r < 5; r++) {
+						let t = now();
+						await run(ten.map(stmt).join('; '));
+						one.push(now() - t);
+						t = now();
+						for (const i of ten) await run(stmt(i));
+						many.push(now() - t);
+					}
+				} finally {
+					stop();
+				}
+				add(
+					`13d ten statements${busy ? ', main thread busy 8 ms/frame' : ', idle'}`,
+					`one message median ${fmt(med(one))}; ten messages median ${fmt(med(many))} ` +
+						`(${fmt((med(many) - med(one)) / 9)} saved per statement)`
+				);
+			}
+		});
+
 	onMount(open);
 </script>
 
@@ -500,6 +592,7 @@
 		<button disabled={!ready || running} onclick={types}>10 types</button>
 		<button disabled={!ready || running} onclick={ddlOverlap}>11 DDL overlap</button>
 		<button disabled={!ready || running} onclick={cancelledCreate}>12 cancelled CREATE</button>
+		<button disabled={!ready || running} onclick={multiStatement}>13 multi-statement</button>
 	</div>
 	<p>{ready ? (running ? 'running…' : 'ready') : 'starting DuckDB…'}</p>
 	<table>
