@@ -125,6 +125,11 @@ export class SourceRouting {
 		r.mainSlow = 0;
 	}
 
+	/** The lane a source sticks to, whatever its cost (a read forced sliced). */
+	laneOf(source: string): number {
+		return this.#of(source).lane;
+	}
+
 	/** The lane index to read `source` on, or null for the main connection. */
 	route(source: string): number | null {
 		const r = this.#of(source);

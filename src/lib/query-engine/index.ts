@@ -13,7 +13,7 @@
 
 import { setContext, getContext } from 'svelte';
 import { QueryEngine } from './QueryEngine';
-import type { DuckDBConnection } from './QueryEngine';
+import type { DuckDBConnection, QueryEngineOptions } from './QueryEngine';
 import { FilterGroupRegistry } from './FilterGroupRegistry.svelte';
 import { tableSchemaService } from '$lib/data/TableSchemaService.svelte';
 
@@ -34,8 +34,11 @@ export function createQueryServices(queryEngine: QueryEngine) {
  * Call this synchronously in a component's <script> block.
  * Accepts a Promise<DuckDBConnection> — queries defer until it resolves.
  */
-export function setQueryContext(connection: DuckDBConnection | Promise<DuckDBConnection>) {
-	const { queryEngine, filterGroups } = createQueryServices(new QueryEngine(connection));
+export function setQueryContext(
+	connection: DuckDBConnection | Promise<DuckDBConnection>,
+	options?: QueryEngineOptions
+) {
+	const { queryEngine, filterGroups } = createQueryServices(new QueryEngine(connection, options));
 	setContext('query-engine', queryEngine);
 	setContext('filter-groups', filterGroups);
 	return { queryEngine, filterGroups };

@@ -569,3 +569,99 @@ describe('QueryEngine source lanes', () => {
 		expect(log).toEqual(['main SELECT a']);
 	});
 });
+
+describe('QueryEngine quiet cancel and slow marks', () => {
+	async function ipcBytes() {
+		const { tableToIPC, tableFromArrays } = await import('@uwdata/flechette');
+		return tableToIPC(tableFromArrays({ a: [1] }), { format: 'stream' })!;
+	}
+
+	/** A lane whose reads finish only when released, or reject when aborted. */
+	function heldLane() {
+		const log: string[] = [];
+		const releases: (() => void)[] = [];
+		const conn: DuckDBConnection = {
+			async query() {
+				return { numRows: 0, get: () => undefined } as never;
+			},
+			async queryIPC(sql: string) {
+				log.push(`main ${sql}`);
+				return ipcBytes();
+			},
+			async exec() {},
+			async close() {},
+			openSlicedLane: async () => ({
+				query: (sql: string, signal?: AbortSignal) =>
+					new Promise((resolve, reject) => {
+						log.push(`lane ${sql}`);
+						signal?.addEventListener('abort', () => {
+							log.push(`cancel ${sql}`);
+							reject(new DOMException('aborted', 'AbortError'));
+						});
+						releases.push(async () => resolve({ ipc: [await ipcBytes()], polls: 30, execMs: 200 }));
+					}),
+				exec: async () => ({ polls: 0 }),
+				close: async () => {}
+			})
+		};
+		return { conn, log, releases };
+	}
+
+	const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+	it('cancels a superseded read on a lane once input goes quiet, and runs the newer one', async () => {
+		const { conn, log } = heldLane();
+		const engine = new QueryEngine(conn);
+		const first = engine.query('SELECT 1', {
+			callerId: 'm',
+			source: 's',
+			data: true,
+			cache: false
+		});
+		await wait(0);
+		const last = engine.query('SELECT 2', { callerId: 'm', source: 's', data: true, cache: false });
+		await expect(first).rejects.toThrow();
+		expect(log).toEqual(['lane SELECT 1', 'cancel SELECT 1', 'lane SELECT 2']);
+		void last.catch(() => {});
+	});
+
+	it('does not cancel while requests keep coming (a drag)', async () => {
+		const { conn, log } = heldLane();
+		const engine = new QueryEngine(conn);
+		void engine
+			.query('SELECT 1', { callerId: 'm', source: 's', data: true, cache: false })
+			.catch(() => {});
+		for (let i = 2; i < 6; i++) {
+			await wait(20);
+			void engine
+				.query(`SELECT ${i}`, { callerId: 'm', source: 's', data: true, cache: false })
+				.catch(() => {});
+		}
+		expect(log.some((l) => l.startsWith('cancel'))).toBe(false);
+	});
+
+	it('can be turned off', async () => {
+		const { conn, log } = heldLane();
+		const engine = new QueryEngine(conn, { cancelSlicedOnQuiet: false });
+		void engine
+			.query('SELECT 1', { callerId: 'm', source: 's', data: true, cache: false })
+			.catch(() => {});
+		await wait(0);
+		void engine
+			.query('SELECT 2', { callerId: 'm', source: 's', data: true, cache: false })
+			.catch(() => {});
+		await wait(80);
+		expect(log).toEqual(['lane SELECT 1']);
+	});
+
+	it('reads a slow mark sliced even on a fast source', async () => {
+		const { conn, log } = heldLane();
+		const engine = new QueryEngine(conn);
+		await engine.exec('CREATE TABLE fast_t AS SELECT 1 AS a');
+		void engine.query('SELECT a', { source: 'fast_t', data: true, sliced: true }).catch(() => {});
+		await engine.query('SELECT b', { source: 'fast_t', data: true });
+		await wait(0);
+		// The mark's read sliced, the other read of the same fast table on main.
+		expect(log.sort()).toEqual(['lane SELECT a', 'main SELECT b']);
+	});
+});

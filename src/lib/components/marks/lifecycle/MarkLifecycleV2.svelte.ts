@@ -812,7 +812,9 @@ export class MarkLifecycleV2 {
 						parts,
 						schema,
 						transformCompiler: this.#transformCompiler,
-						route: this.#route
+						route: this.#route,
+						// holdsEntrance={false}: the author knows this mark is slow.
+						slow: this.#reactiveConfig.holdsEntrance === false
 					},
 					this.#filterGroup
 				);
