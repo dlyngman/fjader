@@ -174,12 +174,13 @@ const MAIN_QUIET_MS = 2;
 
 /**
  * While the main connection works, all lanes together get one slice per this
- * many ms: ~20% of the worker at 5 ms slices. A slow source keeps a minimum
+ * many ms: ~15% of the worker at 5 ms slices. A slow source keeps a minimum
  * rate, and a fast query waits at most one slice for it. One budget for
  * every lane, the background lane too: a budget per lane would let five busy
- * lanes take the whole worker between them.
+ * lanes take the whole worker between them. At 25 ms (~20%) the fast
+ * charts' p90 rose from 15 to 19-20 ms during a brush beside a slow chart.
  */
-const SLICE_SHARE_MS = 25;
+const SLICE_SHARE_MS = 33;
 
 export interface QueryEngineOptions {
 	/** Overrides BUILD_MAX_WAIT_MS; tests use it to make the queue deterministic. */
