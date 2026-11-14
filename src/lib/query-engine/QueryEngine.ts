@@ -139,6 +139,14 @@ export interface StatementPlacement {
  */
 export type StatementClass = 'interaction' | 'background';
 
+/** A mark asking for categorical identity columns, for `observeIdentityRequests`. */
+export interface IdentityRequest {
+	table: string;
+	fields: string[];
+	/** performance.now() when asked. */
+	time: number;
+}
+
 /** One statement as it reached the connection, for `observeStatements`. */
 export interface StatementRecord {
 	sql: string;
@@ -450,6 +458,10 @@ export class QueryEngine {
 			// Seen created as a table through the engine, or listed in the catalog
 			// (which lists tables, not views).
 			isBaseTable: (table) => this.#known.get(table) === 'table' || !!this.#catalog?.has(table),
+			onRequest: (table, fields, time) => {
+				if (this.#identityObservers.size === 0) return;
+				for (const observe of this.#identityObservers) observe({ table, fields, time });
+			},
 			execBatch: async (statements) => {
 				const table = await this.execBatch(statements);
 				const rows: Array<Record<string, unknown>> = [];
@@ -922,6 +934,18 @@ export class QueryEngine {
 		() => new LaneSlot(this.#openLaneFn, this.#laneFailed)
 	);
 	#routing = new SourceRouting(SOURCE_LANES);
+
+	/**
+	 * Debug: every categorical identity request (a mark's ensureColumns call),
+	 * with its table, fields and time, before deduplication. Returns the
+	 * unsubscribe; costs nothing while no one listens.
+	 */
+	observeIdentityRequests(listener: (request: IdentityRequest) => void): () => void {
+		this.#identityObservers.add(listener);
+		return () => this.#identityObservers.delete(listener);
+	}
+
+	#identityObservers = new Set<(request: IdentityRequest) => void>();
 
 	/**
 	 * Listen to every statement sent to the connection, as it settles. For

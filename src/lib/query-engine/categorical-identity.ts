@@ -82,6 +82,13 @@ export interface IdentityExec {
 	 * queryRows, with the same result.
 	 */
 	execBatch?(statements: string[]): Promise<Array<Record<string, unknown>>>;
+	/**
+	 * Debug: told of every ensureColumns call (the table, the fields asked for,
+	 * performance.now()), before anything is deduplicated. For measuring when
+	 * marks ask, e.g. whether one table's fields arrive close enough together
+	 * to share a drain.
+	 */
+	onRequest?(table: string, fields: string[], time: number): void;
 }
 
 /**
@@ -542,6 +549,11 @@ export class CategoricalIdentity {
 	): Promise<void> {
 		const categorical = (fields.categorical ?? []).map(asField);
 		if (categorical.length === 0) return;
+		this.#exec.onRequest?.(
+			table,
+			categorical.map((f) => f.key),
+			performance.now()
+		);
 
 		let entry = this.#views.get(table);
 		if (!entry) {

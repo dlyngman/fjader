@@ -518,6 +518,22 @@ describe('CategoricalIdentity', () => {
 		expect(identity.identity('small').values).toEqual(['a', 'b', 'c']);
 	});
 
+	it('reports every request to the host, before deduplication', async () => {
+		const requests: { table: string; fields: string[] }[] = [];
+		const observed = new CategoricalIdentity(
+			{ ...exec, onRequest: (table, fields) => requests.push({ table, fields }) },
+			SESSION
+		);
+		await Promise.all([
+			observed.ensureColumns('penguins', { categorical: ['species'] }),
+			observed.ensureColumns('penguins', { categorical: ['species', 'island'] })
+		]);
+		expect(requests).toEqual([
+			{ table: 'penguins', fields: ['species'] },
+			{ table: 'penguins', fields: ['species', 'island'] }
+		]);
+	});
+
 	it('allows an ordinary categorical without complaint', async () => {
 		await expect(
 			identity.ensureColumns('penguins', { categorical: ['species'] })
