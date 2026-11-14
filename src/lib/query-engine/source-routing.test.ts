@@ -98,11 +98,18 @@ describe('SourceRouting', () => {
 
 describe('sourceDDL', () => {
 	it.each([
-		['CREATE TABLE flights AS SELECT 1', { kind: 'table', name: 'flights' }],
-		['create or replace temp table "My ""T""" (a INT)', { kind: 'table', name: 'My "T"' }],
-		['CREATE TEMPORARY TABLE IF NOT EXISTS t2(a INT)', { kind: 'table', name: 't2' }],
-		['  CREATE OR REPLACE VIEW slow_rule AS SELECT 1', { kind: 'view', name: 'slow_rule' }],
-		['CREATE VIEW IF NOT EXISTS v AS SELECT 1', { kind: 'view', name: 'v' }],
+		['CREATE TABLE flights AS SELECT 1', { kind: 'table', name: 'flights', temp: false }],
+		[
+			'create or replace temp table "My ""T""" (a INT)',
+			{ kind: 'table', name: 'My "T"', temp: true }
+		],
+		['CREATE TEMPORARY TABLE IF NOT EXISTS t2(a INT)', { kind: 'table', name: 't2', temp: true }],
+		[
+			'  CREATE OR REPLACE VIEW slow_rule AS SELECT 1',
+			{ kind: 'view', name: 'slow_rule', temp: false }
+		],
+		['CREATE VIEW IF NOT EXISTS v AS SELECT 1', { kind: 'view', name: 'v', temp: false }],
+		['CREATE TEMP VIEW tv AS SELECT 1', { kind: 'view', name: 'tv', temp: true }],
 		['DROP TABLE IF EXISTS "__dplot_preagg_1"', { kind: 'drop', name: '__dplot_preagg_1' }],
 		['DROP VIEW v', { kind: 'drop', name: 'v' }]
 	])('reads %s', (sql, expected) => {

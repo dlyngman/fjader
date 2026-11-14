@@ -12,14 +12,16 @@
  *   least three round trips (start, fetch, a final empty fetch), and each
  *   waits behind a slice of every other busy lane, a cost that grows with the
  *   number of busy lanes (so the pool stays small).
- * - Hence the PRIOR, set before a source's first read is routed (from
- *   QueryEngine.describe): a base or temporary table in an in-memory catalog
- *   starts fast, its cost bounded by its size; a view, or a table in an
- *   attached remote or file database, starts unknown and is read sliced. A
+ * - Hence the PRIOR, where a source starts: first from the DDL that made it
+ *   through the engine (QueryEngine #noteDDL: a table starts fast, a view
+ *   unknown), else from the catalog, looked up off the critical path (a
+ *   table in an in-memory catalog starts fast; anything else unknown). A
  *   preagg table, which fjader builds in memory, starts fast. fjader's own
  *   identity views are never a source: a mark's reads name its base table.
  *   An app can override the prior (QueryEngine.sourceCost), and a
  *   measurement corrects either.
+ * - TEMP sources never leave the main connection: they exist only on the
+ *   connection that made it (QueryEngine #localSources).
  * - Only DATA reads update the record. A source's first statements are a
  *   DESCRIBE or a range query, quick even when its data query (a GROUP BY, a
  *   window, dense padding) is not.
@@ -179,19 +181,21 @@ export class SourceRouting {
  */
 export function sourceDDL(
 	sql: string
-): { kind: 'table' | 'view'; name: string } | { kind: 'drop'; name: string } | null {
+): { kind: 'table' | 'view'; name: string; temp: boolean } | { kind: 'drop'; name: string } | null {
 	const name = String.raw`("(?:[^"]|"")+"|[A-Za-z_][A-Za-z0-9_$]*)`;
 	const end = String.raw`(?=\s|\(|;|$)`;
 	const create = new RegExp(
-		String.raw`^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:TEMP|TEMPORARY)\s+)?(TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?` +
+		String.raw`^\s*CREATE\s+(?:OR\s+REPLACE\s+)?((?:TEMP|TEMPORARY)\s+)?(TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?` +
 			name +
 			end,
 		'i'
 	).exec(sql);
 	if (create)
 		return {
-			kind: create[1].toUpperCase() === 'TABLE' ? 'table' : 'view',
-			name: unquote(create[2])
+			kind: create[2].toUpperCase() === 'TABLE' ? 'table' : 'view',
+			name: unquote(create[3]),
+			// TEMP objects belong to the connection that made them.
+			temp: !!create[1]
 		};
 	const drop = new RegExp(
 		String.raw`^\s*DROP\s+(?:TABLE|VIEW)\s+(?:IF\s+EXISTS\s+)?` + name + end,

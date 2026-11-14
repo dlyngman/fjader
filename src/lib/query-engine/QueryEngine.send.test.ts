@@ -510,4 +510,62 @@ describe('QueryEngine source lanes', () => {
 		finish();
 		await slow;
 	});
+
+	it('keeps a TEMP view created through the engine on the main connection', async () => {
+		const { conn, log } = laneConnection(() => 30);
+		const engine = new QueryEngine(conn);
+		await engine.exec('CREATE TEMP VIEW tv AS SELECT 1 AS a');
+		await engine.query('SELECT a', { source: 'tv', data: true });
+		await engine.query('SELECT a', { source: 'tv', data: true });
+		expect(log).toEqual(['main SELECT a', 'main SELECT a']);
+	});
+
+	it('retries a read on the main connection when a lane cannot see its source, and keeps it there', async () => {
+		const { conn, log } = laneConnection(() => 30);
+		const open = conn.openSlicedLane!;
+		conn.openSlicedLane = async (options) => {
+			const lane = await open(options);
+			return {
+				...lane,
+				query: async (sql: string) => {
+					log.push(`lane ${sql}`);
+					throw new Error('Catalog Error: Table with name app_temp does not exist!');
+				}
+			};
+		};
+		const engine = new QueryEngine(conn);
+		// Made on the app's own connection: the engine never saw it.
+		const t = await engine.query('SELECT a', { source: 'app_temp', data: true });
+		expect(t.numRows).toBe(1);
+		await engine.query('SELECT b', { source: 'app_temp', data: true });
+		expect(log).toEqual(['lane SELECT a', 'main SELECT a', 'main SELECT b']);
+	});
+
+	it('passes other lane errors through without a retry', async () => {
+		const { conn } = laneConnection(() => 30);
+		const open = conn.openSlicedLane!;
+		conn.openSlicedLane = async (options) => {
+			const lane = await open(options);
+			return {
+				...lane,
+				query: async () => {
+					throw new Error('Binder Error: column x not found');
+				}
+			};
+		};
+		const engine = new QueryEngine(conn);
+		await expect(engine.query('SELECT x', { source: 'v', data: true })).rejects.toThrow(
+			'Binder Error'
+		);
+	});
+
+	it('keeps the prior of a table learned from DDL across clearQueryCache()', async () => {
+		const { conn, log } = laneConnection(() => 30);
+		const engine = new QueryEngine(conn);
+		await engine.exec('CREATE TABLE t AS SELECT 1 AS a');
+		await engine.clearQueryCache();
+		log.length = 0;
+		await engine.query('SELECT a', { source: 't', data: true });
+		expect(log).toEqual(['main SELECT a']);
+	});
 });

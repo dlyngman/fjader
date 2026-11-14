@@ -323,6 +323,12 @@ interface MarkRegistration {
 // QueryEngine
 // ---------------------------------------------------------------------------
 
+/** DuckDB's catalog error for a table or view this connection cannot see. */
+function isMissingRelation(e: unknown): boolean {
+	const message = e instanceof Error ? e.message : String(e);
+	return /Catalog Error: (Table|View) with name .+ does not exist/i.test(message);
+}
+
 export class QueryEngine {
 	#conn: DuckDBConnection | null = null;
 	#connPromise: Promise<DuckDBConnection> | null = null;
@@ -654,7 +660,8 @@ export class QueryEngine {
 		kind: StatementRecord['kind'] = 'query',
 		signal?: AbortSignal
 	): Promise<Table> {
-		return this.#send(kind, sql, place, {
+		let sliced = false;
+		const read = this.#send(kind, sql, place, {
 			run: async (conn) => {
 				if (!conn.queryIPC) return conn.query(sql);
 				const t0 = performance.now();
@@ -665,6 +672,7 @@ export class QueryEngine {
 				return table;
 			},
 			runSliced: async (lane) => {
+				sliced = true;
 				const result: LaneResult = await lane.query(sql, signal);
 				const table = tableFromIPC(result.ipc);
 				if (this.#notesCost(place)) {
@@ -673,6 +681,16 @@ export class QueryEngine {
 				return table;
 			},
 			signal
+		});
+		// Safety net for a TEMP source made where the engine could not see it
+		// (on the app's connection, which is the main one): a lane does not
+		// have it. Once found missing there, it stays on the main connection
+		// for good, and this read is sent there.
+		return read.catch((e) => {
+			const source = place.source;
+			if (!sliced || !source || !isMissingRelation(e)) throw e;
+			this.#localSources.add(source);
+			return this.#queryRaw(sql, place, kind, signal);
 		});
 	}
 
@@ -688,6 +706,7 @@ export class QueryEngine {
 		if (place.connectionLocal) return null;
 		if (place.class === 'background') return this.#backgroundLane;
 		if (!place.source || !this.#conn?.openSlicedLane) return null;
+		if (this.#localSources.has(place.source)) return null;
 		const i = this.#routing.route(place.source);
 		return i == null ? null : this.#sourceLanes[i];
 	}
@@ -1057,10 +1076,13 @@ export class QueryEngine {
 		if (!ddl) return;
 		if (ddl.kind === 'drop') {
 			this.#known.delete(ddl.name);
+			this.#localSources.delete(ddl.name);
 			this.#routing.forget(ddl.name);
 			return;
 		}
 		this.#known.set(ddl.name, ddl.kind);
+		if (ddl.temp) this.#localSources.add(ddl.name);
+		else this.#localSources.delete(ddl.name);
 		// Replacing a name re-opens its record: a view over a table, a new table.
 		this.#routing.forget(ddl.name);
 		if (ddl.kind === 'table') this.#routing.prior(ddl.name, 'fast');
@@ -1068,6 +1090,13 @@ export class QueryEngine {
 
 	/** Sources seen created through the engine, by name. */
 	#known = new Map<string, 'table' | 'view'>();
+	/**
+	 * Sources that exist only on the main connection: TEMP tables and views
+	 * (they belong to the connection that made them), whether seen created
+	 * through the engine or found missing on a lane. Never routed to a lane,
+	 * whatever their cost.
+	 */
+	#localSources = new Set<string>();
 
 	/**
 	 * Get column info for a table via DESCRIBE.
@@ -1222,6 +1251,11 @@ export class QueryEngine {
 		// and the catalog is read again.
 		this.#routing.reset();
 		this.#catalog = null;
+		// Tables learned from DDL are still tables: their prior comes back
+		// (#classifySource skips names it already knows).
+		for (const [name, kind] of this.#known) {
+			if (kind === 'table') this.#routing.prior(name, 'fast');
+		}
 		this.#queryCache.clear();
 		return identityReset;
 	}
