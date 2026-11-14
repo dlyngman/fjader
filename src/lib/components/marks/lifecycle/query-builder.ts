@@ -138,8 +138,8 @@ export interface AssembleOptions {
 /**
  * Wrap an expression so DuckDB returns a Float32-compatible REAL with NULLs
  * mapped to NaN: COALESCE(CAST(expr AS REAL), 'NaN'::REAL). Arrow columns then
- * have nullCount=0 and clean buffers for zero-copy GPU upload; shaders detect
- * NaN and discard.
+ * have nullCount=0 and clean Float32 buffers that upload to the GPU as they are,
+ * with no per-row JS pass; shaders detect NaN and discard.
  */
 export function castReal(expr: unknown): ExprNode {
 	return coalesce(cast(expr as ExprNode, 'REAL'), sql`'NaN'::REAL`) as ExprNode;

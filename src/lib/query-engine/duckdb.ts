@@ -9,7 +9,9 @@
  *
  * Both use the fast IPC query path: bypasses duckdb-wasm's Arrow JS
  * deserialization and returns raw Arrow IPC bytes. QueryEngine decodes them with
- * flechette for zero-copy typed arrays that go straight to GPU buffers.
+ * flechette into typed arrays for the GPU buffers. These are views on the IPC
+ * bytes only up to one record batch: DuckDB-WASM writes a batch per DuckDB vector
+ * (~2k rows), and flechette concatenates a column that spans several.
  */
 
 import type { AsyncDuckDBConnection, DuckDBBundles } from '@duckdb/duckdb-wasm';
@@ -61,7 +63,8 @@ export function connectionFrom(
 	options: { pollingIntervalMs?: number } = {}
 ): DuckDBConnection {
 	// useUnsafe + bindings.runQuery bypasses Arrow JS deserialization entirely,
-	// returning raw IPC bytes that flechette decodes into zero-copy typed arrays.
+	// returning raw IPC bytes that flechette decodes into typed arrays (one copy per
+	// column once a result spans more than one ~2k-row record batch).
 	return {
 		queryIPC(sql: string): Promise<Uint8Array> {
 			return conn.useUnsafe((bindings, connId) => bindings.runQuery(connId, sql));

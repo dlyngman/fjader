@@ -23,7 +23,7 @@ fjader needs Chrome 149 or later, or another Chromium browser on that version. I
 Three things to know before using it in a deployed app:
 
 - **Data goes to the browser in full.** The Python widget and the Streamlit component send every column of a DataFrame to the browser, where DuckDB-WASM queries it. Anyone viewing the app can extract it, so pass only the columns you mean to show. In Jupyter, saved widget state can also store the data in the notebook file.
-- **DuckDB-WASM loads from jsDelivr at runtime.** The browser fetches it from the CDN, so locked-down networks that block it cannot render charts.
+- **DuckDB-WASM loads from jsDelivr at runtime by default.** A Svelte app can serve the files itself with `initFjader({ bundles })`, or pass a DuckDB instance it already has with `initFjader(connectionFrom(conn))`. `Fjader.render()`, the Python widget and Streamlit always load from the CDN, so locked-down networks that block it cannot render charts with them.
 - **Specs are trusted input.** A spec's `{ "sql": "…" }` field runs as raw SQL in the viewer's DuckDB-WASM. Don't build specs from untrusted input.
 
 ## Svelte
