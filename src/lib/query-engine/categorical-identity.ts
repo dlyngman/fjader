@@ -76,6 +76,12 @@ export interface IdentityExec {
 	 * (SourceRouting), and must not reuse this.
 	 */
 	isBaseTable?(table: string): boolean;
+	/**
+	 * Run statements as one message, returning the last one's rows (the
+	 * engine's execBatch). Absent: they run one by one through exec and
+	 * queryRows, with the same result.
+	 */
+	execBatch?(statements: string[]): Promise<Array<Record<string, unknown>>>;
 }
 
 /**
@@ -463,44 +469,6 @@ export class CategoricalIdentity {
 		return this.#dims.get(field)?.present.get(table)?.ids ?? null;
 	}
 
-	/**
-	 * Record which of the dim's ids `table` holds: the ids of its distinct values,
-	 * joined as the view joins (NULL to a NULL row, never to a synthetic one).
-	 * Once per table, when it folds in.
-	 *
-	 * The FIRST table needs no scan: it built the dim (the CREATE branch of
-	 * #ensureDimNow; `chain` serializes work on a dim, so only one table takes
-	 * it), so every real row came from it, and its present ids are the dim's
-	 * real ids, `label IS NULL` (a synthetic row has a label; the NULL row has
-	 * none and is present, as the join finds it). Its ids come from the rows
-	 * #refreshValues just read. At 2M rows that scan cost 41-63 ms a field.
-	 * An appending table holds a subset and keeps the scan.
-	 */
-	async #recordPresent(
-		dim: DimEntry,
-		table: string,
-		expr: string,
-		src: string,
-		firstTable: { ids: number[] } | null
-	): Promise<void> {
-		const name = `${dim.name}_t_${identityToken(table)}`;
-		if (firstTable) {
-			await this.#exec.exec(
-				`CREATE OR REPLACE TABLE ${quote(name)} AS ` +
-					`SELECT id FROM ${quote(dim.name)} WHERE label IS NULL`
-			);
-			dim.present.set(table, { name, ids: new Set(firstTable.ids) });
-			return;
-		}
-		await this.#exec.exec(
-			`CREATE OR REPLACE TABLE ${quote(name)} AS ` +
-				`SELECT DISTINCT d.id FROM (SELECT DISTINCT ${expr} AS v FROM ${src}) s ` +
-				`JOIN ${quote(dim.name)} d ON s.v IS NOT DISTINCT FROM d.value AND d.label IS NULL`
-		);
-		const rows = await this.#exec.queryRows(`SELECT id FROM ${quote(name)}`);
-		dim.present.set(table, { name, ids: new Set(rows.map((r) => Number(r.id))) });
-	}
-
 	/** Name of the view that carries id columns for `table`. */
 	viewTable(table: string): string {
 		return `${identityToken(table)}_v_s${this.#session}`;
@@ -871,67 +839,82 @@ export class CategoricalIdentity {
 
 		await this.#checkCardinality(field, expr, src, table);
 
+		// The field's statements as ONE message (#batch): sent one by one, each
+		// step went to the back of the queue, behind every other mark's reads
+		// sent meanwhile; at 2M rows the categorical charts trailed the others
+		// by 420-500 ms. The last statement returns the values the JS cache
+		// needs, and this table's present ids with them.
 		const first = dim.tables.size === 0;
-		if (first) {
-			// `label` is NULL for every real value and carries the text for a
-			// synthetic one (see reserveSynthetic). It exists because `value` takes
-			// the SOURCE column's type: on a band axis over a year or a rating
-			// there is no INTEGER that means "Other", and writing the string into
-			// that column is a conversion error, not a fallback.
-			await this.#exec.exec(
-				`CREATE TABLE IF NOT EXISTS ${dimName} AS ` +
-					`SELECT value, NULL::VARCHAR AS label, ` +
-					`(ROW_NUMBER() OVER (ORDER BY value NULLS LAST) - 1)::INT AS id ` +
-					`FROM (SELECT DISTINCT ${expr} AS value FROM ${src})`
-			);
-			// A second statement: CTAS cannot carry a constraint. `value` is unique
-			// by construction here (DISTINCT) and on append (WHERE NOT EXISTS), but
-			// reserveSynthetic is a writer that could break it, and a duplicate
-			// value does not tie-break — #createView joins ON t.field = d.value, so
-			// it FANS OUT every matching source row in every query against the
-			// view. Cheap insurance against a future writer forgetting.
-			//
-			// Synthetic rows hold value NULL, and SQL treats NULLs as distinct
-			// under a unique index, so any number of them coexist here — verified
-			// against DuckDB rather than assumed.
-			await this.#exec.exec(
-				`CREATE UNIQUE INDEX IF NOT EXISTS ${quote(`${dim.name}_value_uq`)} ON ${dimName}(value)`
-			);
-		} else {
-			// Columns named rather than positional: the table has three of them and
-			// a positional INSERT would silently put the id into `label`.
-			await this.#exec.exec(
-				`INSERT INTO ${dimName} (value, label, id) ` +
-					`SELECT s.v, NULL, ((SELECT COALESCE(MAX(id), -1) FROM ${dimName}) + ` +
-					`ROW_NUMBER() OVER (ORDER BY s.v NULLS LAST))::INT ` +
-					`FROM (SELECT DISTINCT ${expr} AS v FROM ${src}) s ` +
-					// IS NOT DISTINCT FROM, so a second table's NULLs find the NULL row
-					// (NULL = NULL is never true, and `=` appended one per table). The
-					// label test keeps a synthetic row, also value NULL, from passing
-					// for it.
-					`WHERE NOT EXISTS (SELECT 1 FROM ${dimName} d ` +
-					`WHERE d.value IS NOT DISTINCT FROM s.v AND d.label IS NULL)`
-			);
-		}
+		const presentName = `${dim.name}_t_${identityToken(table)}`;
+		const present = quote(presentName);
+		// `label` is NULL for every real value and carries the text for a
+		// synthetic one (see reserveSynthetic). It exists because `value` takes the
+		// SOURCE column's type: on a band axis over a year or a rating there is no
+		// INTEGER that means "Other", and writing the string into that column is a
+		// conversion error, not a fallback.
+		const statements = first
+			? [
+					`CREATE TABLE IF NOT EXISTS ${dimName} AS ` +
+						`SELECT value, NULL::VARCHAR AS label, ` +
+						`(ROW_NUMBER() OVER (ORDER BY value NULLS LAST) - 1)::INT AS id ` +
+						`FROM (SELECT DISTINCT ${expr} AS value FROM ${src})`,
+					// A second statement: CTAS cannot carry a constraint. `value` is
+					// unique by construction here (DISTINCT) and on append (WHERE NOT
+					// EXISTS), but reserveSynthetic is a writer that could break it, and
+					// a duplicate value does not tie-break: #createView joins ON
+					// t.field = d.value, so it FANS OUT every matching source row in
+					// every query against the view. Synthetic rows hold value NULL, and
+					// SQL treats NULLs as distinct under a unique index, so any number of
+					// them coexist (verified against DuckDB).
+					`CREATE UNIQUE INDEX IF NOT EXISTS ${quote(`${dim.name}_value_uq`)} ON ${dimName}(value)`,
+					// The table that built the dim holds every real row of it (`chain`
+					// serializes a dim's work, so only one table takes this branch): its
+					// present ids are the real rows, no scan (the NULL row has no label
+					// and is present, as the join finds it; a synthetic row has one).
+					`CREATE OR REPLACE TABLE ${present} AS SELECT id FROM ${dimName} WHERE label IS NULL`,
+					`SELECT id, value, label FROM ${dimName} ORDER BY id`
+				]
+			: [
+					// Columns named rather than positional: a positional INSERT would
+					// silently put the id into `label`. IS NOT DISTINCT FROM, so a second
+					// table's NULLs find the NULL row; the label test keeps a synthetic
+					// row, also value NULL, from passing for it.
+					`INSERT INTO ${dimName} (value, label, id) ` +
+						`SELECT s.v, NULL, ((SELECT COALESCE(MAX(id), -1) FROM ${dimName}) + ` +
+						`ROW_NUMBER() OVER (ORDER BY s.v NULLS LAST))::INT ` +
+						`FROM (SELECT DISTINCT ${expr} AS v FROM ${src}) s ` +
+						`WHERE NOT EXISTS (SELECT 1 FROM ${dimName} d ` +
+						`WHERE d.value IS NOT DISTINCT FROM s.v AND d.label IS NULL)`,
+					// An appending table holds a subset: the ids of its distinct values,
+					// joined as the view joins.
+					`CREATE OR REPLACE TABLE ${present} AS ` +
+						`SELECT DISTINCT d.id FROM (SELECT DISTINCT ${expr} AS v FROM ${src}) s ` +
+						`JOIN ${dimName} d ON s.v IS NOT DISTINCT FROM d.value AND d.label IS NULL`,
+					`SELECT id, value, label, id IN (SELECT id FROM ${present}) AS present ` +
+						`FROM ${dimName} ORDER BY id`
+				];
+		const rows = await this.#batch(statements);
+
+		// A reset while the batch ran: its DROPs queued behind it, so these rows
+		// are of dims that no longer exist. Applying them would fill the cleared
+		// state with stale ids.
+		if (this.#generation !== generation) return;
 
 		dim.tables.add(table);
-		const rows = await this.#refreshValues(field);
-		await this.#recordPresent(
-			dim,
-			table,
-			expr,
-			src,
-			first ? { ids: rows.filter((r) => r.label == null).map((r) => Number(r.id)) } : null
-		);
+		this.#applyValues(field, rows);
+		const ids = first
+			? rows.filter((r) => r.label == null).map((r) => Number(r.id))
+			: rows.filter((r) => r.present === true).map((r) => Number(r.id));
+		dim.present.set(table, { name: presentName, ids: new Set(ids) });
 
-		// The gate above saw ONE table. The dim spans every table that registers
-		// the field, so two tables of 6k each pass it individually and produce a
-		// 12k dim — and the limit is a property of the dim, since that is what
-		// sizes the slot table and therefore what the shared buffer has to hold.
-		// Exact rather than approximate here: the rows exist, COUNT(*) on a
-		// categorical dim is trivial, and this is the number the error should
-		// quote.
 		this.#checkDimSize(dim, field, this.identity(field).values.length);
+	}
+
+	/** Statements as one message (IdentityExec.execBatch), or one by one; the last one's rows. */
+	async #batch(statements: string[]): Promise<Array<Record<string, unknown>>> {
+		if (this.#exec.execBatch) return this.#exec.execBatch(statements);
+		for (const stmt of statements.slice(0, -1)) await this.#exec.exec(stmt);
+		return this.#exec.queryRows(statements[statements.length - 1]);
 	}
 
 	/**
@@ -1068,12 +1051,16 @@ export class CategoricalIdentity {
 
 	#version = 0;
 
-	/** Re-read the dim's values into the JS cache; returns the rows read (id order). */
-	async #refreshValues(field: string): Promise<Record<string, unknown>[]> {
+	/** Re-read the dim's values into the JS cache. */
+	async #refreshValues(field: string): Promise<void> {
 		const rows = await this.#exec.queryRows(
 			`SELECT id, value, label FROM ${quote(this.dimTable(field))} ORDER BY id`
 		);
+		this.#applyValues(field, rows);
+	}
 
+	/** The dim's rows (`id, value, label`, in id order) into the JS cache. */
+	#applyValues(field: string, rows: Array<Record<string, unknown>>): void {
 		// Ordered by id and dense by construction, so position is the id — and
 		// reset() derives value -> id from the same pass, so the two directions
 		// cannot disagree.
@@ -1093,7 +1080,6 @@ export class CategoricalIdentity {
 		// version must see them. One keyed on the old version may also see them,
 		// which costs a re-run later, not a stale result.
 		this.#version++;
-		return rows;
 	}
 
 	/** CREATE OR REPLACE the view with an id column for every field in `all`. */
