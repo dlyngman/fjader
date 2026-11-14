@@ -930,6 +930,97 @@ describe('the size guard', () => {
 		expect(creates()).toHaveLength(1);
 	});
 
+	/** The histogram's own bins on x, as bin() records them in the query parts. */
+	const X_BINS = {
+		b: { kind: 'number' as const, source: '"x"', min: 0, alpha: 20, count: 50, offset: 0 }
+	};
+
+	it('merges a bin dim into a mark grouped by its column and another (a histogram by category)', async () => {
+		// 50 x bins (from the parts, not the data) × 2 categories = 100 groups,
+		// brushed on x at 3 px per unit (~3001 pixel bins): about 100 × (1 + 3001 /
+		// 50) ≈ 6,100 groups, under 100,000 / 4. Multiplied, 100 × 3001 = 300,100
+		// would be skipped.
+		const events: BuildEvent[] = [];
+		engine.observeBuilds((e) => events.push(e));
+		await mark(
+			'hist-by-cat',
+			{ b: sql`floor(${column('x')} / 20)`, c: column('cat'), n: count() },
+			{ baseTable: 'big', bins: X_BINS }
+		);
+		await counted();
+		await new Promise((r) => setTimeout(r, 20));
+
+		await engine.activate(group, {
+			sourceId: 'interval-x-B',
+			categoricalKey: null,
+			dims: [
+				{
+					kind: 'bin',
+					columnRef: column('x'),
+					domain: [0, 1000],
+					pixelExtent: 3000,
+					extent: [0, 1000]
+				}
+			]
+		});
+		expect(creates()).toHaveLength(1);
+		const planned = events.find((e) => e.kind === 'planned')!;
+		expect((planned.detail as { groups: number }).groups).toBeGreaterThan(5_000);
+		expect((planned.detail as { groups: number }).groups).toBeLessThan(7_000);
+	});
+
+	it('multiplies as before for a mark without bin metadata: nothing is read from its result', async () => {
+		const events: BuildEvent[] = [];
+		engine.observeBuilds((e) => events.push(e));
+		await mark(
+			'hist-by-cat',
+			{ b: sql`floor(${column('x')} / 20)`, c: column('cat'), n: count() },
+			{ baseTable: 'big' }
+		);
+		await counted();
+		await new Promise((r) => setTimeout(r, 20));
+
+		await engine.activate(group, {
+			sourceId: 'interval-x-B',
+			categoricalKey: null,
+			dims: [
+				{
+					kind: 'bin',
+					columnRef: column('x'),
+					domain: [0, 1000],
+					pixelExtent: 3000,
+					extent: [0, 1000]
+				}
+			]
+		});
+		expect(creates()).toHaveLength(0);
+		expect(events.find((e) => e.kind === 'skipped')?.reason).toBe('too large');
+	});
+
+	it('still multiplies a bin dim on a column the mark does not group by', async () => {
+		const events: BuildEvent[] = [];
+		engine.observeBuilds((e) => events.push(e));
+		await mark(
+			'hist-by-cat',
+			{ b: sql`floor(${column('x')} / 20)`, c: column('cat'), n: count() },
+			{ baseTable: 'big', bins: X_BINS }
+		);
+		await counted();
+		await new Promise((r) => setTimeout(r, 20));
+
+		// g spans 0..3; 4 units at 1000 px per unit: ~4001 pixel bins × 100 groups.
+		await engine.activate(group, {
+			sourceId: 'interval-x-C',
+			categoricalKey: null,
+			dims: [
+				{ kind: 'bin', columnRef: column('g'), domain: [0, 4], pixelExtent: 4000, extent: [0, 3] }
+			]
+		});
+		expect(creates()).toHaveLength(0);
+		const skipped = events.find((e) => e.kind === 'skipped')!;
+		expect(skipped.reason).toBe('too large');
+	});
+
 	it('reads each base table’s row count once', async () => {
 		await mark('one', { g: column('g'), n: count() });
 		await mark('two', { g: column('g'), n: count() });
