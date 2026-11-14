@@ -969,6 +969,38 @@ describe('the size guard', () => {
 		expect((planned.detail as { groups: number }).groups).toBeLessThan(7_000);
 	});
 
+	it('merges when the bin channel is opaque SQL and only the bin metadata names its column', async () => {
+		// As a bin() channel resolves: raw SQL, no column a plan can collect. Its
+		// column comes from parts.bins, so the mark groups by x and cat: ~6,100.
+		const events: BuildEvent[] = [];
+		engine.observeBuilds((e) => events.push(e));
+		await mark(
+			'hist-by-cat',
+			{ b: sql`floor("x" / 20)`, c: column('cat'), n: count() },
+			{ baseTable: 'big', bins: X_BINS }
+		);
+		await counted();
+		await new Promise((r) => setTimeout(r, 20));
+
+		await engine.activate(group, {
+			sourceId: 'interval-x-B',
+			categoricalKey: null,
+			dims: [
+				{
+					kind: 'bin',
+					columnRef: column('x'),
+					domain: [0, 1000],
+					pixelExtent: 3000,
+					extent: [0, 1000]
+				}
+			]
+		});
+		expect(creates()).toHaveLength(1);
+		const groups = (events.find((e) => e.kind === 'planned')!.detail as { groups: number }).groups;
+		expect(groups).toBeGreaterThan(5_000);
+		expect(groups).toBeLessThan(7_000);
+	});
+
 	it('multiplies as before for a mark without bin metadata: nothing is read from its result', async () => {
 		const events: BuildEvent[] = [];
 		engine.observeBuilds((e) => events.push(e));

@@ -405,6 +405,13 @@ export function markKeys(
 		if (field == null) allIds = false;
 		else fields.add(field);
 	}
+	// A bin() channel resolves to SQL text that collectColumns cannot see into,
+	// so its column comes from the plan: the mark groups by it too.
+	const bins = binCounts(parts);
+	if (bins) {
+		allIds = false;
+		for (const name of bins.keys()) columns.add(name);
+	}
 	if (allIds) {
 		return [...fields].map((field) => ({
 			column: null,
@@ -413,7 +420,7 @@ export function markKeys(
 	}
 	const rows = handle.params.limit == null ? handle.arrowTable?.numRows : undefined;
 	if (columns.size === 1) return [{ column: [...columns][0], groups: rows ?? 1 }];
-	return [{ column: null, groups: rows ?? 1, columns: binCounts(parts) }];
+	return [{ column: null, groups: rows ?? 1, columns: bins }];
 }
 
 /**
