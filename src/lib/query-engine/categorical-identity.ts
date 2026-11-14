@@ -64,6 +64,18 @@ export interface IdentityExec {
 	exec(sql: string | string[]): Promise<void>;
 	/** Rows as plain objects. Callers adapt whatever their driver returns. */
 	queryRows(sql: string): Promise<Array<Record<string, unknown>>>;
+	/**
+	 * Whether `table` is known to be a base table (not a view). Only then is a
+	 * column's cardinality read from its statistics (#cardinalityFromStats):
+	 * on a view, `stats(col) … LIMIT 1` runs the view, and a filtered view
+	 * reports its base column's statistics. Absent: never.
+	 *
+	 * About the table's TYPE, not where it is stored: a table in an attached
+	 * file or remote database answers yes (its statistics are metadata either
+	 * way). Not a "fast source" test: routing asks that separately
+	 * (SourceRouting), and must not reuse this.
+	 */
+	isBaseTable?(table: string): boolean;
 }
 
 /**
@@ -857,7 +869,7 @@ export class CategoricalIdentity {
 		// are evaluated with only the source table in scope.
 		const expr = dim.sql;
 
-		await this.#checkCardinality(field, expr, src);
+		await this.#checkCardinality(field, expr, src, table);
 
 		const first = dim.tables.size === 0;
 		if (first) {
@@ -931,19 +943,27 @@ export class CategoricalIdentity {
 	 * the setup path that already blocks on one. Here it costs a query only for fields
 	 * that actually get a dim, and it is where the refusal has to land anyway.
 	 *
-	 * `approx_count_distinct` rather than `COUNT(DISTINCT …)`: one HyperLogLog
-	 * pass with no materialization, which matters precisely for the runaway
-	 * expression this exists to catch.
+	 * For a plain column, its statistics first (#cardinalityFromStats): no scan.
+	 * Otherwise `approx_count_distinct` rather than `COUNT(DISTINCT …)`: one
+	 * HyperLogLog pass with no materialization, which matters precisely for the
+	 * runaway expression this exists to catch.
 	 *
 	 * Neither syntax nor result type can answer this question — `year(ts)` is
 	 * numeric with a tiny distinct set, a CASE can have ten thousand branches —
 	 * so the count is the only honest gate.
 	 */
-	async #checkCardinality(field: string, expr: string, src: string): Promise<void> {
-		const rows = await this.#exec.queryRows(
-			`SELECT approx_count_distinct(${expr}) AS n FROM ${src}`
-		);
-		const n = Number(rows[0]?.n ?? 0);
+	async #checkCardinality(field: string, expr: string, src: string, table: string): Promise<void> {
+		const scan = async () =>
+			Number(
+				(await this.#exec.queryRows(`SELECT approx_count_distinct(${expr}) AS n FROM ${src}`))[0]
+					?.n ?? 0
+			);
+		const estimate = await this.#cardinalityFromStats(expr, src, table);
+		let n = estimate ?? (await scan());
+		// Statistics are never shrunk (deletes, updates), so an estimate over the
+		// limit can be stale: confirm it with the scan before refusing. A false
+		// refusal is user-visible; the scan runs only in this rare case.
+		if (estimate != null && n > MAX_IDENTITY_CARDINALITY) n = await scan();
 
 		if (n > MAX_IDENTITY_CARDINALITY) {
 			throw new Error(
@@ -951,6 +971,35 @@ export class CategoricalIdentity {
 					`${MAX_IDENTITY_CARDINALITY} a categorical scale can render. Use a continuous ` +
 					`scale, bin the values, or reduce them with a transform.`
 			);
+		}
+	}
+
+	/**
+	 * A plain column's approximate distinct count from DuckDB's column
+	 * statistics, without scanning: `stats(col)` reads what DuckDB keeps per
+	 * column ("Approx Unique"). Measured on DuckDB-WASM: 1-3 ms, against
+	 * 27-28 ms for approx_count_distinct over 2M rows; it agrees with the scan
+	 * (167 and 167, 245 and 251). It can undercount a very large set (1.26M for
+	 * 2M unique values): still far over the limit, and #checkDimSize counts
+	 * the built dim exactly behind it. It can OVERcount, never shrinking after
+	 * deletes, so an over-limit answer is confirmed by the scan
+	 * (#checkCardinality).
+	 *
+	 * Base tables only (IdentityExec.isBaseTable): on a view, `stats … LIMIT 1`
+	 * runs the view (a view that computes would then run twice, if the column
+	 * has no estimate), and a filtered view reports its base column's
+	 * statistics. Null for an expression field, a view, or statistics that say
+	 * nothing: the caller scans as before.
+	 */
+	async #cardinalityFromStats(expr: string, src: string, table: string): Promise<number | null> {
+		if (!/^"(?:[^"]|"")+"$/.test(expr)) return null;
+		if (!this.#exec.isBaseTable?.(table)) return null;
+		try {
+			const rows = await this.#exec.queryRows(`SELECT stats(${expr}) AS s FROM ${src} LIMIT 1`);
+			const match = /Approx Unique: (\d+)/.exec(String(rows[0]?.s ?? ''));
+			return match ? Number(match[1]) : null;
+		} catch {
+			return null;
 		}
 	}
 

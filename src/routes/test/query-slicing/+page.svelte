@@ -567,6 +567,94 @@
 			}
 		});
 
+	// 14. For the dims chain's 1d, the cardinality check before a dim is built
+	//     (today approx_count_distinct, a scan): can column statistics answer it
+	//     without a scan, and what would "build first, check after" accept in
+	//     the runaway case (a column with as many values as rows)?
+	const cardinality = () =>
+		exp(async () => {
+			const run = (sql: string) => runQuery(a, sql);
+			const first = async (sql: string) => {
+				const t = tableFromIPC(await run(sql));
+				return t.numRows ? (t.get(0) as Record<string, unknown>) : null;
+			};
+			async function timed<T>(fn: () => Promise<T>): Promise<[T, number]> {
+				const t = now();
+				const r = await fn();
+				return [r, now() - t];
+			}
+			const med3 = async (sql: string) => {
+				const xs: number[] = [];
+				for (let i = 0; i < 3; i++) xs.push((await timed(() => run(sql)))[1]);
+				return [...xs].sort((p, q) => p - q)[1];
+			};
+
+			// The loadParquet path: a table read from parquet.
+			await run(
+				`CREATE OR REPLACE TABLE c14_flights AS SELECT * FROM read_parquet('${location.origin}/data/flights-200k.parquet')`
+			);
+			// A 2M-row table built by CTAS, with a VARCHAR column (~300 values).
+			await run(`CREATE OR REPLACE TABLE c14_big AS
+				SELECT f.*, 'R' || (f.distance % 300)::VARCHAR AS route
+				FROM c14_flights f, range(10) r(k)`);
+			await run('CREATE OR REPLACE VIEW c14_view AS SELECT * FROM c14_big');
+
+			for (const [label, table, col] of [
+				['parquet table, numeric', 'c14_flights', 'delay'],
+				['2M CTAS, VARCHAR ~300', 'c14_big', 'route'],
+				['view over it', 'c14_view', 'route']
+			] as const) {
+				let stats: string;
+				let statsMs = NaN;
+				try {
+					const [row, ms] = await timed(() =>
+						first(`SELECT stats("${col}") AS s FROM ${table} LIMIT 1`)
+					);
+					stats = String(row?.s ?? '');
+					statsMs = ms;
+				} catch (e) {
+					stats = `error: ${String(e).slice(0, 80)}`;
+				}
+				const approx = /Approx Unique: (\d+)/.exec(stats)?.[1];
+				const [hll] = await timed(() =>
+					first(`SELECT approx_count_distinct("${col}") AS n FROM ${table}`)
+				);
+				const hllMs = await med3(`SELECT approx_count_distinct("${col}") AS n FROM ${table}`);
+				add(
+					`14a stats(), ${label}`,
+					`${approx ? `Approx Unique ${approx}` : 'NO Approx Unique'} in ${fmt(statsMs)} ` +
+						`(approx_count_distinct ${hll?.n} in ${fmt(hllMs)}); stats: ${stats.slice(0, 90)}`
+				);
+			}
+
+			// The runaway case: as many distinct values as rows (2M).
+			await run(
+				'CREATE OR REPLACE TABLE c14_unique AS SELECT i::VARCHAR AS u FROM range(2000000) t(i)'
+			);
+			const hllMs = await med3('SELECT approx_count_distinct(u) AS n FROM c14_unique');
+			const xs: number[] = [];
+			for (let i = 0; i < 3; i++) {
+				await run('DROP TABLE IF EXISTS c14_dim');
+				xs.push(
+					(
+						await timed(() =>
+							run('CREATE TABLE c14_dim AS SELECT DISTINCT u AS value FROM c14_unique')
+						)
+					)[1]
+				);
+			}
+			const buildMs = [...xs].sort((p, q) => p - q)[1];
+			const [statsRow, statsMs] = await timed(() =>
+				first('SELECT stats(u) AS s FROM c14_unique LIMIT 1')
+			);
+			const runawayApprox = /Approx Unique: (\d+)/.exec(String(statsRow?.s ?? ''))?.[1];
+			add(
+				'14b runaway, 2M unique values',
+				`approx_count_distinct ${fmt(hllMs)}; full DISTINCT build ${fmt(buildMs)} (what build-first accepts); ` +
+					`stats ${fmt(statsMs)}, Approx Unique ${runawayApprox ?? 'MISSING'}`
+			);
+		});
+
 	onMount(open);
 </script>
 
@@ -599,6 +687,7 @@
 		<button disabled={!ready || running} onclick={ddlOverlap}>11 DDL overlap</button>
 		<button disabled={!ready || running} onclick={cancelledCreate}>12 cancelled CREATE</button>
 		<button disabled={!ready || running} onclick={multiStatement}>13 multi-statement</button>
+		<button disabled={!ready || running} onclick={cardinality}>14 cardinality</button>
 	</div>
 	<p>{ready ? (running ? 'running…' : 'ready') : 'starting DuckDB…'}</p>
 	<table>
