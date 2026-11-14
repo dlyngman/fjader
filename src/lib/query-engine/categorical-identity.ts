@@ -931,19 +931,22 @@ export class CategoricalIdentity {
 	 * the setup path that already blocks on one. Here it costs a query only for fields
 	 * that actually get a dim, and it is where the refusal has to land anyway.
 	 *
-	 * `approx_count_distinct` rather than `COUNT(DISTINCT …)`: one HyperLogLog
-	 * pass with no materialization, which matters precisely for the runaway
-	 * expression this exists to catch.
+	 * For a plain column, its statistics first (#cardinalityFromStats): no scan.
+	 * Otherwise `approx_count_distinct` rather than `COUNT(DISTINCT …)`: one
+	 * HyperLogLog pass with no materialization, which matters precisely for the
+	 * runaway expression this exists to catch.
 	 *
 	 * Neither syntax nor result type can answer this question — `year(ts)` is
 	 * numeric with a tiny distinct set, a CASE can have ten thousand branches —
 	 * so the count is the only honest gate.
 	 */
 	async #checkCardinality(field: string, expr: string, src: string): Promise<void> {
-		const rows = await this.#exec.queryRows(
-			`SELECT approx_count_distinct(${expr}) AS n FROM ${src}`
-		);
-		const n = Number(rows[0]?.n ?? 0);
+		const n =
+			(await this.#cardinalityFromStats(expr, src)) ??
+			Number(
+				(await this.#exec.queryRows(`SELECT approx_count_distinct(${expr}) AS n FROM ${src}`))[0]
+					?.n ?? 0
+			);
 
 		if (n > MAX_IDENTITY_CARDINALITY) {
 			throw new Error(
@@ -951,6 +954,28 @@ export class CategoricalIdentity {
 					`${MAX_IDENTITY_CARDINALITY} a categorical scale can render. Use a continuous ` +
 					`scale, bin the values, or reduce them with a transform.`
 			);
+		}
+	}
+
+	/**
+	 * A plain column's approximate distinct count from DuckDB's column
+	 * statistics, without scanning: `stats(col)` reads what DuckDB keeps per
+	 * column ("Approx Unique"). Measured on DuckDB-WASM: 1-3 ms, against
+	 * 27-28 ms for approx_count_distinct over 2M rows; it agrees with the scan
+	 * (167 and 167, 245 and 251) and works through a plain view. It can
+	 * undercount a very large set (1.26M for 2M unique values): still far over
+	 * the limit, and #checkDimSize counts the built dim exactly behind it.
+	 * Null for an expression field, or when the statistics say nothing (a
+	 * computed view column, an error): the caller scans as before.
+	 */
+	async #cardinalityFromStats(expr: string, src: string): Promise<number | null> {
+		if (!/^"(?:[^"]|"")+"$/.test(expr)) return null;
+		try {
+			const rows = await this.#exec.queryRows(`SELECT stats(${expr}) AS s FROM ${src} LIMIT 1`);
+			const match = /Approx Unique: (\d+)/.exec(String(rows[0]?.s ?? ''));
+			return match ? Number(match[1]) : null;
+		} catch {
+			return null;
 		}
 	}
 

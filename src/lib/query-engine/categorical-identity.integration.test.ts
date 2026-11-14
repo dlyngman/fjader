@@ -39,8 +39,11 @@ function openDB(): DB {
 /** Records every statement, so rebuild counts can be asserted. */
 function makeExec(db: DB) {
 	const statements: string[] = [];
+	/** Reads (queryRows), so which queries a step ran can be asserted. */
+	const reads: string[] = [];
 	return {
 		statements,
+		reads,
 		async exec(sql: string | string[]) {
 			for (const stmt of Array.isArray(sql) ? sql : [sql]) {
 				statements.push(stmt);
@@ -48,6 +51,7 @@ function makeExec(db: DB) {
 			}
 		},
 		async queryRows(sql: string) {
+			reads.push(sql);
 			return db.all(sql);
 		}
 	};
@@ -386,6 +390,27 @@ describe('CategoricalIdentity', () => {
 			`SELECT table_name FROM information_schema.tables WHERE table_name = '${identity.dimTable('k')}'`
 		);
 		expect(tables).toHaveLength(0);
+	});
+
+	it("reads a plain column's cardinality from its statistics, without a scan", async () => {
+		await identity.ensureColumns('penguins', { categorical: ['species'] });
+		expect(exec.reads.some((q) => q.includes('stats('))).toBe(true);
+		expect(exec.reads.some((q) => q.includes('approx_count_distinct'))).toBe(false);
+	});
+
+	it('refuses a runaway plain column through its statistics', async () => {
+		await db.run(`CREATE TABLE wide2 AS SELECT i::VARCHAR AS k FROM range(20000) t(i)`);
+		await expect(identity.ensureColumns('wide2', { categorical: ['k'] })).rejects.toThrow(
+			/distinct values/
+		);
+		expect(exec.reads.some((q) => q.includes('approx_count_distinct'))).toBe(false);
+	});
+
+	it('still scans for an expression field, which has no column statistics', async () => {
+		const expr = `upper("species")`;
+		await identity.ensureColumns('penguins', { categorical: [{ key: expr, sql: expr }] });
+		expect(exec.reads.some((q) => q.includes('approx_count_distinct'))).toBe(true);
+		expect(exec.reads.some((q) => q.includes('stats('))).toBe(false);
 	});
 
 	it('allows an ordinary categorical without complaint', async () => {
