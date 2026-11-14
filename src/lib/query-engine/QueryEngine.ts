@@ -323,8 +323,12 @@ interface MarkRegistration {
 // QueryEngine
 // ---------------------------------------------------------------------------
 
-/** DuckDB's catalog error for a table or view this connection cannot see. */
-function isMissingRelation(e: unknown): boolean {
+/**
+ * DuckDB's catalog error for a table or view this connection cannot see.
+ * Matched by its wording, which an upgrade could change: the integration
+ * test missing-relation.integration.test.ts checks it against real DuckDB.
+ */
+export function isMissingRelation(e: unknown): boolean {
 	const message = e instanceof Error ? e.message : String(e);
 	return /Catalog Error: (Table|View) with name .+ does not exist/i.test(message);
 }
@@ -685,7 +689,10 @@ export class QueryEngine {
 		// Safety net for a TEMP source made where the engine could not see it
 		// (on the app's connection, which is the main one): a lane does not
 		// have it. Once found missing there, it stays on the main connection
-		// for good, and this read is sent there.
+		// for good, and this read is sent there. Local is the safe direction:
+		// a race (a lane read during a drop and re-create made outside the
+		// engine) can only make a source less sliced, which is how every
+		// source read before lanes.
 		return read.catch((e) => {
 			const source = place.source;
 			if (!sliced || !source || !isMissingRelation(e)) throw e;
