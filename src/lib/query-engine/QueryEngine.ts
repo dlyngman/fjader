@@ -139,9 +139,16 @@ export interface StatementPlacement {
  */
 export type StatementClass = 'interaction' | 'background';
 
-/** A mark asking for categorical identity columns, for `observeIdentityRequests`. */
+/**
+ * For `observeIdentityRequests`: a mark asking for categorical identity
+ * columns, or a table's drain starting (when its dims actually begin to build,
+ * which is what a chart's first read waits on).
+ */
 export interface IdentityRequest {
+	/** 'request': a mark's ensureColumns call; 'drain': a table's drain started. */
+	kind: 'request' | 'drain';
 	table: string;
+	/** For a request, the fields asked for; for a drain, the fields it found pending. */
 	fields: string[];
 	/** performance.now() when asked. */
 	time: number;
@@ -460,7 +467,11 @@ export class QueryEngine {
 			isBaseTable: (table) => this.#known.get(table) === 'table' || !!this.#catalog?.has(table),
 			onRequest: (table, fields, time) => {
 				if (this.#identityObservers.size === 0) return;
-				for (const observe of this.#identityObservers) observe({ table, fields, time });
+				this.#notifyIdentity({ kind: 'request', table, fields, time });
+			},
+			onDrain: (table, fields, time) => {
+				if (this.#identityObservers.size === 0) return;
+				this.#notifyIdentity({ kind: 'drain', table, fields, time });
 			},
 			execBatch: async (statements) => {
 				const table = await this.execBatch(statements);
@@ -937,8 +948,10 @@ export class QueryEngine {
 
 	/**
 	 * Debug: every categorical identity request (a mark's ensureColumns call),
-	 * with its table, fields and time, before deduplication. Returns the
-	 * unsubscribe; costs nothing while no one listens.
+	 * with its table, fields and time, before deduplication, and every drain
+	 * start (a table's dims beginning to build, with the fields it found
+	 * pending). Returns the unsubscribe; costs nothing while no one listens, and
+	 * a listener that throws is logged without failing identity work.
 	 */
 	observeIdentityRequests(listener: (request: IdentityRequest) => void): () => void {
 		this.#identityObservers.add(listener);
@@ -946,6 +959,17 @@ export class QueryEngine {
 	}
 
 	#identityObservers = new Set<(request: IdentityRequest) => void>();
+
+	/** Each listener in its own try/catch: a debugging hook must not fail identity work. */
+	#notifyIdentity(request: IdentityRequest): void {
+		for (const observe of this.#identityObservers) {
+			try {
+				observe(request);
+			} catch (e) {
+				console.error('[QueryEngine] identity observer threw:', e);
+			}
+		}
+	}
 
 	/**
 	 * Listen to every statement sent to the connection, as it settles. For

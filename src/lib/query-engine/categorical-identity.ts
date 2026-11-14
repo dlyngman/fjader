@@ -89,6 +89,8 @@ export interface IdentityExec {
 	 * to share a drain.
 	 */
 	onRequest?(table: string, fields: string[], time: number): void;
+	/** Debug: a table's drain started, with the fields it found pending. */
+	onDrain?(table: string, fields: string[], time: number): void;
 }
 
 /**
@@ -639,6 +641,7 @@ export class CategoricalIdentity {
 	 * column.
 	 */
 	async #drain(table: string, entry: ViewEntry, generation: number): Promise<void> {
+		this.#exec.onDrain?.(table, [...entry.pending], performance.now());
 		try {
 			while (entry.pending.size > 0) {
 				// Superseded by a reset: stop before issuing more DDL, which would
