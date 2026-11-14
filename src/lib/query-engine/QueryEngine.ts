@@ -145,10 +145,10 @@ export type StatementClass = 'interaction' | 'background';
  * which is what a chart's first read waits on).
  */
 export interface IdentityRequest {
-	/** 'request': a mark's ensureColumns call; 'drain': a table's drain started. */
+	/** 'request': a mark's ensureColumns call; 'drain': one pass of a table's drain started. */
 	kind: 'request' | 'drain';
 	table: string;
-	/** For a request, the fields asked for; for a drain, the fields it found pending. */
+	/** For a request, the fields asked for; for a drain pass, the fields it took. */
 	fields: string[];
 	/** performance.now() when asked. */
 	time: number;
@@ -465,12 +465,11 @@ export class QueryEngine {
 			// Seen created as a table through the engine, or listed in the catalog
 			// (which lists tables, not views).
 			isBaseTable: (table) => this.#known.get(table) === 'table' || !!this.#catalog?.has(table),
+			observing: () => this.#identityObservers.size > 0,
 			onRequest: (table, fields, time) => {
-				if (this.#identityObservers.size === 0) return;
 				this.#notifyIdentity({ kind: 'request', table, fields, time });
 			},
 			onDrain: (table, fields, time) => {
-				if (this.#identityObservers.size === 0) return;
 				this.#notifyIdentity({ kind: 'drain', table, fields, time });
 			},
 			execBatch: async (statements) => {

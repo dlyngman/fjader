@@ -89,8 +89,13 @@ export interface IdentityExec {
 	 * to share a drain.
 	 */
 	onRequest?(table: string, fields: string[], time: number): void;
-	/** Debug: a table's drain started, with the fields it found pending. */
+	/** Debug: one pass of a table's drain started, with the fields it took. */
 	onDrain?(table: string, fields: string[], time: number): void;
+	/**
+	 * Whether anything listens to onRequest and onDrain. Checked first, so with
+	 * no listener their arguments (a field list, a timestamp) are never built.
+	 */
+	observing?(): boolean;
 }
 
 /**
@@ -551,11 +556,13 @@ export class CategoricalIdentity {
 	): Promise<void> {
 		const categorical = (fields.categorical ?? []).map(asField);
 		if (categorical.length === 0) return;
-		this.#exec.onRequest?.(
-			table,
-			categorical.map((f) => f.key),
-			performance.now()
-		);
+		if (this.#exec.observing?.()) {
+			this.#exec.onRequest?.(
+				table,
+				categorical.map((f) => f.key),
+				performance.now()
+			);
+		}
 
 		let entry = this.#views.get(table);
 		if (!entry) {
@@ -641,7 +648,6 @@ export class CategoricalIdentity {
 	 * column.
 	 */
 	async #drain(table: string, entry: ViewEntry, generation: number): Promise<void> {
-		this.#exec.onDrain?.(table, [...entry.pending], performance.now());
 		try {
 			while (entry.pending.size > 0) {
 				// Superseded by a reset: stop before issuing more DDL, which would
@@ -650,6 +656,9 @@ export class CategoricalIdentity {
 
 				const batch = [...entry.pending];
 				entry.pending.clear();
+				// Per pass: a request arriving during the first build is a second
+				// pass (and a second view build) inside this same call.
+				if (this.#exec.observing?.()) this.#exec.onDrain?.(table, batch, performance.now());
 
 				const succeeded: string[] = [];
 				for (const field of batch) {
