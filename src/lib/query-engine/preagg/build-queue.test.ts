@@ -19,7 +19,7 @@ function host(opts: { finishDespiteAbort?: boolean } = {}) {
 				});
 			}),
 		busy: () => false,
-		stillWanted: () => true,
+		unwanted: () => null,
 		dropped: (item) => outcomes.push(`dropped ${item.markId}`),
 		built: (item) => outcomes.push(`built ${item.markId}`),
 		failed: (item) => outcomes.push(`failed ${item.markId}`)
