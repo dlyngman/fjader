@@ -1422,7 +1422,7 @@ export class MarkLifecycleV2 {
 
 		const q = Query.from(this.#config.table).select(selectDef as Record<string, ExprValue>);
 		// Shared and cached: marks on one table ask the same ranges (see QueryOpts.cache).
-		const result = await this.#queryEngine.query(q, { cache: true });
+		const result = await this.#queryEngine.query(q, { cache: true, source: this.#config.table });
 		const row = result.get(0) as Record<string, unknown> | null;
 		if (!row) return null;
 
@@ -2531,8 +2531,10 @@ export class MarkLifecycleV2 {
 			const result = await this.#queryEngine.query(q.toString(), {
 				callerId: `${this.#markId}:fitDomain`,
 				cache: false,
-				// With JS transforms the fit reads the TEMP tooltip table.
-				connectionLocal: this.#transformCompiler.hasJSTransforms()
+				// With JS transforms the fit reads the TEMP tooltip table;
+				// otherwise the mark's base table, routed by it.
+				connectionLocal: this.#transformCompiler.hasJSTransforms(),
+				source: this.#config.table
 			});
 			if (seq !== this.#fitDomainQuerySequence) return;
 

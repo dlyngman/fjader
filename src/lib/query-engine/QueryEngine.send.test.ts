@@ -302,3 +302,270 @@ describe('QueryEngine background lane', () => {
 		expect(log.slice(-2)).toEqual(['lane close', 'main close']);
 	});
 });
+
+describe('QueryEngine source lanes', () => {
+	async function ipc() {
+		const { tableToIPC, tableFromArrays } = await import('@uwdata/flechette');
+		return tableToIPC(tableFromArrays({ a: [1] }), { format: 'stream' })!;
+	}
+
+	/** Lanes that report `polls` per read; `opened` counts connections. */
+	function laneConnection(polls: () => number) {
+		const log: string[] = [];
+		let opened = 0;
+		const conn: DuckDBConnection = {
+			async query() {
+				return { numRows: 0, get: () => undefined } as never;
+			},
+			async queryIPC(sql: string) {
+				log.push(`main ${sql}`);
+				return ipc();
+			},
+			async exec() {},
+			async close() {},
+			openSlicedLane: async () => {
+				const id = opened++;
+				return {
+					async query(sql: string) {
+						log.push(`lane${id} ${sql}`);
+						return { ipc: [await ipc()], polls: polls(), execMs: 1 };
+					},
+					async exec() {
+						return { polls: 0 };
+					},
+					async close() {}
+				};
+			}
+		};
+		return { conn, log, opened: () => opened };
+	}
+
+	it('reads an unknown source on its lane, then on the main connection once a quick read made it fast', async () => {
+		const { conn, log } = laneConnection(() => 0);
+		const engine = new QueryEngine(conn);
+		await engine.query('SELECT 1', { source: 'flights', data: true });
+		await engine.query('SELECT 2', { source: 'flights', data: true });
+		expect(log[0]).toMatch(/^lane\d SELECT 1$/);
+		expect(log[1]).toBe('main SELECT 2');
+	});
+
+	it('keeps a slow source on its lane', async () => {
+		const { conn, log } = laneConnection(() => 30);
+		const engine = new QueryEngine(conn);
+		await engine.query('SELECT 1', { source: 'slow_view', data: true });
+		await engine.query('SELECT 2', { source: 'slow_view', data: true });
+		expect(log.every((l) => l.startsWith('lane'))).toBe(true);
+	});
+
+	it('does not let a setup read (no data flag) mark a source fast', async () => {
+		const { conn, log } = laneConnection(() => 0);
+		const engine = new QueryEngine(conn);
+		await engine.query('SELECT min(v)', { source: 'slow_view' });
+		await engine.query('SELECT v', { source: 'slow_view', data: true });
+		expect(log.map((l) => l.split(' ')[0].replace(/\d/, ''))).toEqual(['lane', 'lane']);
+	});
+
+	it('keeps a read without a source, and a connection-local one, on the main connection', async () => {
+		const { conn, log } = laneConnection(() => 0);
+		const engine = new QueryEngine(conn);
+		await engine.query('SELECT 1');
+		await engine.query('SELECT 2', { source: 't', connectionLocal: true });
+		expect(log).toEqual(['main SELECT 1', 'main SELECT 2']);
+	});
+
+	it('closes the source lanes on destroy', async () => {
+		const { conn, opened } = laneConnection(() => 30);
+		const engine = new QueryEngine(conn);
+		await engine.query('SELECT 1', { source: 'a', data: true });
+		await engine.query('SELECT 1', { source: 'b', data: true });
+		expect(opened()).toBe(2);
+		await engine.destroy();
+	});
+
+	it('reads a table created through the engine on the main connection from its first read', async () => {
+		const { conn, log } = laneConnection(() => 30);
+		const engine = new QueryEngine(conn);
+		await engine.exec('CREATE TABLE flights AS SELECT 1 AS a');
+		await engine.query('SELECT min(a)', { source: 'flights' });
+		await engine.query('SELECT a', { source: 'flights', data: true });
+		expect(log).toEqual(['main SELECT min(a)', 'main SELECT a']);
+	});
+
+	it('reads a view created through the engine sliced, and forgets a dropped table', async () => {
+		const { conn, log } = laneConnection(() => 30);
+		const engine = new QueryEngine(conn);
+		await engine.exec('CREATE VIEW v AS SELECT 1 AS a');
+		await engine.exec('CREATE TABLE t AS SELECT 1 AS a');
+		await engine.exec('DROP TABLE t');
+		await engine.query('SELECT a', { source: 'v', data: true });
+		await engine.query('SELECT a', { source: 't', data: true });
+		expect(log.map((l) => l.replace(/\d/, ''))).toEqual(['lane SELECT a', 'lane SELECT a']);
+	});
+
+	it('looks up a table made elsewhere in the catalog, off the critical path', async () => {
+		const { tableToIPC, tableFromArrays } = await import('@uwdata/flechette');
+		const { conn, log } = laneConnection(() => 30);
+		const ipcOf = conn.queryIPC!;
+		conn.queryIPC = async (sql: string) => {
+			if (sql.includes('duckdb_tables()')) {
+				const t = tableFromArrays({ name: ['flights'], path: [':memory:'] });
+				return tableToIPC(t, { format: 'stream' })!;
+			}
+			if (sql.startsWith('DESCRIBE')) {
+				const t = tableFromArrays({ column_name: ['a'], column_type: ['INTEGER'], null: ['YES'] });
+				return tableToIPC(t, { format: 'stream' })!;
+			}
+			return ipcOf(sql);
+		};
+		const engine = new QueryEngine(conn);
+		await engine.describe('flights');
+		// The catalog answer lands after describe; once it has, reads go main.
+		await new Promise((r) => setTimeout(r, 0));
+		log.length = 0;
+		await engine.query('SELECT a', { source: 'flights', data: true });
+		expect(log).toEqual(['main SELECT a']);
+	});
+
+	it('records an Arrow insert that creates a table as a table', async () => {
+		const { conn, log } = laneConnection(() => 30);
+		conn.insertArrowFromIPCStream = async () => {};
+		const engine = new QueryEngine(conn);
+		await engine.insertArrowFromIPCStream(new Uint8Array(8), { name: 'widget_t', create: true });
+		await engine.query('SELECT a', { source: 'widget_t', data: true });
+		expect(log).toEqual(['main SELECT a']);
+	});
+
+	it('reads a source the app calls slow on a lane', async () => {
+		const { conn, log } = laneConnection(() => 30);
+		const engine = new QueryEngine(conn);
+		engine.sourceCost('big', 'slow');
+		await engine.query('SELECT a', { source: 'big', data: true });
+		expect(log[0]).toMatch(/^lane/);
+	});
+
+	it('shares slices while the main connection is busy, and frees them once it is quiet', async () => {
+		let hold: (() => Promise<void> | null) | undefined;
+		let release!: () => void;
+		const conn: DuckDBConnection = {
+			async query() {
+				return { numRows: 0, get: () => undefined } as never;
+			},
+			async exec() {
+				await new Promise<void>((r) => (release = r));
+			},
+			async close() {},
+			openSlicedLane: async (options) => {
+				hold = options?.hold;
+				return {
+					query: async () => ({ ipc: [await ipc()], polls: 0, execMs: 1 }),
+					exec: async () => ({ polls: 0 }),
+					close: async () => {}
+				};
+			}
+		};
+		const engine = new QueryEngine(conn);
+		await engine.query('SELECT 1', { source: 'a', data: true });
+		expect(hold!()).toBeNull();
+
+		const main = engine.exec('CREATE TABLE x (a INT)');
+		await new Promise((r) => setTimeout(r, 0));
+		// Busy: the first ask takes the share's slice, the next waits for the next one.
+		expect(hold!()).toBeNull();
+		let granted = false;
+		hold!()!.then(() => (granted = true));
+		await new Promise((r) => setTimeout(r, 5));
+		expect(granted).toBe(false);
+		await new Promise((r) => setTimeout(r, 40));
+		expect(granted).toBe(true);
+
+		// Quiet again: free.
+		release();
+		await main;
+		await new Promise((r) => setTimeout(r, 5));
+		expect(hold!()).toBeNull();
+		expect(hold!()).toBeNull();
+	});
+
+	it("does not count a lane's own reads as the main connection being busy", async () => {
+		let hold: (() => Promise<void> | null) | undefined;
+		let finish!: () => void;
+		const { conn } = laneConnection(() => 30);
+		const open = conn.openSlicedLane!;
+		conn.openSlicedLane = async (options) => {
+			hold = options?.hold;
+			const lane = await open(options);
+			return {
+				...lane,
+				query: async (sql: string) => {
+					await new Promise<void>((r) => (finish = r));
+					return lane.query(sql);
+				}
+			};
+		};
+		const engine = new QueryEngine(conn);
+		const slow = engine.query('SELECT v', { source: 'slow', data: true });
+		await new Promise((r) => setTimeout(r, 5));
+		expect(hold!()).toBeNull();
+		expect(hold!()).toBeNull();
+		finish();
+		await slow;
+	});
+
+	it('keeps a TEMP view created through the engine on the main connection', async () => {
+		const { conn, log } = laneConnection(() => 30);
+		const engine = new QueryEngine(conn);
+		await engine.exec('CREATE TEMP VIEW tv AS SELECT 1 AS a');
+		await engine.query('SELECT a', { source: 'tv', data: true });
+		await engine.query('SELECT a', { source: 'tv', data: true });
+		expect(log).toEqual(['main SELECT a', 'main SELECT a']);
+	});
+
+	it('retries a read on the main connection when a lane cannot see its source, and keeps it there', async () => {
+		const { conn, log } = laneConnection(() => 30);
+		const open = conn.openSlicedLane!;
+		conn.openSlicedLane = async (options) => {
+			const lane = await open(options);
+			return {
+				...lane,
+				query: async (sql: string) => {
+					log.push(`lane ${sql}`);
+					throw new Error('Catalog Error: Table with name app_temp does not exist!');
+				}
+			};
+		};
+		const engine = new QueryEngine(conn);
+		// Made on the app's own connection: the engine never saw it.
+		const t = await engine.query('SELECT a', { source: 'app_temp', data: true });
+		expect(t.numRows).toBe(1);
+		await engine.query('SELECT b', { source: 'app_temp', data: true });
+		expect(log).toEqual(['lane SELECT a', 'main SELECT a', 'main SELECT b']);
+	});
+
+	it('passes other lane errors through without a retry', async () => {
+		const { conn } = laneConnection(() => 30);
+		const open = conn.openSlicedLane!;
+		conn.openSlicedLane = async (options) => {
+			const lane = await open(options);
+			return {
+				...lane,
+				query: async () => {
+					throw new Error('Binder Error: column x not found');
+				}
+			};
+		};
+		const engine = new QueryEngine(conn);
+		await expect(engine.query('SELECT x', { source: 'v', data: true })).rejects.toThrow(
+			'Binder Error'
+		);
+	});
+
+	it('keeps the prior of a table learned from DDL across clearQueryCache()', async () => {
+		const { conn, log } = laneConnection(() => 30);
+		const engine = new QueryEngine(conn);
+		await engine.exec('CREATE TABLE t AS SELECT 1 AS a');
+		await engine.clearQueryCache();
+		log.length = 0;
+		await engine.query('SELECT a', { source: 't', data: true });
+		expect(log).toEqual(['main SELECT a']);
+	});
+});

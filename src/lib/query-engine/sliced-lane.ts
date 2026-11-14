@@ -42,6 +42,16 @@ export interface PendingQueryBindings {
 	fetchQueryResults(conn: number): Promise<Uint8Array | null>;
 }
 
+/** A sliced query's result, and what it cost in the worker. */
+export interface LaneResult {
+	/** The Arrow IPC stream, `[header, ...record batches]`. */
+	ipc: Uint8Array[];
+	/** Slices it took past the first: 0 or 1, a quick read. */
+	polls: number;
+	/** From start to its result header: execution, without the chunked fetch. */
+	execMs: number;
+}
+
 export interface SlicedLane {
 	/**
 	 * Run a query sliced. `ipc` is the Arrow IPC stream as the worker returned
@@ -49,7 +59,7 @@ export interface SlicedLane {
 	 * buffer holds whole messages). `polls`: how many slices it took past the
 	 * first, the cost signal (0 or 1: a quick read).
 	 */
-	query(sql: string, signal?: AbortSignal): Promise<{ ipc: Uint8Array[]; polls: number }>;
+	query(sql: string, signal?: AbortSignal): Promise<LaneResult>;
 	/**
 	 * Run a statement sliced, discarding any result. The result is left
 	 * pending on the connection, unfetched, until the next statement resets
@@ -63,6 +73,14 @@ export interface SlicedLane {
 	 */
 	close(): Promise<void>;
 }
+
+/**
+ * Asked before each call that executes (start, poll): a promise that
+ * resolves when this lane may run its next slice, or null to run it now. The
+ * engine decides, across all its lanes (see QueryEngine #sliceGrant): freely
+ * while its main connection is quiet, a share of the worker while it works.
+ */
+export type LaneHold = () => Promise<void> | null;
 
 /** Slices longer than this warn once: the polling interval is long. */
 const SLOW_SLICE_MS = 25;
@@ -82,7 +100,7 @@ interface Job {
 	fetch: boolean;
 	phase: 'queued' | 'running' | 'fetching';
 	aborted: boolean;
-	resolve: (r: { ipc: Uint8Array[]; polls: number }) => void;
+	resolve: (r: LaneResult) => void;
 	reject: (e: unknown) => void;
 	onAbort: (() => void) | null;
 }
@@ -95,6 +113,22 @@ export class PendingQueryLane implements SlicedLane {
 	#running: Job | null = null;
 	#runningDone: Promise<void> | null = null;
 	#closed = false;
+	#hold: LaneHold | null;
+
+	/**
+	 * Wait as `hold` asks before a call that executes. Fetches are not held:
+	 * they move finished bytes, nearly no worker time, and holding them would
+	 * only delay the slow result. Returns the wait, which is not execution, or
+	 * null when there is none: then the caller goes on in the same tick, as a
+	 * lane without a hold always did.
+	 */
+	#beforeSlice(): Promise<number> | null {
+		const wait = this.#hold?.();
+		if (!wait) return null;
+		const t = performance.now();
+		return wait.then(() => performance.now() - t);
+	}
+
 	/** Per-statement slice lengths, until judged; null when not measuring. */
 	#slices: number[] | null = [];
 
@@ -103,11 +137,12 @@ export class PendingQueryLane implements SlicedLane {
 		conn: number,
 		closeConnection: () => Promise<void>,
 		/** The database's polling interval, when the opener knows it. */
-		options: { pollingIntervalMs?: number } = {}
+		options: { pollingIntervalMs?: number; hold?: LaneHold } = {}
 	) {
 		this.#bindings = bindings;
 		this.#conn = conn;
 		this.#closeConnection = closeConnection;
+		this.#hold = options.hold ?? null;
 		const known = options.pollingIntervalMs;
 		if (known != null) {
 			this.#slices = null;
@@ -115,7 +150,7 @@ export class PendingQueryLane implements SlicedLane {
 		}
 	}
 
-	query(sql: string, signal?: AbortSignal): Promise<{ ipc: Uint8Array[]; polls: number }> {
+	query(sql: string, signal?: AbortSignal): Promise<LaneResult> {
 		return this.#enqueue(sql, signal, true);
 	}
 
@@ -134,11 +169,7 @@ export class PendingQueryLane implements SlicedLane {
 		await this.#closeConnection();
 	}
 
-	#enqueue(
-		sql: string,
-		signal: AbortSignal | undefined,
-		fetch: boolean
-	): Promise<{ ipc: Uint8Array[]; polls: number }> {
+	#enqueue(sql: string, signal: AbortSignal | undefined, fetch: boolean): Promise<LaneResult> {
 		if (this.#closed || signal?.aborted) return Promise.reject(abortError());
 		return new Promise((resolve, reject) => {
 			const job: Job = {
@@ -204,11 +235,17 @@ export class PendingQueryLane implements SlicedLane {
 		job.phase = 'running';
 		const t0 = performance.now();
 		let polls = 0;
+		let held = 0;
 		try {
 			let header: Uint8Array | null;
 			try {
+				const before = this.#beforeSlice();
+				if (before) held += await before;
+				if (job.aborted) throw abortError();
 				header = await b.startPendingQuery(conn, job.sql, false);
 				while (header == null) {
+					const wait = this.#beforeSlice();
+					if (wait) held += await wait;
 					if (job.aborted) throw abortError();
 					polls++;
 					header = await b.pollPendingQuery(conn);
@@ -220,6 +257,8 @@ export class PendingQueryLane implements SlicedLane {
 			}
 			// Finished just as a cancel arrived: aborted all the same.
 			if (job.aborted) throw abortError();
+			// Held time is waiting for the main connection, not execution.
+			const execMs = performance.now() - t0 - held;
 
 			const ipc: Uint8Array[] = [header];
 			if (job.fetch) {
@@ -232,9 +271,9 @@ export class PendingQueryLane implements SlicedLane {
 				}
 			}
 			if (job.aborted) throw abortError();
-			this.#noteSlices(polls, performance.now() - t0);
+			this.#noteSlices(polls, execMs);
 			this.#detach(job);
-			job.resolve({ ipc, polls });
+			job.resolve({ ipc, polls, execMs });
 		} catch (e) {
 			this.#detach(job);
 			job.reject(e);
@@ -266,4 +305,61 @@ function warnSlowSlices(ms: number): void {
 /** For tests: the once-per-page slice warning, rearmed. */
 export function _resetSliceWarning(): void {
 	warnedSlowSlices = false;
+}
+
+/**
+ * One lane, opened on first use. `get()` answers in the same tick once the
+ * lane's state is known (open, or none to be had), and returns a promise only
+ * while it opens: a statement sent while there is no lane goes out with no
+ * extra microtask, so nothing sent after it in the same tick can overtake it.
+ */
+export class LaneSlot {
+	#open: () => Promise<SlicedLane> | null;
+	#onFail: (e: unknown) => void;
+	#state: 'unknown' | 'opening' | 'open' | 'none' = 'unknown';
+	#lane: SlicedLane | null = null;
+	#promise: Promise<SlicedLane | null> | null = null;
+
+	/** `open` returns null when no lane can be had (no capability). */
+	constructor(open: () => Promise<SlicedLane> | null, onFail: (e: unknown) => void) {
+		this.#open = open;
+		this.#onFail = onFail;
+	}
+
+	get isOpen(): boolean {
+		return this.#state === 'open';
+	}
+
+	get(): SlicedLane | null | Promise<SlicedLane | null> {
+		if (this.#state === 'open') return this.#lane;
+		if (this.#state === 'none') return null;
+		if (this.#promise) return this.#promise;
+		const opening = this.#open();
+		if (!opening) {
+			this.#state = 'none';
+			return null;
+		}
+		this.#state = 'opening';
+		this.#promise = opening.then(
+			(lane) => {
+				this.#lane = lane;
+				this.#state = 'open';
+				return lane;
+			},
+			(e) => {
+				this.#state = 'none';
+				this.#onFail(e);
+				return null;
+			}
+		);
+		return this.#promise;
+	}
+
+	/** Close the lane if it was opened (or is opening); none can open after. */
+	async close(): Promise<void> {
+		const lane = this.#promise ? await this.#promise : null;
+		this.#state = 'none';
+		this.#lane = null;
+		if (lane) await lane.close().catch(() => {});
+	}
 }

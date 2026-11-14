@@ -6,6 +6,7 @@
 	 *   ?mount=all  every chart mounts (default)
 	 *   ?mount=visible  the first eight, the ones on screen in a typical window
 	 *   ?mount=top  only the first four
+	 *   ?slow=1  adds dots on a slow view, filtered by the brush
 	 *
 	 * The difference in when the top charts enter is the most query
 	 * prioritization could win at load. Every chart shares the "brush"
@@ -140,6 +141,24 @@
 		{ name: '11 distance over delay (area)', kind: 'area', x: 'delay' },
 		{ name: '12 mean delay over time (line)', kind: 'line', x: 'time', y: 'delay' }
 	];
+	// ?slow=1: dots on a slow view of flights, filtered by the same brush,
+	// second on the page so it is on screen. Its every read pays an
+	// uncorrelated subquery (~100-200 ms), so it reads on a lane; the others
+	// stay on the main connection. Dots, not a histogram: an aggregate gets a
+	// preagg table on hover and its brush reads stop touching the view (a
+	// histogram here read a 79 ms build, then 8.7 ms per update). A raw-row
+	// read hits the view on every update, which is what checks the hold's
+	// cap: the fast charts keep their pace and the slow one still updates.
+	const slow = page.url.searchParams.get('slow') === '1';
+	if (slow) {
+		charts.splice(1, 0, {
+			name: '1b delay by distance (slow view, dots)',
+			kind: 'dots',
+			x: 'distance',
+			y: 'delay',
+			table: 'slow_flights'
+		});
+	}
 	const shown =
 		mount === 'top' ? charts.slice(0, 4) : mount === 'visible' ? charts.slice(0, 8) : charts;
 
@@ -157,6 +176,13 @@
 				FROM flights, range(${scale}) r(k)
 			`);
 		}
+		if (slow) {
+			await queryEngine.exec(`
+				CREATE OR REPLACE VIEW slow_flights AS
+				SELECT * FROM flights
+				WHERE (SELECT 0 * avg(hash(i) % 1000) FROM range(5000000) t(i)) = 0
+			`);
+		}
 		mountedAt = performance.now();
 		isLoaded = true;
 	});
@@ -169,7 +195,7 @@
 		<button
 			onclick={() =>
 				log.download(
-					`qlog-${mount}${scale > 1 ? `-x${scale}` : ''}${tooltipSort ? `-sort-${tooltipSort}` : ''}.json`,
+					`qlog-${mount}${scale > 1 ? `-x${scale}` : ''}${slow ? '-slow' : ''}${tooltipSort ? `-sort-${tooltipSort}` : ''}.json`,
 					{
 						mountedAt,
 						entrances,
@@ -201,14 +227,14 @@
 									{#snippet canvasComponents()}
 										{#if chart.kind === 'hist'}
 											<RectYMark
-												table="flights"
+												table={chart.table ?? 'flights'}
 												x={bin(chart.x, chart.steps ? { steps: chart.steps } : {})}
 												y={count()}
 												selection="brush"
 											/>
 										{:else if chart.kind === 'dots'}
 											<DotsMark
-												table="flights"
+												table={chart.table ?? 'flights'}
 												x={chart.x}
 												y={chart.y}
 												r={1}
