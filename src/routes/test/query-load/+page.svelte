@@ -8,6 +8,9 @@
 	 *   ?mount=top  only the first four
 	 *   ?slow=1  adds dots on a slow view, filtered by the brush
 	 *   ?share=N  the lanes' slice share: one slice per N ms (default 10)
+	 *   ?cap=N  statements on the main connection at once (default 1); cap=inf
+	 *           holds nothing in JS: the order before the main queue
+	 *   ?domainRank=N  the rank of domain and range reads (default 0, setup)
 	 *   ?cat=1  adds two categorical columns (band: 4 values; route: ~300) and
 	 *           bars on them, second and third: the dims chain at scale
 	 *
@@ -43,7 +46,15 @@
 	// .sliceShareMs), for measuring it.
 	const shareParam = Number(page.url.searchParams.get('share'));
 	const sliceShareMs = shareParam > 0 ? shareParam : undefined;
-	const { queryEngine, gpuCoordinator } = initFjader({ engine: { sliceShareMs } });
+	// ?cap=N / ?cap=inf and ?domainRank=N: the main connection's queue
+	// (QueryEngineOptions.mainInFlightCap, .sourceReadRank), for measuring it.
+	const capParam = page.url.searchParams.get('cap');
+	const mainInFlightCap = capParam === 'inf' ? Infinity : Number(capParam) || undefined;
+	const domainRankParam = page.url.searchParams.get('domainRank');
+	const sourceReadRank = domainRankParam ? Number(domainRankParam) : undefined;
+	const { queryEngine, gpuCoordinator } = initFjader({
+		engine: { sliceShareMs, mainInFlightCap, sourceReadRank }
+	});
 	const log = attachQueryLog(queryEngine);
 	let mountedAt = 0;
 	/** When each chart's entrance started, labelled by its section: { chart, time }. */
@@ -226,7 +237,7 @@
 		<button
 			onclick={() =>
 				log.download(
-					`qlog-${mount}${scale > 1 ? `-x${scale}` : ''}${slow ? '-slow' : ''}${cat ? '-cat' : ''}${sliceShareMs ? `-share${sliceShareMs}` : ''}${tooltipSort ? `-sort-${tooltipSort}` : ''}.json`,
+					`qlog-${mount}${scale > 1 ? `-x${scale}` : ''}${slow ? '-slow' : ''}${cat ? '-cat' : ''}${sliceShareMs ? `-share${sliceShareMs}` : ''}${tooltipSort ? `-sort-${tooltipSort}` : ''}${capParam ? `-cap${capParam}` : ''}${domainRankParam ? `-dr${domainRankParam}` : ''}.json`,
 					{
 						mountedAt,
 						entrances,

@@ -33,6 +33,13 @@ import { MarkHandle, type QueryParams, type ResultCause } from './MarkHandle.sve
 import { LaneSlot, type LaneHold, type LaneResult, type SlicedLane } from './sliced-lane';
 import { SourceRouting, sourceDDL } from './source-routing';
 import {
+	MainQueue,
+	MAIN_IN_FLIGHT_CAP,
+	MAIN_MAX_WAIT_MS,
+	ddlNames,
+	type StatementRank
+} from './main-queue';
+import {
 	CategoricalIdentity,
 	type DimValue,
 	type FieldIdentity,
@@ -94,6 +101,12 @@ export interface QueryOpts {
 	 * reads may be quick. A backend with one connection can ignore it.
 	 */
 	slow?: boolean;
+	/**
+	 * How soon it runs on the main connection, against other statements
+	 * waiting there (StatementRank). Default: 3 for background, 2 with a
+	 * `callerId`, 0 otherwise.
+	 */
+	rank?: StatementRank;
 }
 
 /**
@@ -122,6 +135,13 @@ export interface StatementPlacement {
 	callerId?: string;
 	/** See QueryOpts.slow. */
 	slow?: boolean;
+	/** See QueryOpts.rank. */
+	rank?: StatementRank;
+	/**
+	 * The relations it creates, drops or replaces when its text does not say
+	 * (MainQueue barriers): an Arrow insert creating its table, a batch.
+	 */
+	barrier?: readonly string[];
 }
 
 /**
@@ -173,6 +193,14 @@ export interface StatementRecord {
 	requested?: number;
 	/** Who asked (a mark's id), when it said. */
 	caller?: string;
+	/**
+	 * The main connection's queue: the rank it was given, and the rank it
+	 * ran at (lower when it rose for its wait). Absent on a lane.
+	 */
+	rank?: StatementRank;
+	ranAt?: StatementRank;
+	/** performance.now() when it entered the engine's funnel (#send). */
+	queued: number;
 	/** performance.now() when handed to the connection, and when it settled. */
 	start: number;
 	end: number;
@@ -232,6 +260,16 @@ export interface QueryEngineOptions {
 	 * one slice per this many ms (see SLICE_SHARE_MS, the default).
 	 */
 	sliceShareMs?: number;
+	/** Advanced. Statements on the main connection at once (MAIN_IN_FLIGHT_CAP, the default). */
+	mainInFlightCap?: number;
+	/** Advanced. A rank-2 or -3 statement rises one rank per this wait (MAIN_MAX_WAIT_MS). */
+	mainMaxWaitMs?: number;
+	/**
+	 * Debug. The rank of reads that name a source without a caller (a mark's
+	 * domain, range and stats reads), 0 by default like other setup. For
+	 * measuring whether they belong with setup: they are cached and cheap.
+	 */
+	sourceReadRank?: StatementRank;
 }
 
 // outerAggBuilders + window CTE wrapping now live in query-builder.ts
@@ -505,6 +543,12 @@ export class QueryEngine {
 			options.buildMaxWaitMs ?? BUILD_MAX_WAIT_MS
 		);
 		this.#sliceShareMs = options.sliceShareMs ?? SLICE_SHARE_MS;
+		this.#sourceReadRank = options.sourceReadRank ?? 0;
+		this.#mainQueue = new MainQueue(
+			options.mainInFlightCap ?? MAIN_IN_FLIGHT_CAP,
+			options.mainMaxWaitMs ?? MAIN_MAX_WAIT_MS,
+			() => this.#mainBusy()
+		);
 		this.#unbatch = options.unbatch ?? false;
 		if (connection instanceof Promise) {
 			this.#connPromise = connection;
@@ -679,16 +723,20 @@ export class QueryEngine {
 	 * The one place a statement reaches the connection. Everything that talks to
 	 * DuckDB goes through here: queries, statements, DESCRIBE, Arrow inserts.
 	 *
-	 * What attaches here: the interaction count builds yield to, and statement
-	 * observers (debugging, measurement). Later: routing a class to a connection,
-	 * and per-connection queues.
+	 * What attaches here: routing a class to a connection (lanes), the
+	 * interaction count builds yield to, the main connection's queue (ranks,
+	 * barriers: MainQueue), and statement observers (debugging, measurement).
+	 *
+	 * `run` gets `release`: a read calls it once its bytes arrived, before
+	 * decoding, so the next queued statement is sent while this one decodes.
+	 * Without it the slot frees when `run` settles.
 	 */
 	async #send<T>(
 		kind: StatementRecord['kind'],
 		sql: string,
 		place: StatementPlacement,
 		how: {
-			run: (conn: DuckDBConnection) => Promise<T>;
+			run: (conn: DuckDBConnection, release: () => void) => Promise<T>;
 			/** How to run it on a sliced lane; absent: main connection only. */
 			runSliced?: (lane: SlicedLane) => Promise<T>;
 			signal?: AbortSignal;
@@ -710,16 +758,45 @@ export class QueryEngine {
 		const conn = this.#conn!;
 		const interaction = cls === 'interaction';
 		if (interaction) this.#interactionInFlight++;
-		const start = performance.now();
+		const queued = performance.now();
+		let start = queued;
+		const rank = lane ? undefined : this.#rankOf(place);
+		let ranAt: StatementRank | undefined;
+		// Main connection: the slot, held from the grant until release (the
+		// bytes arrived) or the statement settles, whichever comes first.
+		let held = false;
+		const release = () => {
+			if (!held) return;
+			held = false;
+			// The next statement takes the slot (and counts as busy) before this
+			// one counts as idle: the lanes' quiet timer never sees a false gap.
+			this.#mainQueue.release();
+			this.#mainIdle();
+		};
 		let error: unknown;
-		// Paired with #mainIdle in the finally below.
-		if (!lane) this.#mainBusy();
 		try {
-			return lane ? await runSliced!(lane) : await run(conn);
+			if (lane) return await runSliced!(lane);
+			return await new Promise<T>((resolve, reject) => {
+				this.#mainQueue.enqueue({
+					rank: rank!,
+					sql,
+					barrier: place.barrier,
+					signal,
+					start: (r) => {
+						ranAt = r;
+						held = true;
+						start = performance.now();
+						// Called inside the previous statement's release: sends now.
+						run(conn, release).then(resolve, reject);
+					},
+					drop: reject
+				});
+			});
 		} catch (e) {
 			error = e;
 			throw e;
 		} finally {
+			release();
 			if (this.#statementObservers.size > 0) {
 				const record: StatementRecord = {
 					sql,
@@ -730,6 +807,9 @@ export class QueryEngine {
 					source: place.source,
 					requested: place.requestedAt,
 					caller: place.callerId,
+					rank,
+					ranAt,
+					queued,
 					start,
 					end: performance.now(),
 					error
@@ -744,11 +824,22 @@ export class QueryEngine {
 					}
 				}
 			}
-			if (!lane) this.#mainIdle();
 			// The last interaction statement settling frees the connection for a build.
 			if (interaction && --this.#interactionInFlight === 0) this.#preagg.pump();
 		}
 	}
+
+	/** A main-connection statement's rank: its own, else by class and caller. */
+	#rankOf(place: StatementPlacement): StatementRank {
+		if (place.rank !== undefined) return place.rank;
+		if (place.class === 'background') return 3;
+		if (place.callerId) return 2;
+		return place.source ? this.#sourceReadRank : 0;
+	}
+
+	/** The queue in front of the main connection (see MainQueue). */
+	#mainQueue: MainQueue;
+	#sourceReadRank: StatementRank;
 
 	/**
 	 * Execute a SQL query and return a flechette Table.
@@ -763,11 +854,13 @@ export class QueryEngine {
 	): Promise<Table> {
 		let sliced = false;
 		const read = this.#send(kind, sql, place, {
-			run: async (conn) => {
+			run: async (conn, release) => {
 				if (!conn.queryIPC) return conn.query(sql);
 				const t0 = performance.now();
 				const bytes = await conn.queryIPC(sql);
 				const ms = performance.now() - t0;
+				// The worker is done with it: the next statement goes while this decodes.
+				release();
 				const table = tableFromIPC(bytes);
 				if (this.#notesCost(place)) this.#routing.noteMainRead(place.source!, ms, table.numRows);
 				return table;
@@ -1013,7 +1106,8 @@ export class QueryEngine {
 			data: opts?.data,
 			requestedAt: performance.now(),
 			callerId: opts?.callerId,
-			slow: opts?.slow
+			slow: opts?.slow,
+			rank: opts?.rank
 		};
 
 		// Cache check: return cached result immediately, bypassing
@@ -1187,17 +1281,29 @@ export class QueryEngine {
 		if (this.#destroyed) throw new Error('QueryEngine has been destroyed');
 		if (statements.length === 0) throw new Error('execBatch: no statements');
 		if (!this.#conn) await this.#ensureConnection();
-		const place: StatementPlacement = { class: 'interaction' };
 		let result: Table;
 		if (this.#unbatch || !this.#conn?.queryIPC) {
 			for (const stmt of statements.slice(0, -1)) await this.exec(stmt);
-			result = await this.#queryRaw(statements[statements.length - 1], place);
+			result = await this.#queryRaw(statements[statements.length - 1], {
+				class: 'interaction'
+			});
 		} else {
 			const sql = statements.join(';\n');
-			result = await this.#send('batch', sql, place, {
-				run: async (conn) => tableFromIPC(await conn.queryIPC!(sql)),
-				count: statements.length
-			});
+			// Its text names only the first statement's relation: each one's goes in.
+			const barrier = statements.flatMap((stmt) => ddlNames(stmt) ?? []);
+			result = await this.#send(
+				'batch',
+				sql,
+				{ class: 'interaction', barrier },
+				{
+					run: async (conn, release) => {
+						const bytes = await conn.queryIPC!(sql);
+						release();
+						return tableFromIPC(bytes);
+					},
+					count: statements.length
+				}
+			);
 		}
 		for (const stmt of statements) this.#noteDDL(stmt);
 		return result;
@@ -1467,7 +1573,8 @@ export class QueryEngine {
 		await this.#send(
 			'insert',
 			`INSERT ARROW INTO "${options.name}" (${data.byteLength} bytes)`,
-			{ class: 'interaction' },
+			// Creating the table replaces what reads of it would see: a barrier.
+			{ class: 'interaction', barrier: options.create ? [options.name] : undefined },
 			{
 				run: async (conn) => {
 					if (!conn.insertArrowFromIPCStream) {
@@ -1630,20 +1737,25 @@ export class QueryEngine {
 		const preagg = this.#preagg.sqlFor(markId, reg);
 		const sqlStr = preagg?.sql || this.#baseSQL(markId, reg);
 		if (!sqlStr) return;
-		// Only once a first query actually goes out.
+		// Only once a first query actually goes out. A first read is what the
+		// chart's entrance waits on; a re-query is not (StatementRank).
+		const rank: StatementRank = reg.needsFirst ? 1 : 2;
 		reg.needsFirst = false;
 
 		// Use the public query() path — its execute-latest logic ensures
 		// at most 1 inflight + 1 pending per callerId during rapid brushing.
 		// A preagg table is built in memory by fjader: fast until measured.
 		if (preagg) this.#routing.prior(preagg.table, 'fast');
-		this.query(sqlStr, markReadOptions(markId, reg.descriptor, preagg?.table ?? null))
+		this.query(sqlStr, {
+			...markReadOptions(markId, reg.descriptor, preagg?.table ?? null),
+			rank
+		})
 			.catch((e) => {
 				if (!preagg || (e as Error)?.name === 'AbortError') throw e;
 				this.#preagg.readFailed(markId, preagg.table, e);
 				const baseSQL = this.#baseSQL(markId, reg);
 				if (!baseSQL) throw e;
-				return this.query(baseSQL, markReadOptions(markId, reg.descriptor, null));
+				return this.query(baseSQL, { ...markReadOptions(markId, reg.descriptor, null), rank });
 			})
 			.then((table) => handle._setResult(table, cause))
 			.catch((e) => {
@@ -1756,6 +1868,7 @@ export class QueryEngine {
 			pending.reject(new DOMException('Engine destroyed', 'AbortError'));
 		}
 		this.#pending.clear();
+		this.#mainQueue.clear(new DOMException('Engine destroyed', 'AbortError'));
 		// The preagg drops above ran on the lane; close it, then the connection.
 		await Promise.all([this.#backgroundLane, ...this.#sourceLanes].map((slot) => slot.close()));
 		const conn = this.#conn ?? (this.#connPromise ? await this.#connPromise : null);

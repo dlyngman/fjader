@@ -37,7 +37,16 @@
 	import { Grid } from '$lib/components/guides';
 	import { bin } from '$lib/sql/bin';
 
-	const { queryEngine, gpuCoordinator } = initFjader();
+	// ?cap=N / ?cap=inf and ?domainRank=N: the main connection's queue
+	// (QueryEngineOptions.mainInFlightCap, .sourceReadRank), for measuring it;
+	// cap=inf holds nothing in JS, the order before the main queue.
+	const capParam = page.url.searchParams.get('cap');
+	const mainInFlightCap = capParam === 'inf' ? Infinity : Number(capParam) || undefined;
+	const domainRankParam = page.url.searchParams.get('domainRank');
+	const sourceReadRank = domainRankParam ? Number(domainRankParam) : undefined;
+	const { queryEngine, gpuCoordinator } = initFjader({
+		engine: { mainInFlightCap, sourceReadRank }
+	});
 	// Every statement and chart entrance, for "Save log": with ?slow=1 the slow
 	// mark is on from the first load, which is what shows whether it holds up
 	// the other charts.
@@ -97,7 +106,10 @@
 		<button onclick={() => replay++}>Replay</button>
 		<button
 			onclick={() =>
-				log.download(`qlog-entrance${showSlow ? '-slow' : ''}.json`, { mountedAt, entrances })}
+				log.download(
+					`qlog-entrance${showSlow ? '-slow' : ''}${capParam ? `-cap${capParam}` : ''}${domainRankParam ? `-dr${domainRankParam}` : ''}.json`,
+					{ mountedAt, entrances }
+				)}
 		>
 			Save log
 		</button>

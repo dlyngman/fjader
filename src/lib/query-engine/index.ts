@@ -68,6 +68,7 @@ export type {
 	StatementRecord
 } from './QueryEngine';
 export { mapSqlTypeToJs, buildSchemaMap } from './QueryEngine';
+export type { StatementRank } from './main-queue';
 export { MarkHandle } from './MarkHandle.svelte';
 export type { QueryParams } from './MarkHandle.svelte';
 export { FilterGroupRegistry } from './FilterGroupRegistry.svelte';

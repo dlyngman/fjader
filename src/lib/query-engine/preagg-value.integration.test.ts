@@ -115,7 +115,10 @@ let group: FilterGroup;
 
 /** A fresh engine and filter group on the connection, with the dims set up. */
 async function useEngine(options?: QueryEngineOptions): Promise<void> {
-	engine = new QueryEngine(conn, options);
+	// These tests hold mark queries in flight on the connection, several at
+	// once, to check the build queue's own hold; the main connection's cap
+	// (MainQueue, tested on its own) would keep all but one in JS.
+	engine = new QueryEngine(conn, { mainInFlightCap: Infinity, ...options });
 	group = new FilterGroup();
 	group.setEngine(engine);
 	// The dims a legend or band axis on these fields would have built.
