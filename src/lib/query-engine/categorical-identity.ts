@@ -94,6 +94,8 @@ export interface IdentityExec {
 	/**
 	 * Whether anything listens to onRequest and onDrain. Checked first, so with
 	 * no listener their arguments (a field list, a timestamp) are never built.
+	 * The callbacks fire ONLY when this returns true: a host that implements
+	 * them must implement this too, or it is never called.
 	 */
 	observing?(): boolean;
 }
