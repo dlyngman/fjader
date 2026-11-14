@@ -69,6 +69,11 @@ export interface IdentityExec {
 	 * column's cardinality read from its statistics (#cardinalityFromStats):
 	 * on a view, `stats(col) … LIMIT 1` runs the view, and a filtered view
 	 * reports its base column's statistics. Absent: never.
+	 *
+	 * About the table's TYPE, not where it is stored: a table in an attached
+	 * file or remote database answers yes (its statistics are metadata either
+	 * way). Not a "fast source" test: routing asks that separately
+	 * (SourceRouting), and must not reuse this.
 	 */
 	isBaseTable?(table: string): boolean;
 }
