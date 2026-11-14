@@ -19,7 +19,9 @@
 	 * The script fires only the events the interactors listen to: moves as
 	 * pointerrawupdate where ChartCell uses it (Chrome, not in an iframe), else
 	 * pointermove. setPointerCapture throws NotFoundError for a synthetic
-	 * pointer id, so capture is a no-op while the session runs.
+	 * pointer id, so capture is a no-op while the session runs. Leaving a chart
+	 * is scripted too (pointerleave before the next chart's pointerenter), or the
+	 * chart left behind still counts as hovered.
 	 */
 	import { count } from '@uwdata/mosaic-sql';
 	import { initFjader } from '$lib';
@@ -137,7 +139,7 @@
 	function pointer(target, type, x, y, buttons = 0) {
 		target.dispatchEvent(
 			new PointerEvent(type, {
-				bubbles: type !== 'pointerenter',
+				bubbles: type !== 'pointerenter' && type !== 'pointerleave',
 				cancelable: true,
 				composed: true,
 				pointerId: 1,
@@ -151,8 +153,30 @@
 		);
 	}
 
+	/** The chart the scripted pointer is on, if any. */
+	let hovered = null;
+
+	/**
+	 * Leave the chart the pointer is on: its plot surface, then its cell. A real
+	 * pointer always does before entering another chart. Without it the chart
+	 * still counts as hovered, and its hover settle re-runs its activators
+	 * (HoverSettle, 200 ms after a click) as a new batch, which drops the next
+	 * chart's queued builds.
+	 */
+	function leaveChart() {
+		if (!hovered) return;
+		const svg = foreground(hovered);
+		const r = svg.getBoundingClientRect();
+		mark('leave', hovered);
+		pointer(svg, 'pointerleave', r.right + 1, r.top - 1);
+		pointer(svg.closest('.chart-cell'), 'pointerleave', r.right + 1, r.top - 1);
+		hovered = null;
+	}
+
 	/** Enter a chart: its cell, then its plot surface, as a real pointer would. */
 	function hoverChart(name) {
+		leaveChart();
+		hovered = name;
 		const svg = foreground(name);
 		const r = svg.getBoundingClientRect();
 		const x = r.left + r.width / 2;
@@ -164,6 +188,7 @@
 	}
 
 	function hoverLegend(name) {
+		leaveChart();
 		const el = chartEl(name).querySelector('.legend-ordinal');
 		const r = el.getBoundingClientRect();
 		activations = [];
@@ -280,6 +305,7 @@
 			await settle('brush');
 			clearBrush('delay');
 			await settle('clear brush');
+			leaveChart();
 			mark('end', VARIANT);
 		} finally {
 			Element.prototype.setPointerCapture = capture;
