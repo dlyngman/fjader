@@ -570,7 +570,7 @@ describe('QueryEngine source lanes', () => {
 	});
 });
 
-describe('QueryEngine quiet cancel and slow marks', () => {
+describe('QueryEngine slow marks', () => {
 	async function ipcBytes() {
 		const { tableToIPC, tableFromArrays } = await import('@uwdata/flechette');
 		return tableToIPC(tableFromArrays({ a: [1] }), { format: 'stream' })!;
@@ -608,51 +608,6 @@ describe('QueryEngine quiet cancel and slow marks', () => {
 	}
 
 	const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-	it('cancels a superseded read on a lane once input goes quiet, and runs the newer one', async () => {
-		const { conn, log } = heldLane();
-		const engine = new QueryEngine(conn);
-		const first = engine.query('SELECT 1', {
-			callerId: 'm',
-			source: 's',
-			data: true,
-			cache: false
-		});
-		await wait(0);
-		const last = engine.query('SELECT 2', { callerId: 'm', source: 's', data: true, cache: false });
-		await expect(first).rejects.toThrow();
-		expect(log).toEqual(['lane SELECT 1', 'cancel SELECT 1', 'lane SELECT 2']);
-		void last.catch(() => {});
-	});
-
-	it('does not cancel while requests keep coming (a drag)', async () => {
-		const { conn, log } = heldLane();
-		const engine = new QueryEngine(conn);
-		void engine
-			.query('SELECT 1', { callerId: 'm', source: 's', data: true, cache: false })
-			.catch(() => {});
-		for (let i = 2; i < 6; i++) {
-			await wait(20);
-			void engine
-				.query(`SELECT ${i}`, { callerId: 'm', source: 's', data: true, cache: false })
-				.catch(() => {});
-		}
-		expect(log.some((l) => l.startsWith('cancel'))).toBe(false);
-	});
-
-	it('can be turned off', async () => {
-		const { conn, log } = heldLane();
-		const engine = new QueryEngine(conn, { cancelSlicedOnQuiet: false });
-		void engine
-			.query('SELECT 1', { callerId: 'm', source: 's', data: true, cache: false })
-			.catch(() => {});
-		await wait(0);
-		void engine
-			.query('SELECT 2', { callerId: 'm', source: 's', data: true, cache: false })
-			.catch(() => {});
-		await wait(80);
-		expect(log).toEqual(['lane SELECT 1']);
-	});
 
 	it('reads a slow mark sliced even on a fast source', async () => {
 		const { conn, log } = heldLane();

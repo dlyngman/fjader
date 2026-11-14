@@ -7,8 +7,7 @@
 	 *   ?mount=visible  the first eight, the ones on screen in a typical window
 	 *   ?mount=top  only the first four
 	 *   ?slow=1  adds dots on a slow view, filtered by the brush
-	 *   ?share=N  the lanes' slice share: one slice per N ms (default 25)
-	 *   ?cancel=0  no cancel of a superseded slow read once input is quiet
+	 *   ?share=N  the lanes' slice share: one slice per N ms (default 10)
 	 *
 	 * The difference in when the top charts enter is the most query
 	 * prioritization could win at load. Every chart shares the "brush"
@@ -37,13 +36,10 @@
 	import { attachQueryLog } from '$lib/query-engine/debug/query-log';
 
 	// ?share=N: the lanes' slice share, one slice per N ms (QueryEngineOptions
-	// .sliceShareMs); ?cancel=0: no quiet cancel. For measuring them.
+	// .sliceShareMs), for measuring it.
 	const shareParam = Number(page.url.searchParams.get('share'));
 	const sliceShareMs = shareParam > 0 ? shareParam : undefined;
-	const cancelParam = page.url.searchParams.get('cancel');
-	const { queryEngine, gpuCoordinator } = initFjader({
-		engine: { sliceShareMs, cancelSlicedOnQuiet: cancelParam !== '0' }
-	});
+	const { queryEngine, gpuCoordinator } = initFjader({ engine: { sliceShareMs } });
 	const log = attachQueryLog(queryEngine);
 	let mountedAt = 0;
 	/** When each chart's entrance started, labelled by its section: { chart, time }. */
@@ -204,7 +200,7 @@
 		<button
 			onclick={() =>
 				log.download(
-					`qlog-${mount}${scale > 1 ? `-x${scale}` : ''}${slow ? '-slow' : ''}${sliceShareMs ? `-share${sliceShareMs}` : ''}${cancelParam === '0' ? '-nocancel' : ''}${tooltipSort ? `-sort-${tooltipSort}` : ''}.json`,
+					`qlog-${mount}${scale > 1 ? `-x${scale}` : ''}${slow ? '-slow' : ''}${sliceShareMs ? `-share${sliceShareMs}` : ''}${tooltipSort ? `-sort-${tooltipSort}` : ''}.json`,
 					{
 						mountedAt,
 						entrances,

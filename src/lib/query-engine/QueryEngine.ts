@@ -112,7 +112,7 @@ export interface StatementPlacement {
 	 * execute-latest read, the state it reflects. Recorded, for data age.
 	 */
 	requestedAt?: number;
-	/** The caller (a mark's id), for the quiet cancel and the log. */
+	/** The caller (a mark's id), for the log. */
 	callerId?: string;
 	/** Read sliced on its source's lane whatever the source's cost (a slow mark). */
 	sliced?: boolean;
@@ -182,25 +182,18 @@ const MAIN_QUIET_MS = 2;
 
 /**
  * While the main connection works, all lanes together get one slice per this
- * many ms: ~20% of the worker at 5 ms slices. A slow source keeps a minimum
+ * many ms: half the worker at 5 ms slices. A slow source keeps a minimum
  * rate, and a fast query waits at most one slice for it. One budget for
  * every lane, the background lane too: a budget per lane would let five busy
- * lanes take the whole worker between them. Measured beside a slow chart
- * during a brush: at 33 ms (~15%) the fast charts' p90 stayed at 19 ms and
- * the slow chart's data aged ~80 ms more, so the fast charts' cost is not
- * the share (their p90 follows the slow chart's large results decoding).
+ * lanes take the whole worker between them.
+ *
+ * Measured beside a slow chart during a brush (/test/query-load?slow=1,
+ * scripted drag, two runs each): the fast charts' p90 stayed at ~20 ms and
+ * their updates the same at 25, 15 and 10 ms (their cost follows the slow
+ * chart's large results decoding, not the share), while the slow chart's
+ * data age fell from ~500 to ~375 to ~345 ms median.
  */
-const SLICE_SHARE_MS = 25;
-
-/**
- * With no newer request for this long, a mark's input has stopped (a drag
- * ended): its read in flight on a lane, superseded by the pending one, is
- * cancelled, so the final state shows after one read instead of after the
- * rest of a stale one and then the final one. Longer than a frame, and than
- * a busy frame, so it never fires during a drag: there a cancel would starve
- * the chart, a newer read always waiting.
- */
-const INPUT_QUIET_MS = 50;
+const SLICE_SHARE_MS = 10;
 
 export interface QueryEngineOptions {
 	/** Overrides BUILD_MAX_WAIT_MS; tests use it to make the queue deterministic. */
@@ -210,11 +203,6 @@ export interface QueryEngineOptions {
 	 * one slice per this many ms (see SLICE_SHARE_MS, the default).
 	 */
 	sliceShareMs?: number;
-	/**
-	 * Advanced. Cancel a mark's read in flight on a lane once input has gone
-	 * quiet with a newer read waiting (see INPUT_QUIET_MS). Default true.
-	 */
-	cancelSlicedOnQuiet?: boolean;
 }
 
 // outerAggBuilders + window CTE wrapping now live in query-builder.ts
@@ -448,7 +436,6 @@ export class QueryEngine {
 			options.buildMaxWaitMs ?? BUILD_MAX_WAIT_MS
 		);
 		this.#sliceShareMs = options.sliceShareMs ?? SLICE_SHARE_MS;
-		this.#cancelSlicedOnQuiet = options.cancelSlicedOnQuiet ?? true;
 		if (connection instanceof Promise) {
 			this.#connPromise = connection;
 			connection.then((c) => {
@@ -714,14 +701,7 @@ export class QueryEngine {
 			},
 			runSliced: async (lane) => {
 				sliced = true;
-				const caller = place.callerId;
-				if (caller) this.#slicedCallers.add(caller);
-				let result: LaneResult;
-				try {
-					result = await lane.query(sql, signal);
-				} finally {
-					if (caller) this.#slicedCallers.delete(caller);
-				}
+				const result: LaneResult = await lane.query(sql, signal);
 				const table = tableFromIPC(result.ipc);
 				if (this.#notesCost(place)) {
 					this.#routing.noteLaneRead(place.source!, result.polls, result.execMs, table.numRows);
@@ -794,36 +774,11 @@ export class QueryEngine {
 	// source's reads are interaction class too, and a lane waiting on
 	// #interactionInFlight would wait for itself.
 
-	/** Callers whose read in flight runs on a lane (the quiet cancel only helps there). */
-	#slicedCallers = new Set<string>();
-	#inputQuietTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-	/**
-	 * A newer read waits behind this caller's read in flight: once no newer
-	 * request comes for INPUT_QUIET_MS, cancel the one in flight if it runs
-	 * on a lane, so the pending, final one starts now (see INPUT_QUIET_MS).
-	 * On the main connection a sent read cannot be interrupted: nothing to
-	 * gain, and its result would be lost.
-	 */
-	#armInputQuiet(callerId: string): void {
-		if (!this.#cancelSlicedOnQuiet) return;
-		clearTimeout(this.#inputQuietTimers.get(callerId));
-		this.#inputQuietTimers.set(
-			callerId,
-			setTimeout(() => {
-				this.#inputQuietTimers.delete(callerId);
-				if (!this.#pending.has(callerId) || !this.#slicedCallers.has(callerId)) return;
-				this.#inflight.get(callerId)?.abort();
-			}, INPUT_QUIET_MS)
-		);
-	}
-
 	/** Statements on the main connection, sent and not settled. */
 	#mainInFlight = 0;
 	/** When the main connection last went idle. */
 	#mainIdleAt = 0;
 	#sliceShareMs: number;
-	#cancelSlicedOnQuiet: boolean;
 	/** When any lane last took a slice from the share. */
 	#lastSliceAt = -Infinity;
 	/** Lanes waiting for a slice, first come first served. */
@@ -985,7 +940,6 @@ export class QueryEngine {
 					prev.reject(new DOMException('Query superseded', 'AbortError'));
 				}
 				// Store as pending — will be executed when inflight completes
-				this.#armInputQuiet(callerId);
 				return new Promise<Table>((resolve, reject) => {
 					this.#pending.set(callerId, {
 						sql: sqlStr,
