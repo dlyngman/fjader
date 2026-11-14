@@ -305,11 +305,15 @@ export function buildSchemaMap(columns: ColumnInfo[]): Map<string, ColumnSchema>
 /**
  * Minimal connection interface.
  * Supports two query paths:
- * - queryIPC (fast): returns raw Arrow IPC bytes, decoded by flechette (zero-copy)
+ * - queryIPC (fast): returns raw Arrow IPC bytes, decoded by flechette into typed arrays
  * - query (fallback): returns a Table directly (for mocks/testing)
  */
 export interface DuckDBConnection {
-	/** Fast path: raw Arrow IPC bytes → flechette tableFromIPC → zero-copy typed arrays. */
+	/**
+	 * Fast path: raw Arrow IPC bytes → flechette tableFromIPC → typed arrays. Views on
+	 * the bytes within one record batch (~2k rows from DuckDB-WASM); past that,
+	 * flechette concatenates each column once.
+	 */
 	queryIPC?(sql: string): Promise<Uint8Array>;
 	/** Fallback query path. Used when queryIPC is not available (mocks, testing). */
 	query(sql: string): Promise<Table>;
