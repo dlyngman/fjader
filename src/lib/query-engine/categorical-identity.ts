@@ -455,9 +455,31 @@ export class CategoricalIdentity {
 	 * Record which of the dim's ids `table` holds: the ids of its distinct values,
 	 * joined as the view joins (NULL to a NULL row, never to a synthetic one).
 	 * Once per table, when it folds in.
+	 *
+	 * The FIRST table needs no scan: it built the dim (the CREATE branch of
+	 * #ensureDimNow; `chain` serializes work on a dim, so only one table takes
+	 * it), so every real row came from it, and its present ids are the dim's
+	 * real ids, `label IS NULL` (a synthetic row has a label; the NULL row has
+	 * none and is present, as the join finds it). Its ids come from the rows
+	 * #refreshValues just read. At 2M rows that scan cost 41-63 ms a field.
+	 * An appending table holds a subset and keeps the scan.
 	 */
-	async #recordPresent(dim: DimEntry, table: string, expr: string, src: string): Promise<void> {
+	async #recordPresent(
+		dim: DimEntry,
+		table: string,
+		expr: string,
+		src: string,
+		firstTable: { ids: number[] } | null
+	): Promise<void> {
 		const name = `${dim.name}_t_${identityToken(table)}`;
+		if (firstTable) {
+			await this.#exec.exec(
+				`CREATE OR REPLACE TABLE ${quote(name)} AS ` +
+					`SELECT id FROM ${quote(dim.name)} WHERE label IS NULL`
+			);
+			dim.present.set(table, { name, ids: new Set(firstTable.ids) });
+			return;
+		}
 		await this.#exec.exec(
 			`CREATE OR REPLACE TABLE ${quote(name)} AS ` +
 				`SELECT DISTINCT d.id FROM (SELECT DISTINCT ${expr} AS v FROM ${src}) s ` +
@@ -837,7 +859,8 @@ export class CategoricalIdentity {
 
 		await this.#checkCardinality(field, expr, src);
 
-		if (dim.tables.size === 0) {
+		const first = dim.tables.size === 0;
+		if (first) {
 			// `label` is NULL for every real value and carries the text for a
 			// synthetic one (see reserveSynthetic). It exists because `value` takes
 			// the SOURCE column's type: on a band axis over a year or a rating
@@ -880,8 +903,14 @@ export class CategoricalIdentity {
 		}
 
 		dim.tables.add(table);
-		await this.#refreshValues(field);
-		await this.#recordPresent(dim, table, expr, src);
+		const rows = await this.#refreshValues(field);
+		await this.#recordPresent(
+			dim,
+			table,
+			expr,
+			src,
+			first ? { ids: rows.filter((r) => r.label == null).map((r) => Number(r.id)) } : null
+		);
 
 		// The gate above saw ONE table. The dim spans every table that registers
 		// the field, so two tables of 6k each pass it individually and produce a
@@ -990,7 +1019,8 @@ export class CategoricalIdentity {
 
 	#version = 0;
 
-	async #refreshValues(field: string): Promise<void> {
+	/** Re-read the dim's values into the JS cache; returns the rows read (id order). */
+	async #refreshValues(field: string): Promise<Record<string, unknown>[]> {
 		const rows = await this.#exec.queryRows(
 			`SELECT id, value, label FROM ${quote(this.dimTable(field))} ORDER BY id`
 		);
@@ -1014,6 +1044,7 @@ export class CategoricalIdentity {
 		// version must see them. One keyed on the old version may also see them,
 		// which costs a re-run later, not a stale result.
 		this.#version++;
+		return rows;
 	}
 
 	/** CREATE OR REPLACE the view with an id column for every field in `all`. */

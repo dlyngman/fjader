@@ -8,6 +8,8 @@
 	 *   ?mount=top  only the first four
 	 *   ?slow=1  adds dots on a slow view, filtered by the brush
 	 *   ?share=N  the lanes' slice share: one slice per N ms (default 10)
+	 *   ?cat=1  adds two categorical columns (band: 4 values; route: ~300) and
+	 *           bars on them, second and third: the dims chain at scale
 	 *
 	 * The difference in when the top charts enter is the most query
 	 * prioritization could win at load. Every chart shares the "brush"
@@ -30,8 +32,10 @@
 		DotsMark,
 		AreaMarkY,
 		LineMark,
+		BarMarkY,
 		IntervalX
 	} from '$lib/components';
+	import { topN } from '$lib';
 	import { bin } from '$lib/sql/bin';
 	import { attachQueryLog } from '$lib/query-engine/debug/query-log';
 
@@ -155,6 +159,18 @@
 	// read hits the view on every update, which is what checks the hold's
 	// cap: the fast charts keep their pace and the slow one still updates.
 	const slow = page.url.searchParams.get('slow') === '1';
+	// ?cat=1: two categorical fields on flights, each with a bar chart on screen:
+	// the dims chain (cardinality check, dim build, present scan per field)
+	// over the whole table, at ?scale=10 over 2M rows.
+	const cat = page.url.searchParams.get('cat') === '1';
+	if (cat) {
+		charts.splice(
+			1,
+			0,
+			{ name: '1c flights by distance band', kind: 'bars', x: 'band' },
+			{ name: '1d top routes', kind: 'bars', x: 'route', top: 10 }
+		);
+	}
 	if (slow) {
 		charts.splice(1, 0, {
 			name: '1b delay by distance (slow view, dots)',
@@ -181,6 +197,16 @@
 				FROM flights, range(${scale}) r(k)
 			`);
 		}
+		if (cat) {
+			await queryEngine.exec(`
+				CREATE OR REPLACE TABLE flights AS
+				SELECT *,
+					CASE WHEN distance < 500 THEN 'short' WHEN distance < 1000 THEN 'medium'
+						WHEN distance < 2000 THEN 'long' ELSE 'very long' END AS band,
+					'R' || (distance % 300)::VARCHAR AS route
+				FROM flights
+			`);
+		}
 		if (slow) {
 			await queryEngine.exec(`
 				CREATE OR REPLACE VIEW slow_flights AS
@@ -200,7 +226,7 @@
 		<button
 			onclick={() =>
 				log.download(
-					`qlog-${mount}${scale > 1 ? `-x${scale}` : ''}${slow ? '-slow' : ''}${sliceShareMs ? `-share${sliceShareMs}` : ''}${tooltipSort ? `-sort-${tooltipSort}` : ''}.json`,
+					`qlog-${mount}${scale > 1 ? `-x${scale}` : ''}${slow ? '-slow' : ''}${cat ? '-cat' : ''}${sliceShareMs ? `-share${sliceShareMs}` : ''}${tooltipSort ? `-sort-${tooltipSort}` : ''}.json`,
 					{
 						mountedAt,
 						entrances,
@@ -230,7 +256,15 @@
 							{#snippet canvas()}
 								<WebGPUCanvas>
 									{#snippet canvasComponents()}
-										{#if chart.kind === 'hist'}
+										{#if chart.kind === 'bars'}
+											<BarMarkY
+												table={chart.table ?? 'flights'}
+												x={chart.x}
+												y={count()}
+												selection="brush"
+												transforms={chart.top ? [topN(chart.top, { includeOthers: true })] : []}
+											/>
+										{:else if chart.kind === 'hist'}
 											<RectYMark
 												table={chart.table ?? 'flights'}
 												x={bin(chart.x, chart.steps ? { steps: chart.steps } : {})}

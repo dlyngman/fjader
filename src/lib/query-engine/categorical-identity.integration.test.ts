@@ -167,6 +167,30 @@ describe('CategoricalIdentity', () => {
 		expect(rows.map((r) => Number(r.id))).toEqual([...theirs].sort((a, b) => a - b));
 	});
 
+	it("takes the first table's present ids from the dim, without scanning it, same as the join", async () => {
+		await identity.ensureColumns('penguins', { categorical: ['species'] });
+
+		// No present-set scan for the table that built the dim.
+		const presentStmts = exec.statements.filter((s) => s.includes('_t_') && s.includes('CREATE'));
+		expect(presentStmts).toHaveLength(1);
+		expect(presentStmts[0]).not.toContain('SELECT DISTINCT');
+
+		// What the scan and join would have recorded, NULL row included.
+		const dim = identity.dimTable('species');
+		const joined = await db.all(
+			`SELECT DISTINCT d.id FROM (SELECT DISTINCT species AS v FROM penguins) s ` +
+				`JOIN "${dim}" d ON s.v IS NOT DISTINCT FROM d.value AND d.label IS NULL ORDER BY 1`
+		);
+		const expected = joined.map((r) => Number(r.id));
+		const mine = [...identity.presentIds('species', 'penguins')!].sort((a, b) => a - b);
+		expect(mine).toEqual(expected);
+		expect(mine).toContain(identity.identity('species').nullId);
+		const table = await db.all(
+			`SELECT id FROM "${identity.presentTable('species', 'penguins')}" ORDER BY id`
+		);
+		expect(table.map((r) => Number(r.id))).toEqual(expected);
+	});
+
 	it('never records a synthetic id as held by a table, and drops the records on reset', async () => {
 		await identity.ensureColumns('penguins', { categorical: ['species'] });
 		const other = await identity.acquireSynthetic('species', 'Other');
