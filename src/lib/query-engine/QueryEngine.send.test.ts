@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { QueryEngine } from './QueryEngine';
+import { QueryEngine, markReadOptions } from './QueryEngine';
 import type { DuckDBConnection, StatementRecord } from './QueryEngine';
 
 /**
@@ -567,5 +567,92 @@ describe('QueryEngine source lanes', () => {
 		log.length = 0;
 		await engine.query('SELECT a', { source: 't', data: true });
 		expect(log).toEqual(['main SELECT a']);
+	});
+});
+
+describe('QueryEngine slow marks', () => {
+	async function ipcBytes() {
+		const { tableToIPC, tableFromArrays } = await import('@uwdata/flechette');
+		return tableToIPC(tableFromArrays({ a: [1] }), { format: 'stream' })!;
+	}
+
+	/** A lane whose reads finish only when released, or reject when aborted. */
+	function heldLane() {
+		const log: string[] = [];
+		const releases: (() => void)[] = [];
+		const conn: DuckDBConnection = {
+			async query() {
+				return { numRows: 0, get: () => undefined } as never;
+			},
+			async queryIPC(sql: string) {
+				log.push(`main ${sql}`);
+				return ipcBytes();
+			},
+			async exec() {},
+			async close() {},
+			openSlicedLane: async () => ({
+				query: (sql: string, signal?: AbortSignal) =>
+					new Promise((resolve, reject) => {
+						log.push(`lane ${sql}`);
+						signal?.addEventListener('abort', () => {
+							log.push(`cancel ${sql}`);
+							reject(new DOMException('aborted', 'AbortError'));
+						});
+						releases.push(async () => resolve({ ipc: [await ipcBytes()], polls: 30, execMs: 200 }));
+					}),
+				exec: async () => ({ polls: 0 }),
+				close: async () => {}
+			})
+		};
+		return { conn, log, releases };
+	}
+
+	const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+	it('reads a slow mark sliced even on a fast source', async () => {
+		const { conn, log } = heldLane();
+		const engine = new QueryEngine(conn);
+		await engine.exec('CREATE TABLE fast_t AS SELECT 1 AS a');
+		void engine.query('SELECT a', { source: 'fast_t', data: true, slow: true }).catch(() => {});
+		await engine.query('SELECT b', { source: 'fast_t', data: true });
+		await wait(0);
+		// The mark's read sliced, the other read of the same fast table on main.
+		expect(log.sort()).toEqual(['lane SELECT a', 'main SELECT b']);
+	});
+
+	it("does not let a slow mark's slow read turn its fast source slow", async () => {
+		const { conn, log, releases } = heldLane();
+		const engine = new QueryEngine(conn);
+		await engine.exec('CREATE TABLE fast_t AS SELECT 1 AS a');
+		// The slow mark's read takes 30 polls on its lane.
+		const slow = engine.query('SELECT heavy', { source: 'fast_t', data: true, slow: true });
+		await wait(0);
+		releases[0]();
+		await slow;
+		// Another mark on the same table: still the main connection.
+		await engine.query('SELECT light', { source: 'fast_t', data: true });
+		expect(log).toEqual(['lane SELECT heavy', 'main SELECT light']);
+	});
+
+	it('reads a slow mark on the main connection while a preagg table answers it', async () => {
+		const descriptor = { baseTable: 'flights', slow: true };
+		// A preagg read: the preagg table, not forced slow.
+		expect(markReadOptions('m', descriptor, '__dplot_preagg_1')).toEqual({
+			callerId: 'm',
+			source: '__dplot_preagg_1',
+			data: true,
+			slow: false
+		});
+		// Its base query (and the fallback after a failed preagg read): slow.
+		expect(markReadOptions('m', descriptor, null)).toMatchObject({
+			source: 'flights',
+			slow: true
+		});
+
+		const { conn, log } = heldLane();
+		const engine = new QueryEngine(conn);
+		engine.sourceCost('__dplot_preagg_1', 'fast');
+		await engine.query('SELECT n', markReadOptions('m', descriptor, '__dplot_preagg_1'));
+		expect(log).toEqual(['main SELECT n']);
 	});
 });

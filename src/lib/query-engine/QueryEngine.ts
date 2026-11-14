@@ -86,6 +86,14 @@ export interface QueryOpts {
 	source?: string;
 	/** A mark's data read: its cost updates the source's record. */
 	data?: boolean;
+	/**
+	 * This read is known to be slow (a heavy query on whatever table, as a
+	 * mark with `holdsEntrance={false}` says). The engine reads it where a
+	 * slow read cannot hold up others (on DuckDB-WASM, sliced on its source's
+	 * lane) and does not learn the source's cost from it: the source's other
+	 * reads may be quick. A backend with one connection can ignore it.
+	 */
+	slow?: boolean;
 }
 
 /**
@@ -110,6 +118,10 @@ export interface StatementPlacement {
 	 * execute-latest read, the state it reflects. Recorded, for data age.
 	 */
 	requestedAt?: number;
+	/** The caller (a mark's id), for the log. */
+	callerId?: string;
+	/** See QueryOpts.slow. */
+	slow?: boolean;
 }
 
 /**
@@ -142,6 +154,8 @@ export interface StatementRecord {
 	 * `end`, how old the state a result reflects is when it lands.
 	 */
 	requested?: number;
+	/** Who asked (a mark's id), when it said. */
+	caller?: string;
 	/** performance.now() when handed to the connection, and when it settled. */
 	start: number;
 	end: number;
@@ -174,19 +188,27 @@ const MAIN_QUIET_MS = 2;
 
 /**
  * While the main connection works, all lanes together get one slice per this
- * many ms: ~20% of the worker at 5 ms slices. A slow source keeps a minimum
+ * many ms: half the worker at 5 ms slices. A slow source keeps a minimum
  * rate, and a fast query waits at most one slice for it. One budget for
  * every lane, the background lane too: a budget per lane would let five busy
- * lanes take the whole worker between them. Measured beside a slow chart
- * during a brush: at 33 ms (~15%) the fast charts' p90 stayed at 19 ms and
- * the slow chart's data aged ~80 ms more, so the fast charts' cost is not
- * the share (their p90 follows the slow chart's large results decoding).
+ * lanes take the whole worker between them.
+ *
+ * Measured beside a slow chart during a brush (/test/query-load?slow=1,
+ * scripted drag, two runs each): the fast charts' p90 stayed at ~20 ms and
+ * their updates the same at 25, 15 and 10 ms (their cost follows the slow
+ * chart's large results decoding, not the share), while the slow chart's
+ * data age fell from ~500 to ~375 to ~345 ms median.
  */
-const SLICE_SHARE_MS = 25;
+const SLICE_SHARE_MS = 10;
 
 export interface QueryEngineOptions {
 	/** Overrides BUILD_MAX_WAIT_MS; tests use it to make the queue deterministic. */
 	buildMaxWaitMs?: number;
+	/**
+	 * Advanced. While the main connection works, all sliced lanes together get
+	 * one slice per this many ms (see SLICE_SHARE_MS, the default).
+	 */
+	sliceShareMs?: number;
 }
 
 // outerAggBuilders + window CTE wrapping now live in query-builder.ts
@@ -302,6 +324,12 @@ export interface QueryDescriptor {
 	transformCompiler: TransformCompiler;
 	/** What routing needs to know about the mark. Absent in tests that route nothing. */
 	route?: MarkRoute;
+	/**
+	 * The mark is known to be slow (`holdsEntrance={false}`): its data reads
+	 * go sliced from the first, whatever its source's cost. The mark, not its
+	 * source: other marks on a fast table keep reading on the main connection.
+	 */
+	slow?: boolean;
 }
 
 interface MarkRegistration {
@@ -322,6 +350,28 @@ interface MarkRegistration {
 // ---------------------------------------------------------------------------
 // QueryEngine
 // ---------------------------------------------------------------------------
+
+/**
+ * How a mark's data read is placed. Routed by the table it reads
+ * (SourceRouting): the preagg table when one answers, else the mark's BASE
+ * table (its identity view reads the same rows, and its range and stats reads
+ * name the base table: one record per source). `slow` (holdsEntrance={false})
+ * applies to the base query only: a preagg read is ~1 ms, and forced onto a
+ * lane during a brush it would cost ~20 ms of round trips in exactly the case
+ * preagg exists to make fast.
+ */
+export function markReadOptions(
+	markId: string,
+	descriptor: Pick<QueryDescriptor, 'baseTable' | 'slow'>,
+	preaggTable: string | null
+): QueryOpts {
+	return {
+		callerId: markId,
+		source: preaggTable ?? descriptor.baseTable,
+		data: true,
+		slow: !preaggTable && descriptor.slow
+	};
+}
 
 /**
  * DuckDB's catalog error for a table or view this connection cannot see.
@@ -413,6 +463,7 @@ export class QueryEngine {
 			},
 			options.buildMaxWaitMs ?? BUILD_MAX_WAIT_MS
 		);
+		this.#sliceShareMs = options.sliceShareMs ?? SLICE_SHARE_MS;
 		if (connection instanceof Promise) {
 			this.#connPromise = connection;
 			connection.then((c) => {
@@ -633,6 +684,7 @@ export class QueryEngine {
 					connection: lane ? 'lane' : 'main',
 					source: place.source,
 					requested: place.requestedAt,
+					caller: place.callerId,
 					start,
 					end: performance.now(),
 					error
@@ -714,13 +766,15 @@ export class QueryEngine {
 		if (place.class === 'background') return this.#backgroundLane;
 		if (!place.source || !this.#conn?.openSlicedLane) return null;
 		if (this.#localSources.has(place.source)) return null;
-		const i = this.#routing.route(place.source);
+		const i = place.slow ? this.#routing.laneOf(place.source) : this.#routing.route(place.source);
 		return i == null ? null : this.#sourceLanes[i];
 	}
 
 	/** Whether a read's cost goes into its source's record: interaction data reads. */
 	#notesCost(place: StatementPlacement): boolean {
-		return place.class === 'interaction' && !!place.data && !!place.source;
+		// A read known to be slow says nothing about its source: a slow mark's
+		// heavy query would otherwise turn a fast table slow for every mark.
+		return place.class === 'interaction' && !!place.data && !!place.source && !place.slow;
 	}
 
 	/**
@@ -754,6 +808,7 @@ export class QueryEngine {
 	#mainInFlight = 0;
 	/** When the main connection last went idle. */
 	#mainIdleAt = 0;
+	#sliceShareMs: number;
 	/** When any lane last took a slice from the share. */
 	#lastSliceAt = -Infinity;
 	/** Lanes waiting for a slice, first come first served. */
@@ -798,7 +853,7 @@ export class QueryEngine {
 	/** The next waiting lane gets the share's next slice. */
 	#armShare(): void {
 		if (this.#shareTimer) return;
-		const left = this.#lastSliceAt + SLICE_SHARE_MS - performance.now();
+		const left = this.#lastSliceAt + this.#sliceShareMs - performance.now();
 		this.#shareTimer = setTimeout(
 			() => {
 				this.#shareTimer = null;
@@ -816,7 +871,7 @@ export class QueryEngine {
 	#sliceGrant: LaneHold = () => {
 		if (this.#mainQuietNow()) return null;
 		const now = performance.now();
-		if (this.#sliceWaiters.length === 0 && now - this.#lastSliceAt >= SLICE_SHARE_MS) {
+		if (this.#sliceWaiters.length === 0 && now - this.#lastSliceAt >= this.#sliceShareMs) {
 			this.#lastSliceAt = now;
 			return null;
 		}
@@ -885,7 +940,9 @@ export class QueryEngine {
 			connectionLocal: opts?.connectionLocal,
 			source: opts?.source,
 			data: opts?.data,
-			requestedAt: performance.now()
+			requestedAt: performance.now(),
+			callerId: opts?.callerId,
+			slow: opts?.slow
 		};
 
 		// Cache check: return cached result immediately, bypassing
@@ -1471,25 +1528,13 @@ export class QueryEngine {
 		// at most 1 inflight + 1 pending per callerId during rapid brushing.
 		// A preagg table is built in memory by fjader: fast until measured.
 		if (preagg) this.#routing.prior(preagg.table, 'fast');
-		// Routed by the table this read reads (SourceRouting): the preagg table
-		// when one answers, else the mark's BASE table. Its identity view reads
-		// the same rows, and the mark's range and stats reads name the base
-		// table: one record per source, kept by the data reads.
-		this.query(sqlStr, {
-			callerId: markId,
-			source: preagg?.table ?? reg.descriptor.baseTable,
-			data: true
-		})
+		this.query(sqlStr, markReadOptions(markId, reg.descriptor, preagg?.table ?? null))
 			.catch((e) => {
 				if (!preagg || (e as Error)?.name === 'AbortError') throw e;
 				this.#preagg.readFailed(markId, preagg.table, e);
 				const baseSQL = this.#baseSQL(markId, reg);
 				if (!baseSQL) throw e;
-				return this.query(baseSQL, {
-					callerId: markId,
-					source: reg.descriptor.baseTable,
-					data: true
-				});
+				return this.query(baseSQL, markReadOptions(markId, reg.descriptor, null));
 			})
 			.then((table) => handle._setResult(table, cause))
 			.catch((e) => {

@@ -2,11 +2,13 @@
 import { setScaleRegistry } from '$lib/scales';
 import { setGPUCoordinator } from '$lib/gpu';
 import { setQueryContext, initDuckDB } from '$lib/query-engine';
-import type { DuckDBConnection, InitDuckDBOptions } from '$lib/query-engine';
+import type { DuckDBConnection, InitDuckDBOptions, QueryEngineOptions } from '$lib/query-engine';
 
 export interface FjaderOptions extends InitDuckDBOptions {
 	/** An existing connection (or a promise of one); skips internal DuckDB-WASM init. */
 	connection?: DuckDBConnection | Promise<DuckDBConnection>;
+	/** Advanced: query engine tuning (see QueryEngineOptions). */
+	engine?: QueryEngineOptions;
 }
 
 type FjaderInit = DuckDBConnection | Promise<DuckDBConnection> | FjaderOptions;
@@ -33,8 +35,11 @@ function toOptions(init: FjaderInit | undefined): FjaderOptions {
  *   const { queryEngine } = initFjader(connectionFrom(await db.connect()));
  */
 export function initFjader(init?: FjaderInit) {
-	const { connection, bundles } = toOptions(init);
-	const { queryEngine, filterGroups } = setQueryContext(connection ?? initDuckDB({ bundles }));
+	const { connection, bundles, engine } = toOptions(init);
+	const { queryEngine, filterGroups } = setQueryContext(
+		connection ?? initDuckDB({ bundles }),
+		engine
+	);
 
 	const scaleRegistry = setScaleRegistry();
 	const gpuCoordinator = setGPUCoordinator({ msaaSampleCount: 4 });
