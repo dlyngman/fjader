@@ -41,9 +41,13 @@ function makeExec(db: DB) {
 	const statements: string[] = [];
 	/** Reads (queryRows), so which queries a step ran can be asserted. */
 	const reads: string[] = [];
+	/** Tables the engine would know as base tables (DDL or catalog); views are not. */
+	const baseTables = new Set(['penguins']);
 	return {
 		statements,
 		reads,
+		baseTables,
+		isBaseTable: (table: string) => baseTables.has(table),
 		async exec(sql: string | string[]) {
 			for (const stmt of Array.isArray(sql) ? sql : [sql]) {
 				statements.push(stmt);
@@ -400,10 +404,35 @@ describe('CategoricalIdentity', () => {
 
 	it('refuses a runaway plain column through its statistics', async () => {
 		await db.run(`CREATE TABLE wide2 AS SELECT i::VARCHAR AS k FROM range(20000) t(i)`);
+		exec.baseTables.add('wide2');
 		await expect(identity.ensureColumns('wide2', { categorical: ['k'] })).rejects.toThrow(
 			/distinct values/
 		);
-		expect(exec.reads.some((q) => q.includes('approx_count_distinct'))).toBe(false);
+		expect(exec.reads.some((q) => q.includes('stats('))).toBe(true);
+	});
+
+	it('does not refuse a filtered view whose base column is over the limit', async () => {
+		await db.run(
+			`CREATE TABLE big_k AS SELECT i::VARCHAR AS k, (i < 50)::INT AS keep FROM range(20000) t(i)`
+		);
+		exec.baseTables.add('big_k');
+		await db.run(`CREATE VIEW small_k AS SELECT * FROM big_k WHERE keep = 1`);
+		await identity.ensureColumns('small_k', { categorical: ['k'] });
+		expect(identity.identity('k').values.length).toBe(50);
+		// A view: no statistics read (they would be the base column's 20000).
+		expect(exec.reads.some((q) => q.includes('stats('))).toBe(false);
+	});
+
+	it("confirms a base table's over-limit statistics with the scan (deletes do not shrink them)", async () => {
+		await db.run(`CREATE TABLE shrunk AS SELECT i::VARCHAR AS k FROM range(20000) t(i)`);
+		await db.run(`DELETE FROM shrunk WHERE CAST(k AS INT) >= 100`);
+		exec.baseTables.add('shrunk');
+		await identity.ensureColumns('shrunk', { categorical: ['k'] });
+		expect(identity.identity('k').values.length).toBe(100);
+		// Statistics still say 20000 after the delete (checked on DuckDB): over the
+		// limit, so the scan confirmed the real count before any refusal.
+		expect(exec.reads.some((q) => q.includes('stats('))).toBe(true);
+		expect(exec.reads.some((q) => q.includes('approx_count_distinct'))).toBe(true);
 	});
 
 	it('still scans for an expression field, which has no column statistics', async () => {

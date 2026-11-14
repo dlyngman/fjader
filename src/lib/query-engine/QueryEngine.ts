@@ -438,7 +438,10 @@ export class QueryEngine {
 					rows.push(table.get(i) as Record<string, unknown>);
 				}
 				return rows;
-			}
+			},
+			// Seen created as a table through the engine, or listed in the catalog
+			// (which lists tables, not views).
+			isBaseTable: (table) => this.#known.get(table) === 'table' || !!this.#catalog?.has(table)
 		},
 		this.#session
 	);
