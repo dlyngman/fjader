@@ -636,27 +636,16 @@ export class CategoricalIdentity {
 				const batch = [...entry.pending];
 				entry.pending.clear();
 
-				// The fields together, not one after another: each has its own dim
-				// and chain, so none waits for another (the same field from two
-				// tables still serializes through its chain). One after another,
-				// a second field's first statement went out only once the first
-				// field was done, behind every other mark's reads sent meanwhile:
-				// 568 ms of queueing at 2M rows. Each field catches its own error,
-				// so a refused field never stops the view for the others; the
-				// order of `succeeded` is the batch's, so the view's SQL is stable.
-				const built = await Promise.all(
-					batch.map(async (field) => {
-						try {
-							await this.#ensureDim(field, table, generation);
-							entry.failures.delete(field);
-							return field;
-						} catch (error) {
-							entry.failures.set(field, error instanceof Error ? error : new Error(String(error)));
-							return null;
-						}
-					})
-				);
-				const succeeded = built.filter((field): field is string => field !== null);
+				const succeeded: string[] = [];
+				for (const field of batch) {
+					try {
+						await this.#ensureDim(field, table, generation);
+						succeeded.push(field);
+						entry.failures.delete(field);
+					} catch (error) {
+						entry.failures.set(field, error instanceof Error ? error : new Error(String(error)));
+					}
+				}
 
 				if (this.#generation !== generation) return;
 
