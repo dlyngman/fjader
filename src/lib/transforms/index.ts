@@ -1302,12 +1302,6 @@ function stackXJS(options: StackXOptions): JsTransform {
 /**
  * Core stacking computation on DataAccessor columns.
  *
- * Single O(n) pass: detects group boundaries in the sorted group column,
- * accumulates value offsets, writes lo/hi Float32Arrays, applies offset mode.
- */
-/**
- * Core stacking computation on DataAccessor columns.
- *
  * Uses Map-based accumulation so it works regardless of data sort order.
  * Connected topology marks (areas/lines) arrive sorted by series-first
  * (ORDER BY series, x), not x-first, so sequential group boundary

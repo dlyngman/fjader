@@ -376,22 +376,6 @@ export function buildQueryParts(
 // Assembly — the one sequence every query path follows
 // ---------------------------------------------------------------------------
 
-/**
- * Assemble a Query from cached parts + per-call filter.
- *
- * Order is fixed and shared by the flat, window-CTE, and preagg paths:
- *
- *   SELECT parts.selectDef FROM table [GROUP BY dims]
- *   WHERE filter AND nullDrops      — on the base scan, so transform CTEs
- *                                     (topN ranking etc.) see filtered rows
- *   → SQL transforms (CTE wrapping)
- *   → [window CTE: outer SELECT applies window fns over the inner result]
- *   → ORDER BY outerOrder(...)      — alignment, then orderChannels; outermost
- *   → LIMIT
- *
- * Callers decide what is CAST-wrapped by preparing parts.selectDef with
- * castNumeric(); assembly never inspects expression types.
- */
 /** Output aliases a query exposes to whatever wraps it. */
 function selectAliases(query: Query): string[] {
 	const sel = (query as unknown as { _select?: { alias?: string }[] })._select;
@@ -439,6 +423,22 @@ export function outerOrder(
 	return order;
 }
 
+/**
+ * Assemble a Query from cached parts + per-call filter.
+ *
+ * Order is fixed and shared by the flat, window-CTE, and preagg paths:
+ *
+ *   SELECT parts.selectDef FROM table [GROUP BY dims]
+ *   WHERE filter AND nullDrops      — on the base scan, so transform CTEs
+ *                                     (topN ranking etc.) see filtered rows
+ *   → SQL transforms (CTE wrapping)
+ *   → [window CTE: outer SELECT applies window fns over the inner result]
+ *   → ORDER BY outerOrder(...)      — alignment, then orderChannels; outermost
+ *   → LIMIT
+ *
+ * Callers decide what is CAST-wrapped by preparing parts.selectDef with
+ * castNumeric(); assembly never inspects expression types.
+ */
 export function assembleQuery(opts: AssembleOptions): Query {
 	const { table, parts, filter = [], transformCompiler, limit, window, skipRowFilters } = opts;
 	const { selectDef, nonAggregateGroupBy, hasAggregates, hasSQLTransforms, orderChannels } = parts;

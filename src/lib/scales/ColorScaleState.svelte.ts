@@ -582,21 +582,16 @@ export class ColorScaleState {
 		if (hadIdentity !== this.hasIdentity && this.domain.length > 0) this.#uploadToGPU();
 	}
 
-	/** True once this scale's channel carries dim ids rather than palette indices. */
 	/** The field's live id <-> value bijection, once adopted. */
 	get identity(): FieldIdentity | null {
 		return this.#identity ?? null;
 	}
 
+	/** True once this scale's channel carries dim ids rather than palette indices. */
 	get hasIdentity(): boolean {
 		return this.isOrdinal && (this.#identity?.present ?? false);
 	}
 
-	/**
-	 * Hand a rank to every domain category that does not have one, then rebuild
-	 * the dense table. Existing ranks are never touched, which is what makes a
-	 * colour survive its category disappearing.
-	 */
 	/** The value -> position map, rebuilt only when the domain array changes. */
 	#categoryPositions(): Map<string | number, number> {
 		if (this.#categoryMap && this.#categoryMapFor === this.domain) return this.#categoryMap;
@@ -609,6 +604,11 @@ export class ColorScaleState {
 		return map;
 	}
 
+	/**
+	 * Hand a rank to every domain category that does not have one, then rebuild
+	 * the dense table. Existing ranks are never touched, which is what makes a
+	 * colour survive its category disappearing.
+	 */
 	#refreshRanks(): void {
 		const identity = this.#identity;
 		if (!identity?.present) return;

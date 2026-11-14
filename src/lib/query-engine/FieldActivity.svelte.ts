@@ -6,7 +6,6 @@ import {
 } from '$lib/scales/ActivityTable';
 import type { FieldIdentity } from './categorical-identity';
 
-/** What a FieldActivity needs from the page around it. */
 /** One mark's Other rows for one bucket: what a click on it selects. */
 export interface OtherEntry {
 	/** The mark's filter group, or null when it is filtered by the selection (`'filter'`). */
@@ -21,6 +20,7 @@ export interface OtherClick {
 	values: unknown[];
 }
 
+/** What a FieldActivity needs from the page around it. */
 export interface FieldActivityHost {
 	/** Drives the fades; null in unit tests and before a coordinator exists, and fades land at once. */
 	readonly loop: ClockLoop | null;
@@ -78,8 +78,7 @@ class GroupFade {
  * existing ids keep their fades while new ones start in their state.
  * `reconcile` runs from the packer and from `set`, never from a reader, so
  * nothing is resized or retargeted while a template renders.
- */
-/**
+ *
  * THE FREE SLOT. Each group's table holds one slot past the field's ids: 1 while
  * the group selects nothing on the field, 0 while it selects anything, faded on
  * the same clock as every id. The shader reads it as the last slot of the

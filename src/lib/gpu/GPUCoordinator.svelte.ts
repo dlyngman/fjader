@@ -810,10 +810,6 @@ export class GPUCoordinator {
 	}
 
 	/**
-	 * Fill CPU buffer with current scale GPU state.
-	 * Zero-allocation hot path.
-	 */
-	/**
 	 * Buffers for the slot table and its per-frame resolve.
 	 *
 	 * `from` and `to` are compute-stage inputs; `resolved` is what the render

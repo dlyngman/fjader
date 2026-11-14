@@ -15,7 +15,7 @@
 import type { QueryEngine, StatementRecord } from '../QueryEngine';
 
 /** What a statement is for, from its text: a coarse grouping for reports. */
-export type StatementPurpose = 'describe' | 'ddl' | 'insert' | 'range' | 'data';
+export type StatementPurpose = 'describe' | 'ddl' | 'insert' | 'range' | 'data' | 'batch';
 
 export interface LoggedStatement extends StatementRecord {
 	purpose: StatementPurpose;
@@ -43,6 +43,7 @@ export interface ReportRow {
 function purposeOf(record: StatementRecord): StatementPurpose {
 	if (record.kind === 'describe') return 'describe';
 	if (record.kind === 'insert') return 'insert';
+	if (record.kind === 'batch') return 'batch';
 	const s = record.sql.trimStart().toUpperCase();
 	if (/^(CREATE|DROP|INSERT|ALTER|DELETE|UPDATE)/.test(s)) return 'ddl';
 	// A scalar summary: min/max aggregates, no GROUP BY, no window.

@@ -662,10 +662,6 @@ export class TooltipManager {
 	// LABEL RESOLUTION
 	// =========================================================================
 
-	/**
-	 * Resolve band indices, time offsets, and color indices back to human-readable labels.
-	 * Renames columns from aliases (x, y, color) to original field names.
-	 */
 	/** Resolve a single value: band index → label, time offset → formatted date. */
 	#resolveValue(
 		axis: 'x' | 'y',
@@ -708,6 +704,10 @@ export class TooltipManager {
 		return String(value ?? '');
 	}
 
+	/**
+	 * Resolve band indices, time offsets, and color indices back to human-readable labels.
+	 * Renames columns from aliases (x, y, color) to original field names.
+	 */
 	#resolveLabels(row: DataRow, config: TooltipMarkRegistration): DataRow {
 		const { scaleTypes, channelFields, bandDomains, colorDomain, columns } = config;
 		const point: DataRow = {};

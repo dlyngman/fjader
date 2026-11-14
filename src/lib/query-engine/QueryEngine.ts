@@ -143,7 +143,9 @@ export type StatementClass = 'interaction' | 'background';
 export interface StatementRecord {
 	sql: string;
 	/** How it was sent: a query returning rows, a statement, a DESCRIBE, an Arrow insert. */
-	kind: 'query' | 'exec' | 'describe' | 'insert';
+	kind: 'query' | 'exec' | 'describe' | 'insert' | 'batch';
+	/** For a batch (execBatch): how many statements it ran as one message. */
+	count?: number;
 	class: StatementClass;
 	/** Which connection ran it: the main one, or a sliced lane. */
 	connection: 'main' | 'lane';
@@ -204,6 +206,12 @@ const SLICE_SHARE_MS = 10;
 export interface QueryEngineOptions {
 	/** Overrides BUILD_MAX_WAIT_MS; tests use it to make the queue deterministic. */
 	buildMaxWaitMs?: number;
+	/**
+	 * Debug. Send an execBatch's statements one by one, for per-statement
+	 * timing. It changes what it measures: each statement then re-enters the
+	 * queue behind whatever was sent meanwhile, which a batch avoids.
+	 */
+	unbatch?: boolean;
 	/**
 	 * Advanced. While the main connection works, all sliced lanes together get
 	 * one slice per this many ms (see SLICE_SHARE_MS, the default).
@@ -441,7 +449,15 @@ export class QueryEngine {
 			},
 			// Seen created as a table through the engine, or listed in the catalog
 			// (which lists tables, not views).
-			isBaseTable: (table) => this.#known.get(table) === 'table' || !!this.#catalog?.has(table)
+			isBaseTable: (table) => this.#known.get(table) === 'table' || !!this.#catalog?.has(table),
+			execBatch: async (statements) => {
+				const table = await this.execBatch(statements);
+				const rows: Array<Record<string, unknown>> = [];
+				for (let i = 0; i < table.numRows; i++) {
+					rows.push(table.get(i) as Record<string, unknown>);
+				}
+				return rows;
+			}
 		},
 		this.#session
 	);
@@ -467,6 +483,7 @@ export class QueryEngine {
 			options.buildMaxWaitMs ?? BUILD_MAX_WAIT_MS
 		);
 		this.#sliceShareMs = options.sliceShareMs ?? SLICE_SHARE_MS;
+		this.#unbatch = options.unbatch ?? false;
 		if (connection instanceof Promise) {
 			this.#connPromise = connection;
 			connection.then((c) => {
@@ -653,6 +670,8 @@ export class QueryEngine {
 			/** How to run it on a sliced lane; absent: main connection only. */
 			runSliced?: (lane: SlicedLane) => Promise<T>;
 			signal?: AbortSignal;
+			/** Statements in a batch, for its record. */
+			count?: number;
 		}
 	): Promise<T> {
 		const { run, runSliced, signal } = how;
@@ -685,6 +704,7 @@ export class QueryEngine {
 					kind,
 					class: cls,
 					connection: lane ? 'lane' : 'main',
+					count: how.count,
 					source: place.source,
 					requested: place.requestedAt,
 					caller: place.callerId,
@@ -812,6 +832,7 @@ export class QueryEngine {
 	/** When the main connection last went idle. */
 	#mainIdleAt = 0;
 	#sliceShareMs: number;
+	#unbatch: boolean;
 	/** When any lane last took a slice from the share. */
 	#lastSliceAt = -Infinity;
 	/** Lanes waiting for a slice, first come first served. */
@@ -1095,6 +1116,44 @@ export class QueryEngine {
 			// The last mark query settling frees the connection for a build.
 			this.#preagg.pump();
 		}
+	}
+
+	/**
+	 * Run several statements as ONE message on the main connection, returning
+	 * the last statement's rows. Each statement commits on its own and
+	 * execution stops at the first failure, as when sent one by one (measured
+	 * on DuckDB-WASM, /test/query-slicing §13); the error does not say which
+	 * statement failed.
+	 *
+	 * For statements on tables the main connection owns (fjader's identity
+	 * dims, present tables, views): one connection per table. Deliberately no
+	 * class, source or routing options: it always runs on the main connection
+	 * as interaction (so lanes hold their slices while it runs). What it saves
+	 * is queue entries: a dependent chain sent one by one goes to the back of
+	 * the queue at every step.
+	 *
+	 * Logged as one record, kind 'batch', with the joined text and `count`.
+	 * Without `queryIPC` (mocks, custom connections), or with
+	 * `QueryEngineOptions.unbatch`, the statements go one by one.
+	 */
+	async execBatch(statements: string[]): Promise<Table> {
+		if (this.#destroyed) throw new Error('QueryEngine has been destroyed');
+		if (statements.length === 0) throw new Error('execBatch: no statements');
+		if (!this.#conn) await this.#ensureConnection();
+		const place: StatementPlacement = { class: 'interaction' };
+		let result: Table;
+		if (this.#unbatch || !this.#conn?.queryIPC) {
+			for (const stmt of statements.slice(0, -1)) await this.exec(stmt);
+			result = await this.#queryRaw(statements[statements.length - 1], place);
+		} else {
+			const sql = statements.join(';\n');
+			result = await this.#send('batch', sql, place, {
+				run: async (conn) => tableFromIPC(await conn.queryIPC!(sql)),
+				count: statements.length
+			});
+		}
+		for (const stmt of statements) this.#noteDDL(stmt);
+		return result;
 	}
 
 	/**

@@ -9,7 +9,7 @@
  * nothing about them.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import duckdb from 'duckdb';
 import { CategoricalIdentity } from './categorical-identity';
 
@@ -380,6 +380,69 @@ describe('CategoricalIdentity', () => {
 	});
 
 	// -----------------------------------------------------------------------
+	// One batch per field (IdentityExec.execBatch)
+	// -----------------------------------------------------------------------
+
+	/** A host that batches: runs the statements in order, returns the last one's rows. */
+	function withBatches(gate?: Promise<void>) {
+		const batches: string[][] = [];
+		const host = {
+			...exec,
+			async execBatch(statements: string[]) {
+				batches.push(statements);
+				if (gate) await gate;
+				for (const stmt of statements.slice(0, -1)) await db.run(stmt);
+				return db.all(statements[statements.length - 1]);
+			}
+		};
+		return { host, batches };
+	}
+
+	it('builds each field in one batch, with the same ids and present sets', async () => {
+		const { host, batches } = withBatches();
+		const batched = new CategoricalIdentity(host, SESSION);
+		await batched.ensureColumns('penguins', { categorical: ['species'] });
+		expect(batches).toHaveLength(1);
+		expect(batches[0]).toHaveLength(4);
+
+		await db.run(`CREATE TABLE more_penguins (species VARCHAR)`);
+		await db.run(`INSERT INTO more_penguins VALUES ('Emperor'), ('Adelie'), (NULL)`);
+		await batched.ensureColumns('more_penguins', { categorical: ['species'] });
+		expect(batches).toHaveLength(2);
+
+		// The appending table's present ids, from the batch's combined last row,
+		// equal what the present table holds (the scan and join).
+		const ids = batched.identity('species').ids;
+		const theirs = batched.presentIds('species', 'more_penguins')!;
+		expect(theirs.has(ids.get('Emperor')!)).toBe(true);
+		expect(theirs.has(ids.get('Gentoo')!)).toBe(false);
+		expect(theirs.has(batched.identity('species').nullId!)).toBe(true);
+		const table = await db.all(
+			`SELECT id FROM "${batched.presentTable('species', 'more_penguins')}" ORDER BY id`
+		);
+		expect(table.map((r) => Number(r.id))).toEqual([...theirs].sort((a, b) => a - b));
+		expect(batched.identity('species').values).toContain('Emperor');
+	});
+
+	it('drops a batch that finishes after a reset: the identity stays empty', async () => {
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		const { host, batches } = withBatches(gate);
+		const batched = new CategoricalIdentity(host, SESSION);
+		const pending = batched.ensureColumns('penguins', { categorical: ['species'] });
+		await vi.waitFor(() => expect(batches).toHaveLength(1));
+		// The reset completes first, then the batch runs and SUCCEEDS: as on the
+		// engine, where the reset's DROPs queue behind the batch's message. Its
+		// rows are of dims the reset dropped.
+		await batched.reset();
+		release();
+		await Promise.allSettled([pending]);
+		expect(batched.identity('species').values).toHaveLength(0);
+		expect(batched.presentIds('species', 'penguins')).toBeNull();
+		expect(batched.dimCovers('species', 'penguins')).toBe(false);
+	});
+
+	// -----------------------------------------------------------------------
 	// Cardinality gate
 	// -----------------------------------------------------------------------
 
@@ -440,6 +503,19 @@ describe('CategoricalIdentity', () => {
 		await identity.ensureColumns('penguins', { categorical: [{ key: expr, sql: expr }] });
 		expect(exec.reads.some((q) => q.includes('approx_count_distinct'))).toBe(true);
 		expect(exec.reads.some((q) => q.includes('stats('))).toBe(false);
+	});
+
+	it('builds the other fields of a drain when one is refused, and reports the refusal', async () => {
+		await db.run(
+			`CREATE TABLE mixed AS SELECT i::VARCHAR AS k, ['a', 'b', 'c'][(i % 3) + 1] AS small FROM range(20000) t(i)`
+		);
+		exec.baseTables.add('mixed');
+		await expect(identity.ensureColumns('mixed', { categorical: ['k', 'small'] })).rejects.toThrow(
+			/distinct values/
+		);
+		expect(identity.viewHas('mixed', 'small')).toBe(true);
+		expect(identity.viewHas('mixed', 'k')).toBe(false);
+		expect(identity.identity('small').values).toEqual(['a', 'b', 'c']);
 	});
 
 	it('allows an ordinary categorical without complaint', async () => {

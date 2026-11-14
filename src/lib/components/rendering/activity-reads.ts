@@ -199,12 +199,6 @@ export function connectedActivityWGSL(
 }
 
 /**
- * The WGSL `markActivity(...)` call for `reads`: each activity the renderer
- * reads, and 1.0 for each it does not. `color` is markColorActivity's first
- * three arguments; `x` and `y` are the band channel values; `group` the mark's
- * group index.
- */
-/**
  * The activity of an Other row: the same terms as markActivityWGSL without the
  * band axes', and without colour's when colour is the band's own field
  * (`skipColor`, a WGSL bool). Those read the Other bucket's own fade, and the
@@ -221,6 +215,12 @@ export function otherRowActivityWGSL(
 	return `markActivity(${color}, 1.0, 1.0)`;
 }
 
+/**
+ * The WGSL `markActivity(...)` call for `reads`: each activity the renderer
+ * reads, and 1.0 for each it does not. `color` is markColorActivity's first
+ * three arguments; `x` and `y` are the band channel values; `group` the mark's
+ * group index.
+ */
 export function markActivityWGSL(
 	reads: ActivityReads,
 	args: { color: string; x: string; y: string; group: string }

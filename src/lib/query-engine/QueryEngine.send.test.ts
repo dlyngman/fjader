@@ -656,3 +656,53 @@ describe('QueryEngine slow marks', () => {
 		expect(log).toEqual(['main SELECT n']);
 	});
 });
+
+describe('QueryEngine execBatch', () => {
+	async function ipcRows(n: number) {
+		const { tableToIPC, tableFromArrays } = await import('@uwdata/flechette');
+		return tableToIPC(tableFromArrays({ n: [n] }), { format: 'stream' })!;
+	}
+
+	function ipcConnection() {
+		const sent: string[] = [];
+		const conn: DuckDBConnection = {
+			async query() {
+				return { numRows: 0, get: () => undefined } as never;
+			},
+			async queryIPC(sql: string) {
+				sent.push(sql);
+				return ipcRows(7);
+			},
+			async exec(sql: string) {
+				sent.push(sql);
+			},
+			async close() {}
+		};
+		return { conn, sent };
+	}
+
+	it('sends the statements as one message, logged as one batch record', async () => {
+		const { conn, sent } = ipcConnection();
+		const engine = new QueryEngine(conn);
+		const { records } = observe(engine);
+		const t = await engine.execBatch(['CREATE TABLE d AS SELECT 1', 'SELECT 7 AS n']);
+		expect(sent).toEqual(['CREATE TABLE d AS SELECT 1;\nSELECT 7 AS n']);
+		expect((t.get(0) as { n: number }).n).toBe(7);
+		expect(records).toHaveLength(1);
+		expect(records[0]).toMatchObject({
+			kind: 'batch',
+			count: 2,
+			class: 'interaction',
+			connection: 'main'
+		});
+	});
+
+	it('sends them one by one under unbatch (for per-statement timing)', async () => {
+		const { conn, sent } = ipcConnection();
+		const engine = new QueryEngine(conn, { unbatch: true });
+		const { records } = observe(engine);
+		await engine.execBatch(['CREATE TABLE d AS SELECT 1', 'SELECT 7 AS n']);
+		expect(sent).toEqual(['CREATE TABLE d AS SELECT 1', 'SELECT 7 AS n']);
+		expect(records.map((r) => r.kind)).toEqual(['exec', 'query']);
+	});
+});
