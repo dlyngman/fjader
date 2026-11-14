@@ -492,11 +492,14 @@
 				"CREATE TABLE m13_src AS SELECT ['a', 'b', 'c', NULL][(i % 4) + 1] AS cat FROM range(1000) t(i)"
 			);
 
-			// a. A first-table field batch: returns the LAST statement's rows?
+			// a. A first-table field batch: returns the LAST statement's rows? The
+			//    dim's columns as in categorical-identity.ts: `label` is NULL on
+			//    every real row (it is set only on synthetic rows, like Other), so
+			//    a first table's present ids are the rows WHERE label IS NULL.
 			const batch = [
-				'CREATE TABLE IF NOT EXISTS m13_dim AS SELECT row_number() OVER (ORDER BY v) - 1 AS id, v AS value, CASE WHEN v IS NULL THEN NULL ELSE v END AS label FROM (SELECT DISTINCT cat AS v FROM m13_src)',
+				'CREATE TABLE IF NOT EXISTS m13_dim AS SELECT row_number() OVER (ORDER BY v) - 1 AS id, v AS value, NULL::VARCHAR AS label FROM (SELECT DISTINCT cat AS v FROM m13_src)',
 				'CREATE UNIQUE INDEX IF NOT EXISTS m13_dim_uq ON m13_dim(value)',
-				'CREATE TABLE m13_present AS SELECT id FROM m13_dim WHERE label IS NOT NULL OR value IS NULL',
+				'CREATE TABLE m13_present AS SELECT id FROM m13_dim WHERE label IS NULL',
 				'SELECT id, value, label FROM m13_dim ORDER BY id'
 			].join(';\n');
 			let a13: string;
@@ -533,7 +536,10 @@
 			add('13c the error', err.slice(0, 300));
 
 			// d. Cost: ten small statements, one message against ten awaited
-			//    messages, idle and with the main thread busy (as in 7b).
+			//    messages, idle and with the main thread busy (as in 7b). The busy
+			//    case does NOT reproduce load: the round trips fit between the busy
+			//    chunks here. At load the waits come from the queue (other marks'
+			//    statements), measured in the dims-chain plan from the load logs.
 			const stmt = (i: number) => `CREATE OR REPLACE TABLE m13_t${i} AS SELECT ${i} AS x`;
 			const ten = Array.from({ length: 10 }, (_, i) => i);
 			const med = (xs: number[]) => [...xs].sort((p, q) => p - q)[Math.floor(xs.length / 2)];
