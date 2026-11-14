@@ -1291,6 +1291,16 @@ describe('observeBuilds', () => {
 		const dropped = events.filter((e) => e.kind === 'dropped');
 		expect(dropped.length).toBeGreaterThan(0);
 		expect(dropped.every((e) => e.reason === 'newer batch')).toBe(true);
+		// The queued record names the batch the build was pushed into: a drop's
+		// batch is the one its queued record said, older than the newer hover's.
+		const queued = events.filter((e) => e.kind === 'queued');
+		for (const drop of dropped) {
+			const own = queued.find((q) => q.table === drop.table && q.markId === drop.markId)!;
+			expect(own.batch).toBe(drop.batch);
+		}
+		const newer = queued.filter((q) => q.sourceId === 'toggle-kind');
+		expect(newer.length).toBeGreaterThan(0);
+		for (const q of newer) expect(q.batch).toBeGreaterThan(dropped[0].batch!);
 	});
 
 	it('records the bins and the view when the view moved while the build waited', async () => {
