@@ -12,6 +12,12 @@ import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 // =============================================================================
 // SPRING STIFFNESS PRESETS FOR SCALE INTERACTIONS
 // =============================================================================
+/**
+ * When a unit-change tween is at rest: its coordinates are in units of the
+ * plot's height, so 1e-4 is about a twentieth of a pixel on a 500 px plot.
+ */
+const TWEEN_PRECISION = 1e-4;
+
 const SCALE_SPRING_PRESETS = {
 	default: SPRING_PRESETS.default.stiffness, // 400 - general animations
 	pan: SPRING_PRESETS.pan.stiffness, // 600 - responsive dragging
@@ -99,6 +105,8 @@ export class LinearScaleState {
 	// --- Spring Physics ---
 	#springPair: SpringPair;
 	#springOutput: Float64Array = new Float64Array(2);
+	/** For reads of the current or target endpoints (#currentSpring, #targetSpring). */
+	#springOutputScratch: Float64Array = new Float64Array(2);
 
 	//
 	#domainCurrentBuffer: Float64Array = new Float64Array(2);
@@ -126,17 +134,31 @@ export class LinearScaleState {
 	};
 
 	/**
-	 * Counts the instant domain changes made inside `folding()`. A morphing
-	 * mark that sees it change folds its on-screen values into the new domain,
-	 * so they hold their pixels and then glide (MorphedChannels). It says that
-	 * the domain snapped, not by how much: the mark maps between the params it
-	 * drew with and the ones it will draw with. Only this counter tells such a
-	 * snap from a spring, which changes the params every frame too. Plain, not
-	 * reactive: read per encode.
+	 * The per-mark fold's trigger (MorphedChannels): a count of folding snaps.
+	 * No longer bumped: a change of unit tweens the render domain instead
+	 * (#tweenTo), which every consumer of the scale follows by itself. Stays 0
+	 * until the fold machinery is replaced by pixel-space resolves.
 	 */
 	snapCount = 0;
-	/** Nesting of `folding()` calls; an instant change while above 0 bumps `snapCount`. */
+	/** Nesting of `folding()` calls; an instant change while above 0 tweens (`#tweenTo`). */
 	#foldDepth = 0;
+
+	// --- Unit-change tween ---
+	/**
+	 * A unit change's tween, while one runs: the render domain moves so every
+	 * fixed value travels linearly in pixels (#tweenTo). A spring pair on the
+	 * domain's slope and offset in place of its endpoints, normalized to the
+	 * target: `a = S · W` (→ 1) and `b = (A − c) · S` (→ 0), with S = 1 / width,
+	 * A the domain's min, `c` and `W` the target's min and width, all in
+	 * spring space. A value's position is `(g(v) − c) · S − b`, linear in both,
+	 * and two identical springs share their time profile: so it moves in a
+	 * straight line. Both are in units of the plot's height, so one precision
+	 * fits any domain (time offsets around 3e7 included).
+	 */
+	#tween: SpringPair | null = null;
+	#tweenPivot = 0;
+	#tweenWidth = 1;
+	#tweenOut = new Float64Array(2);
 
 	// --- Constraints ---
 	domainLimits = { min: -Infinity, max: Infinity, minWidth: 1e-10 };
@@ -279,9 +301,10 @@ export class LinearScaleState {
 			/** Target domain (what we're animating toward) */
 			get target(): [number, number] {
 				self._targetVersion; // Register Svelte dependency (only changes on user input)
+				self.#targetSpring(self.#springOutputScratch);
 				return [
-					self.fromSpringSpace(self.#springPair.targetA),
-					self.fromSpringSpace(self.#springPair.targetB)
+					self.fromSpringSpace(self.#springOutputScratch[0]),
+					self.fromSpringSpace(self.#springOutputScratch[1])
 				];
 			},
 
@@ -291,8 +314,9 @@ export class LinearScaleState {
 			 */
 			get targetBuffer() {
 				self._targetVersion; // Register Svelte dependency (only changes on user input)
-				self.#domainTargetBuffer[0] = self.fromSpringSpace(self.#springPair.targetA);
-				self.#domainTargetBuffer[1] = self.fromSpringSpace(self.#springPair.targetB);
+				self.#targetSpring(self.#springOutputScratch);
+				self.#domainTargetBuffer[0] = self.fromSpringSpace(self.#springOutputScratch[0]);
+				self.#domainTargetBuffer[1] = self.fromSpringSpace(self.#springOutputScratch[1]);
 				return self.#domainTargetBuffer;
 			},
 
@@ -406,6 +430,12 @@ export class LinearScaleState {
 	 * Called by AnimationLoop at fixed rate (360Hz).
 	 */
 	step(): void {
+		const tween = this.#tween;
+		if (tween) {
+			tween.step();
+			if (tween.isAtRest(TWEEN_PRECISION)) this.#endTween();
+			return;
+		}
 		this.#springPair.step();
 	}
 
@@ -414,7 +444,12 @@ export class LinearScaleState {
 	 * Called once per frame by AnimationLoop.
 	 */
 	updateRenderState(extrapolationDt: number): void {
-		this.#springPair.getRenderableInto(extrapolationDt, this.#springOutput);
+		if (this.#tween) {
+			this.#tween.getRenderableInto(extrapolationDt, this.#tweenOut);
+			this.#fromTween(this.#tweenOut[0], this.#tweenOut[1], this.#springOutput);
+		} else {
+			this.#springPair.getRenderableInto(extrapolationDt, this.#springOutput);
+		}
 		this.#renderMin = this.fromSpringSpace(this.#springOutput[0]);
 		this.#renderMax = this.fromSpringSpace(this.#springOutput[1]);
 		this.#updateGpuState();
@@ -428,7 +463,7 @@ export class LinearScaleState {
 	 * Used by AnimationLoop to determine when to stop.
 	 */
 	isAtRest(): boolean {
-		return this.#springPair.isAtRest();
+		return !this.#tween && this.#springPair.isAtRest();
 	}
 
 	/**
@@ -453,8 +488,9 @@ export class LinearScaleState {
 		if (this.disableZoom) return; // Ignore pan for auto-scaling axes
 		this.#userDriven = true;
 
-		const panMin = this.fromSpringSpace(this.#springPair.currentA);
-		const panMax = this.fromSpringSpace(this.#springPair.currentB);
+		this.#currentSpring(this.#springOutputScratch);
+		const panMin = this.fromSpringSpace(this.#springOutputScratch[0]);
+		const panMax = this.fromSpringSpace(this.#springOutputScratch[1]);
 		this.#panContext = {
 			initialMin: panMin,
 			initialMax: panMax,
@@ -546,9 +582,11 @@ export class LinearScaleState {
 		}
 
 		if (transitionsObserved()) {
+			// A unit change inside `folding()` tweens (#setInstant): it travels.
+			const tweens = instant && this.#foldDepth > 0 && this.entered;
 			noteTransition(
 				'domain',
-				instant || !this.entered,
+				(instant && !tweens) || !this.entered,
 				() => this._affectedChartsArray,
 				this.name
 			);
@@ -808,33 +846,142 @@ export class LinearScaleState {
 	// ===========================================================================
 
 	#setTarget(min: number, max: number): void {
+		// A retarget during a unit-change tween (a fit, a zoom) continues it in
+		// slope and offset from where it is; the endpoint spring takes over at rest.
+		if (this.#tween) {
+			this.#tweenTo(min, max);
+			return;
+		}
 		this.#springPair.setTarget(this.toSpringSpace(min), this.toSpringSpace(max));
 		this._targetVersion++; // Trigger reactivity for target watchers
 		this.#ensureAnimating();
 	}
 
 	#setInstant(min: number, max: number): void {
+		// A change of unit (a rebin, inside `folding()`): tween, so every value
+		// on this scale moves linearly in pixels from where it is drawn.
+		if (this.#foldDepth > 0 && this.entered) {
+			this.#tweenTo(min, max);
+			return;
+		}
+		this.#tween = null;
 		this.#springPair.set(this.toSpringSpace(min), this.toSpringSpace(max));
 		this.#renderMin = min;
 		this.#renderMax = max;
 		this.#updateGpuState();
 		this._version++;
 		this._targetVersion++; // Trigger reactivity for target watchers
-		if (this.#foldDepth > 0) {
-			this.snapCount++;
-			// Every chart drawing this scale draws, and folds, in the same frame:
-			// a chart left out would draw its old values under the new domain.
-			const charts = this._affectedChartsArray;
-			for (let i = 0; i < charts.length; i++) this.#gpuCoordinator?.invalidateChart(charts[i]);
-		}
 	}
 
 	/**
-	 * Run `update`, and let an instant domain change it makes fold: bump
-	 * `snapCount`, so morphing marks hold their pixels through it and glide.
-	 * For a snap whose new domain is a change of unit (a rebin), not one that
-	 * nobody watched (an entrance, a catch-up). An update that changes nothing,
-	 * or springs, leaves the count alone.
+	 * Tween the render domain to [min, max] so every fixed value moves
+	 * linearly in pixels (see `#tween`), from where it is drawn now: from the
+	 * endpoint spring, carrying its velocity, or from a tween already running,
+	 * retargeted. The velocities convert by the same linear maps as the
+	 * values, so back-to-back changes stay continuous.
+	 */
+	#tweenTo(min: number, max: number): void {
+		const c = this.toSpringSpace(min);
+		const W = this.toSpringSpace(max) - c;
+		if (!(W > 0) || !isFinite(W)) {
+			this.#tween = null;
+			this.#setInstantSpring(min, max);
+			return;
+		}
+		let a: number;
+		let b: number;
+		let va: number;
+		let vb: number;
+		const tween = this.#tween;
+		if (tween) {
+			// From the running tween's coordinates (pivot c0, width W0) to the
+			// new target's: a' = a·W/W0, b' = b + (c0 − c)·a/W0.
+			const c0 = this.#tweenPivot;
+			const W0 = this.#tweenWidth;
+			a = (tween.currentA * W) / W0;
+			b = tween.currentB + ((c0 - c) * tween.currentA) / W0;
+			va = (tween.a.velocity * W) / W0;
+			vb = tween.b.velocity + ((c0 - c) * tween.a.velocity) / W0;
+		} else {
+			// From the endpoint spring: A, B and their velocities, spring space.
+			const pair = this.#springPair;
+			const A = pair.currentA;
+			const w = pair.currentB - A;
+			if (!(w > 0)) {
+				this.#setInstantSpring(min, max);
+				return;
+			}
+			const vA = pair.a.velocity;
+			const vW = pair.b.velocity - vA;
+			a = W / w;
+			b = (A - c) / w;
+			va = (-W * vW) / (w * w);
+			vb = (vA * w - (A - c) * vW) / (w * w);
+		}
+		const next = tween ?? new SpringPair(a, b, SCALE_SPRING_PRESETS.reset, TWEEN_PRECISION);
+		next.set(a, b);
+		next.a.velocity = va;
+		next.b.velocity = vb;
+		next.setTarget(1, 0);
+		this.#tween = next;
+		this.#tweenPivot = c;
+		this.#tweenWidth = W;
+		this._targetVersion++; // Trigger reactivity for target watchers
+		this.#ensureAnimating();
+	}
+
+	/** Spring-space endpoints [A, B] of tween coordinates (a, b). */
+	#fromTween(a: number, b: number, out: Float64Array): void {
+		const width = this.#tweenWidth / a;
+		const A = this.#tweenPivot + b * width;
+		out[0] = A;
+		out[1] = A + width;
+	}
+
+	/** The tween is done: the endpoint spring takes over, at rest on its target. */
+	#endTween(): void {
+		const c = this.#tweenPivot;
+		this.#tween = null;
+		this.#springPair.set(c, c + this.#tweenWidth);
+	}
+
+	/** The spring-space endpoints drawn now, whichever spring runs. */
+	#currentSpring(out: Float64Array): void {
+		if (this.#tween) this.#fromTween(this.#tween.currentA, this.#tween.currentB, out);
+		else {
+			out[0] = this.#springPair.currentA;
+			out[1] = this.#springPair.currentB;
+		}
+	}
+
+	/** The spring-space endpoints being moved toward, whichever spring runs. */
+	#targetSpring(out: Float64Array): void {
+		if (this.#tween) {
+			out[0] = this.#tweenPivot;
+			out[1] = this.#tweenPivot + this.#tweenWidth;
+		} else {
+			out[0] = this.#springPair.targetA;
+			out[1] = this.#springPair.targetB;
+		}
+	}
+
+	/** An instant set that never tweens (a degenerate tween target). */
+	#setInstantSpring(min: number, max: number): void {
+		this.#springPair.set(this.toSpringSpace(min), this.toSpringSpace(max));
+		this.#renderMin = min;
+		this.#renderMax = max;
+		this.#updateGpuState();
+		this._version++;
+		this._targetVersion++;
+	}
+
+	/**
+	 * Run `update` as a change of unit (a rebin): an instant domain change it
+	 * makes tweens instead (#tweenTo), so every value on the scale moves
+	 * linearly in pixels from where it is drawn, and every consumer (GPU marks,
+	 * SVG, axes, a chart sharing the scale) follows by reading the render
+	 * domain. Not for a change nobody watched (an entrance, a catch-up). An
+	 * update that changes nothing, or springs, is unaffected.
 	 */
 	folding(update: () => void): void {
 		this.#foldDepth++;
@@ -861,8 +1008,9 @@ export class LinearScaleState {
 	}
 
 	#applyZoomToTarget(tCenter: number, scaleFactor: number): void {
-		const min = this.fromSpringSpace(this.#springPair.targetA);
-		const max = this.fromSpringSpace(this.#springPair.targetB);
+		this.#targetSpring(this.#springOutputScratch);
+		const min = this.fromSpringSpace(this.#springOutputScratch[0]);
+		const max = this.fromSpringSpace(this.#springOutputScratch[1]);
 
 		// tCenter is already a visual [0,1] fraction from screen position —
 		// no normalizeValue needed, so the cursor stays perfectly anchored
