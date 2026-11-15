@@ -1677,7 +1677,9 @@ export class QueryEngine {
 				if (!baseSQL) throw e;
 				return this.query(baseSQL, markReadOptions(markId, reg.descriptor, null));
 			})
-			.then((table) => handle._setResult(table, cause))
+			// The parts this chain queried, as `cause`: a re-registration lets a
+			// query in flight land after the registration has new parts.
+			.then((table) => handle._setResult(table, cause, reg.descriptor.parts))
 			.catch((e) => {
 				if ((e as Error)?.name === 'AbortError') return;
 				handle._setError(e as Error);

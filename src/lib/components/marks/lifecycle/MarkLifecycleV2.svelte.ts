@@ -116,13 +116,6 @@ import { fetchCategoricalDomains, fetchGlobalAggregates } from './domain-queries
 import { transformScaleKey } from './transform-scale-key';
 import { OtherRows, type SplitPlan } from './other-rows.svelte';
 
-/**
- * Without the dense layout, how much a first bin's width must change for a
- * result to be a rebin: above a calendar unit's own variation (31/28), below
- * the smallest ratio between two automatic nice steps (1.5). See #takeBinStep.
- */
-const REBIN_WIDTH_RATIO = 1.25;
-
 // ---------------------------------------------------------------------------
 // Config (same shape as MarkLifecycleConfig — shared during transition)
 // ---------------------------------------------------------------------------
@@ -500,8 +493,8 @@ export class MarkLifecycleV2 {
 	#fittedVersion = 0;
 
 	// --- Rebin results ---
-	/** The last result's first bin, and whether its rows were the dense layout (#takeBinStep). */
-	#lastBin: { first: number; width: number; dense: boolean } | null = null;
+	/** The bin spec the last result was computed from (#takeBinStep). */
+	#lastBinSpec: string | null = null;
 
 	// --- Cleanup ---
 	#destroyed = false;
@@ -1490,7 +1483,7 @@ export class MarkLifecycleV2 {
 
 		const data = this.data;
 		// Taken from every result, so the step compared with is the last drawn.
-		const rebin = !!data && this.#takeBinStep(data);
+		const rebin = !!data && this.#takeBinStep();
 
 		// Once domains are derived from the first query result, skip
 		// re-registration on subsequent results (e.g., crossfilter updates).
@@ -2725,38 +2718,25 @@ export class MarkLifecycleV2 {
 	}
 
 	/**
-	 * Whether `data` is a rebin result: its first bin differs from the last
-	 * result's. A fact of the result rather than a flag set when the rebin was
-	 * asked for, which a filter result landing in between could take.
+	 * Whether the current result is a rebin result: computed from other bins
+	 * than the last one. A fact of the result rather than a flag set when the
+	 * rebin was asked for, which a filter result landing in between could take.
 	 *
-	 * In the dense layout (`binLayout`), the first row is the first padded bin
-	 * of the field's extent whatever a filter did, and the same bin expression
-	 * gives it the same bits: any change of its edges is a rebin, exactly. That
-	 * includes the steps a ratio misses: a user's `step`, which shift+scroll
-	 * scales by 3.5% a tick, and whole-unit intervals (10 → 9 days).
-	 *
-	 * Without that layout a filter that empties the first bin moves the first
-	 * row, so only its width is compared, by more than a calendar unit's own
-	 * wobble (months and years vary by at most 31/28 ≈ 1.11; automatic nice
-	 * steps differ by at least 1.5): REBIN_WIDTH_RATIO. A rebin of a user's
-	 * step there is missed, and takes the path of any other result.
+	 * Read from the parts the result was computed from (the handle's
+	 * `resultParts`, stamped by the query that produced it): their bin spec,
+	 * `parts.bins`, is what each bin channel resolves to (its interval or
+	 * alpha, count and origin), set whether or not `dense()` padded the rows.
+	 * So it is exact for automatic nice steps, a user's `step` (shift+scroll
+	 * scales it by 3.5% a tick), whole-unit intervals and months alike, and a
+	 * filter, which changes the rows but not the bins, never reads as a rebin.
 	 */
-	#takeBinStep(data: DataAccessor): boolean {
-		const axis = this.#binnedAxis();
-		if (!axis || data.length === 0) return false;
-		const lower = data.getColumn(`${axis}1`) as ArrayLike<number> | null;
-		const upper = data.getColumn(`${axis}2`) as ArrayLike<number> | null;
-		if (!lower || !upper) return false;
-		const first = Number(lower[0]);
-		const width = Number(upper[0]) - first;
-		if (!(width > 0)) return false;
-		const dense = binLayout(lower, data.length) !== null;
-		const last = this.#lastBin;
-		this.#lastBin = { first, width, dense };
-		if (!last) return false;
-		if (dense && last.dense) return first !== last.first || width !== last.width;
-		const ratio = width / last.width;
-		return ratio > REBIN_WIDTH_RATIO || ratio < 1 / REBIN_WIDTH_RATIO;
+	#takeBinStep(): boolean {
+		if (!this.#binnedAxis()) return false;
+		const bins = this.#handle?.resultParts?.bins;
+		const key = bins ? JSON.stringify(bins) : null;
+		const last = this.#lastBinSpec;
+		this.#lastBinSpec = key;
+		return key !== null && last !== null && key !== last;
 	}
 
 	/**

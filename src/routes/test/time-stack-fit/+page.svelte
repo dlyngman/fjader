@@ -5,6 +5,8 @@
 	 *
 	 *   ?fit=0       no fitDomain: y from the whole result, not the window
 	 *   ?overlay=1   a rule at a fixed y on the same scale
+	 *   ?sparse=1    group c only in the burst week: past the dense row limit
+	 *                the rows are not the dense layout, and the fit is queried
 	 *
 	 * Run session, wait for the table, then Save log (rebin-<variant>.json in
 	 * Downloads). One run per page load: reload between runs.
@@ -56,11 +58,17 @@
 
 	const fit = page.url.searchParams.get('fit') !== '0';
 	const overlay = page.url.searchParams.get('overlay') === '1';
-	const TAG = `${fit ? 'fit' : 'plain'}${overlay ? '-rule' : ''}`;
-	const variant = (f, o) =>
-		'?' + [f ? '' : 'fit=0', o ? 'overlay=1' : ''].filter(Boolean).join('&');
+	const sparse = page.url.searchParams.get('sparse') === '1';
+	const TAG = `${fit ? 'fit' : 'plain'}${overlay ? '-rule' : ''}${sparse ? '-sparse' : ''}`;
+	const variant = (f, o, s = false) =>
+		'?' + [f ? '' : 'fit=0', o ? 'overlay=1' : '', s ? 'sparse=1' : ''].filter(Boolean).join('&');
 
-	/** The mark decides a rebin the same way (REBIN_WIDTH_RATIO). */
+	/**
+	 * The page's own rebin test: a first-bin width change past this ratio. The
+	 * mark compares the bin spec its result was computed from, which the page
+	 * cannot see; for this page's automatic steps (at least 1.5 apart) the two
+	 * agree.
+	 */
 	const REBIN_RATIO = 1.25;
 	/** A step is settled once nothing has happened for this long... */
 	const QUIET_MS = 700;
@@ -322,9 +330,11 @@
 			await pan('pan 4', 0.9, 0.3);
 			await settle('pan 4');
 			// The bins change, x does not.
-			await zoom('finer', 0.5, 8, -100, true);
+			// The multiplier compounds 3.5% a notch: 24 notches (×2.3) cross a
+			// nice step for sure (at 12 h, to 6 h: past the dense row limit).
+			await zoom('finer', 0.5, 24, -100, true);
 			await settle('finer');
-			await zoom('coarser', 0.5, 8, 100, true);
+			await zoom('coarser', 0.5, 24, 100, true);
 			await settle('coarser');
 			for (let i = 1; i <= 6; i++) {
 				await zoom(`zoom out ${i}`, 0.5, 3, 100);
@@ -414,9 +424,12 @@
 
 	/**
 	 * Per probe round: whether its zoom asked for bins (a read) and kept the
-	 * step (every read the width of the one before), and the y transitions
-	 * each pan after it caused. With fitDomain each pan moves the window
-	 * between the burst and a quiet stretch, so each must refit y.
+	 * step (every read the width of the one before), the y transitions each
+	 * pan after it caused, and where the tallest bar settled. A pan between
+	 * two quiet stretches has nothing to refit, so transitions alone say
+	 * little; the verdict is that y fits the window once the pan settles: the
+	 * tallest bar between 50% and 100% of the plot. A fit held off by a stale
+	 * flag leaves it above 100% (onto the burst) or collapsed (off it).
 	 */
 	function analyseProbes() {
 		const at = (label) => events.find((e) => e.kind === 'gesture' && e.label === label)?.t;
@@ -431,13 +444,21 @@
 			const during = reads.filter((r) => r.t >= tz && r.t < tOff);
 			const keptStep = during.length > 0 && during.every((r) => r.width === before?.width);
 			const yIn = (a, b) => transitions.filter((tr) => yTransition(tr) && tr.t >= a && tr.t < b);
+			const settledBefore = (t) =>
+				[...frames].reverse().find((f) => f.t < t && f.frac != null)?.frac ?? null;
+			const offFrac = settledBefore(tBack);
+			const backFrac = settledBefore(tNext);
+			const fits = (v) => v != null && v >= 0.5 && v <= 1.0001;
 			out.push({
 				round: i,
 				reads: during.length,
 				step: during.length ? human(during[during.length - 1].width) : '–',
 				keptStep,
 				off: yIn(tOff, tBack).length,
-				back: yIn(tBack, tNext).length
+				back: yIn(tBack, tNext).length,
+				offFrac,
+				backFrac,
+				follows: fits(offFrac) && fits(backFrac)
 			});
 		}
 		return out;
@@ -445,7 +466,7 @@
 
 	function save() {
 		qlog.download(`rebin-${TAG}.json`, {
-			variant: { fit, overlay },
+			variant: { fit, overlay, sparse },
 			moveType,
 			events,
 			reads,
@@ -469,11 +490,14 @@
 			try {
 				// Three groups, hourly-ish events over 2023–2024, with a dense
 				// one-week burst in mid 2024 so zoom changes the stack's peak.
+				// ?sparse=1: group c only in the burst week, so past the dense row
+				// limit the rows outside it hold two series, not three.
+				const background = sparse ? `['a', 'b']` : `['a', 'b', 'c']`;
 				await queryEngine.exec(`
 					CREATE TABLE events AS
 					SELECT
 						TIMESTAMP '2023-01-01' + to_seconds(CAST(floor(random() * 63072000) AS BIGINT)) AS ts,
-						['a', 'b', 'c'][1 + CAST(floor(random() * 3) AS INTEGER)] AS grp
+						${background}[1 + CAST(floor(random() * len(${background})) AS INTEGER)] AS grp
 					FROM range(200000)
 					UNION ALL
 					SELECT
@@ -513,8 +537,16 @@
 			<a href={variant(true, false)}>fitDomain</a> ·
 			<a href={variant(false, false)}>plain</a> ·
 			<a href={variant(true, true)}>fitDomain + rule</a> ·
-			<a href={variant(false, true)}>plain + rule</a>
+			<a href={variant(false, true)}>plain + rule</a> ·
+			<a href={variant(true, false, true)}>fitDomain, sparse</a>
 		</p>
+		{#if sparse}
+			<p class="lede">
+				Sparse: group c only in the burst week. Once the bins pass the dense row limit (shift+scroll
+				finer, to 6 h), the rows are not the dense layout, the fit is queried (SQL fit queries &gt;
+				0), and that rebin springs once without the bars collapsing first.
+			</p>
+		{/if}
 		<p class="lede">
 			Run session drives zooms, pans and shift+scroll through the chart. Hands off until the table
 			appears. Expected per rebin: {overlay
@@ -595,7 +627,7 @@
 			<h3>Zoom just past the threshold, then pan</h3>
 			<p class="lede">
 				{fit
-					? 'Each pan moves the window between the burst and a quiet stretch, so each must refit y (at least one y transition), also after a zoom that kept its step.'
+					? 'After each pan y must fit the window: the tallest bar settled between 50% and 100%, also after a zoom that kept its step. (A pan between two quiet stretches has nothing to refit, so it may show no transition.)'
 					: 'Without fitDomain, y is the whole result’s: pans move nothing on y (0 expected).'}
 			</p>
 			<table>
@@ -607,6 +639,9 @@
 						<th>kept step</th>
 						<th>y transitions: pan off</th>
 						<th>pan back</th>
+						<th>tallest bar after: pan off</th>
+						<th>pan back</th>
+						<th>y follows</th>
 					</tr>
 				</thead>
 				<tbody>
@@ -618,6 +653,9 @@
 							<td>{p.keptStep ? 'yes' : 'no'}</td>
 							<td>{p.off}</td>
 							<td>{p.back}</td>
+							<td>{pct(p.offFrac)}</td>
+							<td>{pct(p.backFrac)}</td>
+							<td>{fit ? (p.follows ? 'yes' : 'NO') : '–'}</td>
 						</tr>
 					{/each}
 				</tbody>
