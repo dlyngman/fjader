@@ -8,6 +8,7 @@
 
 import type { Table } from '@uwdata/flechette';
 import type { NormalizedSortConfig } from '$lib/types';
+import type { QueryParts } from '$lib/components/marks/lifecycle/query-builder';
 
 export interface QueryParams {
 	/**
@@ -33,6 +34,14 @@ export class MarkHandle {
 	 * $state: read by whatever reacts to `dataVersion`, never on its own.
 	 */
 	resultCause: ResultCause = 'update';
+	/**
+	 * The query parts the result `dataVersion` counts was computed from, set
+	 * with it. Not the registration's current parts: a re-registration lets
+	 * queries in flight land, so a result can answer parts already replaced.
+	 * Plain, like `resultCause`. A mark reads its bin spec from it (a rebin is
+	 * a result of other bins).
+	 */
+	resultParts: QueryParts | null = null;
 	error = $state<Error | null>(null);
 
 	#params = $state<QueryParams>({ sort: undefined, limit: undefined });
@@ -89,10 +98,11 @@ export class MarkHandle {
 	 * The error is cleared either way, so a success after a failure still
 	 * clears it.
 	 */
-	_setResult(table: Table, cause: ResultCause = 'update'): void {
+	_setResult(table: Table, cause: ResultCause = 'update', parts: QueryParts | null = null): void {
 		this.error = null;
 		if (table === this.arrowTable) return;
 		this.resultCause = cause;
+		this.resultParts = parts;
 		this.arrowTable = table;
 		this.dataVersion++;
 	}

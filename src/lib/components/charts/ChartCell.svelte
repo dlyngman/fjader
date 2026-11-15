@@ -238,6 +238,12 @@
 	const removeVisibilityCallback = gpuCoordinator.setVisibilityCallback(layout.chartId, (visible) =>
 		chartVisibility.set(layout.chartId, visible)
 	);
+	// The coordinator registers a chart as visible and calls back only on a
+	// change, so a chart on screen from the start would never report. The cell
+	// reports that start itself: ChartVisibility.shownElsewhere tells this
+	// chart from the others by its reported cells, and an unreported one was
+	// counted as another chart showing the scale.
+	chartVisibility.set(layout.chartId, true);
 	onMount(() => () => {
 		removeVisibilityCallback();
 		chartVisibility.remove(layout.chartId);

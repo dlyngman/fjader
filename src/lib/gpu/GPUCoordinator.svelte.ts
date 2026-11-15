@@ -2571,12 +2571,16 @@ export class GPUCoordinator {
 				isDestroyed?: boolean;
 				getConfig?: () => { categoryCount: number };
 				slots?: SlotSource;
+				gpuState?: { domainMin: number; domainMax: number };
 			};
 			return {
 				id: scale.id,
 				field: scale.sourceField ?? scale.name,
 				type: scale.type,
 				destroyed: scale.isDestroyed ?? false,
+				// A continuous scale's domain as the shaders read it: after this
+				// frame's updateRenderState, so from a frame callback, what was drawn.
+				domain: scale.gpuState ? [scale.gpuState.domainMin, scale.gpuState.domainMax] : null,
 				categoryCount: scale.getConfig?.().categoryCount,
 				slotBase: this.#identitySlots?.offsets.get(scale.id),
 				slots: scale.slots ? Array.from(scale.slots.to).join(', ') : null

@@ -90,6 +90,17 @@ import { generateMarkId, buildChannelFieldMap } from '../utils';
 import { buildExpressionLabel, isLabeledTipEntry } from '../utils/channel-field-map';
 import { detectChannelsNeedingDataDomain } from './domain-computation';
 import {
+	extentFromFitRow,
+	fitChannels,
+	fitSelect,
+	fitWindowWhere,
+	windowEdges,
+	windowedFit,
+	withBaseline
+} from './fit-domain';
+import { binLayout } from './bin-layout';
+import { binSpecKey, isRebin } from './rebin';
+import {
 	buildQueryParts,
 	assembleQuery,
 	castReal,
@@ -325,6 +336,8 @@ export class MarkLifecycleV2 {
 		const nullDrops = this.#nullDrops(semanticSelect, resolvedSelect);
 		if (nullDrops.length > 0) parts.nullDrops = nullDrops;
 		parts.bins = this.#binPadding();
+		// Once per parts, not per result: each result compares it (#takeBinStep).
+		parts.binKey = binSpecKey(parts.bins);
 
 		return parts;
 	});
@@ -479,6 +492,12 @@ export class MarkLifecycleV2 {
 	#fitDomainLastTarget: [number, number] = [0, 0];
 	#fitDomainQuerySequence = 0;
 	#fitDomainSuppressed = false;
+	/** The data version fitted as it landed (a rebin result): its debounced refit is skipped. */
+	#fittedVersion = 0;
+
+	// --- Rebin results ---
+	/** The bin spec the last result was computed from (#takeBinStep). */
+	#lastBinSpec: string | null = null;
 
 	// --- Cleanup ---
 	#destroyed = false;
@@ -586,9 +605,19 @@ export class MarkLifecycleV2 {
 				getData: () => this.data,
 				triggerReBin: (axis, domain) => {
 					this.#lastBinDomain[axis] = [domain[0], domain[1]];
-					this.#skipDomainUpdateForAxis = axis;
-					this.#dataDerivedDomainsSet = false;
 					// #lastBinDomain is $state — #resolvedQueryParts recomputes automatically.
+					// A mark binned on one axis takes the rebin from the result itself
+					// (#takeBinStep), which re-registers its value axis. Clearing the
+					// flag here as well armed it for whichever result came next: a
+					// filter result re-registered y from the whole extent over the
+					// fit, and a rebin that kept its nice step sends no result at all
+					// (the same SQL, the same cached table), which left the
+					// driving-axis fit gated off until one came. 2D bins keep the
+					// reset: a heatmap's continuous colour domain re-registers through it.
+					if (this.#binnedAxis() === null) {
+						this.#skipDomainUpdateForAxis = axis;
+						this.#dataDerivedDomainsSet = false;
+					}
 				}
 			});
 			if (options.onMarkLOD) {
@@ -1455,10 +1484,15 @@ export class MarkLifecycleV2 {
 		if (!arrowTable || arrowTable.numRows === 0) return;
 		if (this.#config.passiveScales) return;
 
+		const data = this.data;
+		// Taken from every result, so the step compared with is the last drawn.
+		const rebin = !!data && this.#takeBinStep();
+
 		// Once domains are derived from the first query result, skip
 		// re-registration on subsequent results (e.g., crossfilter updates).
-		// Exception: a band axis the data decides is re-derived on every result.
-		if (this.#dataDerivedDomainsSet) {
+		// Exceptions: a band axis the data decides is re-derived on every result,
+		// and a rebin result changes the unit of the value axis.
+		if (this.#dataDerivedDomainsSet && !rebin) {
 			if (this.#bandDomainFromData && dv !== this.#lastBandDomainDataVersion) {
 				this.#lastBandDomainDataVersion = dv;
 			} else {
@@ -1466,17 +1500,55 @@ export class MarkLifecycleV2 {
 			}
 		}
 
-		const data = this.data;
 		if (data) {
 			const additionalChannels = this.#transformCompiler.getAdditionalChannels();
-			const xState = this.#chartContext.xScaleState as ContinuousScaleState | null;
-			const yState = this.#chartContext.yScaleState as ContinuousScaleState | null;
+			let xState = this.#chartContext.xScaleState as ContinuousScaleState | null;
+			let yState = this.#chartContext.yScaleState as ContinuousScaleState | null;
+			let skipAxis = this.#skipDomainUpdateForAxis;
+			let instantFor = this.#instantFor;
+
+			// A rebin result: the value axis (count per bucket) changed unit, so
+			// it registers once, at once where nothing else would jump. Never the
+			// binned axis: the user's zoom set it, whichever result reset the skip.
+			const binnedAxis = rebin ? this.#binnedAxis() : null;
+			const valueAxis = binnedAxis === 'x' ? 'y' : binnedAxis === 'y' ? 'x' : null;
+			const valueState = valueAxis === 'x' ? xState : valueAxis === 'y' ? yState : null;
+			let fitted = false;
+			let fit: [number, number] | null | undefined = undefined;
+			let drivingTarget: [number, number] | null = null;
+			let lands = false;
+			if (binnedAxis && valueAxis && valueState) {
+				skipAxis = binnedAxis;
+				const fitDomain = this.#reactiveConfig.fitDomain;
+				fitted =
+					!!fitDomain &&
+					!this.#fitDomainSuppressed &&
+					this.#resolveFittedAxis(fitDomain) === valueAxis;
+				if (fitted) {
+					const binnedState =
+						binnedAxis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState;
+					const target = (binnedState as ContinuousScaleState | null)?.domain?.target;
+					drivingTarget = target ? [target[0], target[1]] : null;
+					fit = this.#fitFromResult(valueAxis, drivingTarget);
+					// A fitted value axis is registered by its fit alone. The whole
+					// result's extent is not the window's (zoomed into a quiet stretch
+					// it is the burst's), and two registrations under one id would
+					// race to the scale.
+					if (valueAxis === 'x') xState = null;
+					else yState = null;
+				}
+				// At once only with the fit in hand: a fit that must be queried
+				// lands later, and springs like any other.
+				lands = (!fitted || fit !== undefined) && this.#rebinLands(valueState);
+				const catchUp = this.#instantFor;
+				if (lands) instantFor = (scale) => scale === valueState || catchUp(scale);
+			}
 
 			const domainResult = registerDataDerivedDomains(
 				data,
 				this.#channelsNeedingDataDomain,
 				additionalChannels,
-				this.#skipDomainUpdateForAxis,
+				skipAxis,
 				this.#config.zeroBaseline,
 				this.actualXScaleType,
 				this.actualYScaleType,
@@ -1486,11 +1558,34 @@ export class MarkLifecycleV2 {
 				this.#bandScaleForDomain('x'),
 				this.#bandScaleForDomain('y'),
 				this.#markId,
-				this.#instantFor,
+				instantFor,
 				this.#colorScaleState
 			);
 			this.#dataDerivedDomainsSet = domainResult.dataDerivedDomainsSet;
 			this.#skipDomainUpdateForAxis = domainResult.skipDomainUpdateForAxis;
+
+			if (fitted && valueAxis && valueState) {
+				// The fit for this version is taken: drop a SQL fit still in flight
+				// (it is at the old bin step), skip this version's debounced refit,
+				// and let the driving-axis fit dedupe against this window.
+				++this.#fitDomainQuerySequence;
+				if (drivingTarget) this.#fitDomainLastTarget = drivingTarget;
+				if (fit !== undefined) {
+					this.#fittedVersion = dv;
+					if (fit) {
+						this.#applyFit(valueAxis, fit, drivingTarget, lands || this.#instantFor(valueState));
+					}
+				} else if (!this.#transformCompiler.hasJSTransforms()) {
+					// The result cannot answer (its rows are not the dense layout, as
+					// past the dense row limit): ask the database now, not after the
+					// refit's debounce, since nothing registered the new unit.
+					this.#fittedVersion = dv;
+					const snap = this.#handle?.resultCause === 'catchUp';
+					void this.#issueFitDomainQuery(valueAxis, drivingTarget, true, snap);
+				}
+				// With JS transforms the fit reads the tooltip table, written after
+				// this result: its write refits (#onTooltipTableWritten).
+			}
 
 			markDeferredScalesReady(
 				this.#scaleMap,
@@ -2489,21 +2584,20 @@ export class MarkLifecycleV2 {
 	}
 
 	#getFitDomainChannels(axis: 'x' | 'y', includeTransformChannels: boolean): string[] {
-		const select = this.#config.select;
-		const candidates = [axis, `${axis}1`, `${axis}2`];
-		const channels = candidates.filter((c) => c in select);
+		return fitChannels(
+			axis,
+			this.#config.select,
+			includeTransformChannels ? this.#transformCompiler.getAdditionalChannels() : []
+		);
+	}
 
-		if (includeTransformChannels) {
-			const additionalChannels = this.#transformCompiler.getAdditionalChannels();
-			const stackCandidates = [`${axis}0`, `${axis}1`];
-			for (const ch of stackCandidates) {
-				if (additionalChannels.includes(ch) && !channels.includes(ch)) {
-					channels.push(ch);
-				}
-			}
-		}
-
-		return channels;
+	/** Whether the fit includes transform-generated channels (stack's y0/y1). */
+	#fitIncludesTransformChannels(): boolean {
+		// Tied to the transform actually adding channels, not to which query path
+		// (tooltip table vs. sidecar-wrapped query) supplies them. A SQL-stage
+		// stack has no tooltip table but #buildSidecarQuery still re-assembles
+		// the full query (transforms included), so y0/y1 are there either way.
+		return this.#transformCompiler.getAdditionalChannels().length > 0;
 	}
 
 	async #issueFitDomainQuery(
@@ -2526,6 +2620,16 @@ export class MarkLifecycleV2 {
 
 		const seq = ++this.#fitDomainQuerySequence;
 
+		// A binned mark fits from the result it holds: the bins it draws, so
+		// the fit cannot describe another bin step, and no query is sent.
+		const fromResult = this.#fitFromResult(fittedAxis, drivingDomain);
+		if (fromResult !== undefined) {
+			if (fromResult) {
+				this.#applyFit(fittedAxis, fromResult, drivingDomain, this.#fitInstant(fittedAxis, snap));
+			}
+			return;
+		}
+
 		try {
 			const q = this.#buildFitDomainQuery(fittedAxis, drivingDomain);
 			if (!q) return;
@@ -2540,39 +2644,120 @@ export class MarkLifecycleV2 {
 			});
 			if (seq !== this.#fitDomainQuerySequence) return;
 
-			const row = result.get(0) as Record<string, number> | undefined;
-			if (!row) return;
-
-			let lo = Infinity;
-			let hi = -Infinity;
-			for (const [key, val] of Object.entries(row)) {
-				if (val == null || !isFinite(val as number)) continue;
-				if (key.startsWith('min_') && (val as number) < lo) lo = val as number;
-				if (key.startsWith('max_') && (val as number) > hi) hi = val as number;
-			}
-			if (lo >= hi) return;
-
-			if (this.#config.zeroBaseline?.[fittedAxis]) {
-				lo = Math.min(0, lo);
-				hi = Math.max(0, hi);
-			}
-
-			const scaleState =
-				fittedAxis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState;
-			const scaleType = fittedAxis === 'x' ? this.actualXScaleType : this.actualYScaleType;
-			// Asked as it lands: a chart in view that shares the axis keeps the
-			// spring, and everything on the axis moves together through it.
-			const instant = snap && !!scaleState && !this.#chartContext.shownElsewhere(scaleState);
-			if (scaleType === 'time' && scaleState && 'addOffsetExtent' in scaleState) {
-				(scaleState as TimeScaleState).addOffsetExtent([lo, hi], this.#markId, { instant });
-			} else if (scaleState && 'addMark' in scaleState) {
-				(scaleState as ContinuousScaleState).addMark([lo, hi], this.#markId, { instant });
-			}
-
-			if (drivingDomain) this.#fitDomainLastTarget = [...drivingDomain];
+			const row = result.get(0) as Record<string, unknown> | undefined;
+			const extent = row ? extentFromFitRow(row) : null;
+			if (!extent) return;
+			this.#applyFit(fittedAxis, extent, drivingDomain, this.#fitInstant(fittedAxis, snap));
 		} catch (e) {
 			// Silently ignore — query may fail during teardown or table recreation
 		}
+	}
+
+	/**
+	 * Whether a fit lands without a spring: a return-to-view fit, asked as it
+	 * lands. A chart in view that shares the axis keeps the spring, and
+	 * everything on the axis moves together through it.
+	 */
+	#fitInstant(fittedAxis: 'x' | 'y', snap: boolean): boolean {
+		if (!snap) return false;
+		const scaleState =
+			fittedAxis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState;
+		return !!scaleState && !this.#chartContext.shownElsewhere(scaleState);
+	}
+
+	/** Register a fit's extent on the fitted axis, and remember the window it was for. */
+	#applyFit(
+		fittedAxis: 'x' | 'y',
+		extent: readonly [number, number],
+		drivingDomain: readonly [number, number] | null,
+		instant: boolean
+	): void {
+		const [lo, hi] = withBaseline(extent, !!this.#config.zeroBaseline?.[fittedAxis]);
+		const scaleState =
+			fittedAxis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState;
+		const scaleType = fittedAxis === 'x' ? this.actualXScaleType : this.actualYScaleType;
+		if (scaleType === 'time' && scaleState && 'addOffsetExtent' in scaleState) {
+			(scaleState as TimeScaleState).addOffsetExtent([lo, hi], this.#markId, { instant });
+		} else if (scaleState && 'addMark' in scaleState) {
+			(scaleState as ContinuousScaleState).addMark([lo, hi], this.#markId, { instant });
+		}
+		if (drivingDomain) this.#fitDomainLastTarget = [drivingDomain[0], drivingDomain[1]];
+	}
+
+	/**
+	 * The fit from the result this mark holds, for a binned mark whose driving
+	 * axis is the binned one: the extent over the bins in the window (null if
+	 * none has one), read at stride from the validated layout. Undefined when
+	 * the result cannot answer — no bins on the driving axis, a JS transform
+	 * (its channels are not the query's), or rows not in the dense layout (the
+	 * dense cliff, a limit) — and the SQL fit runs instead.
+	 */
+	#fitFromResult(
+		fittedAxis: 'x' | 'y',
+		drivingDomain: readonly [number, number] | null
+	): [number, number] | null | undefined {
+		const drivingAxis = fittedAxis === 'y' ? 'x' : 'y';
+		if (this.#binnedAxis() !== drivingAxis) return undefined;
+		if (this.#transformCompiler.hasJSTransforms()) return undefined;
+		const data = this.data;
+		if (!data || data.length === 0) return undefined;
+
+		const includeTransform = this.#fitIncludesTransformChannels();
+		const edges = windowEdges(this.#getFitDomainChannels(drivingAxis, includeTransform));
+		if (!edges || !('lower' in edges)) return undefined;
+		const lower = data.getColumn(edges.lower) as ArrayLike<number> | null;
+		const upper = data.getColumn(edges.upper) as ArrayLike<number> | null;
+		if (!lower || !upper) return undefined;
+		const layout = binLayout(lower, data.length);
+		if (!layout) return undefined;
+
+		const fitted: ArrayLike<number>[] = [];
+		for (const ch of this.#getFitDomainChannels(fittedAxis, includeTransform)) {
+			const values = data.getColumn(ch);
+			if (values) fitted.push(values as ArrayLike<number>);
+		}
+		if (fitted.length === 0) return undefined;
+		return windowedFit(lower, upper, layout, fitted, drivingDomain);
+	}
+
+	/**
+	 * Whether the current result is a rebin result: computed from other bins
+	 * than the last one (see rebin.ts). A fact of the result rather than a flag
+	 * set when the rebin was asked for, which a filter result landing in
+	 * between could take. Read from the parts the result was computed from (the
+	 * handle's `resultParts`, stamped by the query that produced it), whose
+	 * `binKey` was built with them: a string compare per result.
+	 */
+	#takeBinStep(): boolean {
+		if (!this.#binnedAxis()) return false;
+		const key = this.#handle?.resultParts?.binKey ?? null;
+		const last = this.#lastBinSpec;
+		this.#lastBinSpec = key;
+		return isRebin(last, key);
+	}
+
+	/**
+	 * Whether a rebin result's value axis lands at once rather than springing.
+	 * Only where nothing else would jump: no other visible chart draws the
+	 * scale, this chart draws nothing but this mark (a rule at a fixed value
+	 * registers no extent but still moves with the domain), and the user has
+	 * not zoomed the axis. Elsewhere it springs, as before. Folding the other
+	 * marks through the snap is what would lift this.
+	 */
+	#rebinLands(scale: ContinuousScaleState): boolean {
+		if (scale.userDriven) return false;
+		if (this.#chartContext.shownElsewhere(scale)) return false;
+		// Guides (grid, axes, frame) are not entries: they follow the scale as it
+		// lands, and the snap is right for them. A guide registered as a mark
+		// entry would turn every rebin back into a spring.
+		return this.#chartContext.config.entries.size === 1;
+	}
+
+	/** The axis a bin() channel is on, when exactly one is; null without bins or with both. */
+	#binnedAxis(): 'x' | 'y' | null {
+		const x = this.#autoBinNodes.has('x1') || this.#autoBinNodes.has('x2');
+		const y = this.#autoBinNodes.has('y1') || this.#autoBinNodes.has('y2');
+		return x === y ? null : x ? 'x' : 'y';
 	}
 
 	#buildFitDomainQuery(
@@ -2580,51 +2765,27 @@ export class MarkLifecycleV2 {
 		drivingDomain: [number, number] | null
 	): Query | null {
 		const useTooltipTable = this.#transformCompiler.hasJSTransforms() && this.#tooltipTableReady;
-		// Whether to include transform-generated channels (stack's y0/y1) — tied
-		// to the transform actually adding channels, not to which query path
-		// (tooltip table vs. sidecar-wrapped query) supplies them. A SQL-stage
-		// stack has no tooltip table but #buildSidecarQuery still re-assembles
-		// the full query (transforms included), so y0/y1 are there either way.
-		const includeTransformChannels = this.#transformCompiler.getAdditionalChannels().length > 0;
+		const includeTransformChannels = this.#fitIncludesTransformChannels();
 
 		const fittedChannels = this.#getFitDomainChannels(fittedAxis, includeTransformChannels);
 		if (fittedChannels.length === 0) return null;
+		const outerSelect = fitSelect(fittedChannels);
 
-		const outerSelect: Record<string, unknown> = {};
-		for (const ch of fittedChannels) {
-			outerSelect[`min_${ch}`] = min(sqlColumn(ch));
-			outerSelect[`max_${ch}`] = max(sqlColumn(ch));
-		}
-
-		let whereClause: unknown = undefined;
+		let whereClause: FilterExpr | undefined = undefined;
 		if (drivingDomain) {
 			const drivingAxis = fittedAxis === 'y' ? 'x' : 'y';
 			const drivingChannels = this.#getFitDomainChannels(drivingAxis, includeTransformChannels);
-			whereClause = this.#buildFitDomainWhere(drivingChannels, drivingDomain);
+			whereClause = fitWindowWhere(drivingChannels, drivingDomain);
 		}
 
 		if (useTooltipTable) {
-			const q = Query.from(this.#tooltipTableName).select(outerSelect as Record<string, ExprValue>);
-			if (whereClause) q.where(whereClause as FilterExpr);
+			const q = Query.from(this.#tooltipTableName).select(outerSelect);
+			if (whereClause) q.where(whereClause);
 			return q;
 		}
 
 		// Path A: CTE-wrap the mark's base query
 		return this.#buildSidecarQuery(outerSelect, whereClause);
-	}
-
-	#buildFitDomainWhere(drivingChannels: string[], domain: [number, number]): unknown {
-		const [lo, hi] = domain;
-		const ch1 = drivingChannels.find((c) => c.endsWith('1'));
-		const ch2 = drivingChannels.find((c) => c.endsWith('2'));
-		if (ch1 && ch2) {
-			return sql`${sqlColumn(ch2)} >= ${lo} AND ${sqlColumn(ch1)} <= ${hi}`;
-		}
-		const ch = drivingChannels[0];
-		if (ch) {
-			return sql`${sqlColumn(ch)} BETWEEN ${lo} AND ${hi}`;
-		}
-		return undefined;
 	}
 
 	/**
@@ -2659,6 +2820,8 @@ export class MarkLifecycleV2 {
 	#refitFromData(): void {
 		const fitDomain = this.#reactiveConfig.fitDomain;
 		if (!fitDomain) return;
+		// Fitted as it landed (#handleDataDomains, a rebin result).
+		if (this.dataVersion === this.#fittedVersion) return;
 		// The fit for the snap's version, if this is it; a refit for any other
 		// version springs, and a skipped one gives the snap up.
 		const snap = this.#snapFitVersion !== null && this.#snapFitVersion === this.dataVersion;
