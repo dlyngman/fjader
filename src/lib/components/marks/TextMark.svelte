@@ -24,6 +24,7 @@
 	} from '$lib/types';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
+	import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 
@@ -84,6 +85,8 @@
 	}
 	const queryEngine = getContext<QueryEngine>('query-engine');
 	const chartContext = getContext<ChartContext>('chart');
+	// Read without getGPUContext's error: text also draws outside a WebGPU canvas.
+	const gpuCoordinator = getContext<GPUCoordinator | undefined>('gpu-coordinator') ?? null;
 	// Read once: the entrance happens when the labels first mount.
 	const entrance = chartContext.config?.chartProps?.entrance as EntranceMode | undefined;
 	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
@@ -457,7 +460,11 @@
 					queryEngine,
 					chartContext,
 					markId,
-					filterGroups.get(selection as string | undefined)
+					filterGroups.get(selection as string | undefined),
+					// The coordinator's frame loop drives a bin() channel's adaptive
+					// rebinning: without it, labels on a histogram's bins kept the
+					// bins of the full extent while the bars rebinned under them.
+					{ gpuCoordinator }
 				);
 			}
 		});

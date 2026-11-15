@@ -4,7 +4,14 @@
 	 * zooming re-buckets it (LOD), scripted so every run is the same.
 	 *
 	 *   ?fit=0       no fitDomain: y from the whole result, not the window
-	 *   ?overlay=1   a rule at a fixed y on the same scale
+	 *   ?overlay=1   a rule at a fixed y on the same scale (it snaps with its tick)
+	 *   ?overlay=line  a line of data at that level instead: a data layer, which
+	 *                keeps the spring
+	 *   ?overlay=labels  count labels on the bars (TextMark, the same bins; use with
+	 *                fit=0: TextMark has no fitDomain, so its whole-result extent
+	 *                would hold a fitted y up): a
+	 *                data layer too, which rebins on its own query; the table
+	 *                adds how long the labels lag the bars' rebin
 	 *   ?sparse=1    group c only in the burst week: past the dense row limit
 	 *                the rows are not the dense layout, and the fit is queried
 	 *
@@ -31,9 +38,10 @@
 	 * A rebin is a read whose bin width changed (as the mark decides it). Per
 	 * rebin the table shows the y transitions it caused and the tallest bar's
 	 * height: before, lowest in the next 600 ms, and settled. Expected:
-	 * - fitDomain or plain: one y snap, no spring; lowest ≈ settled (no duck).
-	 * - with the rule: one y spring, no snap; the bars may dip and recover while
-	 *   y springs (the gate keeps the rule from jumping).
+	 * - fitDomain or plain, alone or with the rule: one y snap, no spring;
+	 *   lowest ≈ settled (no duck). The rule moves with its tick.
+	 * - with the line: one y spring, no snap; the bars may dip and recover while
+	 *   y springs (the gate keeps the line, a data layer, from jumping).
 	 * - no SQL fit queries: a binned mark fits from its result.
 	 */
 	import { page } from '$app/state';
@@ -48,7 +56,9 @@
 		MarginLabel,
 		WebGPUCanvas,
 		RectYMark,
-		RuleMarkY
+		RuleMarkY,
+		LineMark,
+		TextMark
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 	import { bin } from '$lib/sql/bin';
@@ -57,11 +67,24 @@
 	import { windowedFit } from '$lib/components/marks/lifecycle/fit-domain';
 
 	const fit = page.url.searchParams.get('fit') !== '0';
-	const overlay = page.url.searchParams.get('overlay') === '1';
+	const overlayParam = page.url.searchParams.get('overlay');
+	/** null, 'rule' (?overlay=1), 'line' or 'labels' (?overlay=line, ?overlay=labels). */
+	const overlay =
+		overlayParam === 'line' || overlayParam === 'labels'
+			? overlayParam
+			: overlayParam
+				? 'rule'
+				: null;
 	const sparse = page.url.searchParams.get('sparse') === '1';
-	const TAG = `${fit ? 'fit' : 'plain'}${overlay ? '-rule' : ''}${sparse ? '-sparse' : ''}`;
-	const variant = (f, o, s = false) =>
-		'?' + [f ? '' : 'fit=0', o ? 'overlay=1' : '', s ? 'sparse=1' : ''].filter(Boolean).join('&');
+	const TAG = `${fit ? 'fit' : 'plain'}${overlay ? `-${overlay}` : ''}${sparse ? '-sparse' : ''}`;
+	/** A variant's query string; `o` is null, 'rule' or 'line'. */
+	const variant = (f, o = null, s = false) =>
+		'?' +
+		[f ? '' : 'fit=0', o === 'rule' ? 'overlay=1' : o ? `overlay=${o}` : '', s ? 'sparse=1' : '']
+			.filter(Boolean)
+			.join('&');
+	/** A rule follows its tick, so it snaps with the axis; data layers (a line, labels) keep the spring. */
+	const expectSnap = overlay !== 'line' && overlay !== 'labels';
 
 	/**
 	 * The page's own rebin test: a first-bin width change past this ratio. The
@@ -99,6 +122,8 @@
 	const reads = [];
 	/** SQL fit queries of the histogram (expected: none). */
 	const fits = [];
+	/** Every read of the labels (?overlay=labels): time and bin interval. */
+	const labelReads = [];
 	/** Domain transitions. */
 	const transitions = [];
 	/** Rendered frames while the session runs. */
@@ -116,11 +141,13 @@
 		const id = opts?.callerId ?? '';
 		const histogram = id.startsWith('recty');
 		const data = histogram && !id.includes(':');
+		const labels = id.startsWith('text') && !id.includes(':');
 		if (histogram && id.endsWith(':fitDomain')) fits.push({ t: now() });
 		if (data) pendingReads++;
 		try {
 			const table = await query(sql, opts);
 			if (data) noteResult(sql, table);
+			if (labels) labelReads.push({ t: now(), interval: intervalOf(sql) });
 			return table;
 		} finally {
 			if (data) {
@@ -130,12 +157,15 @@
 		}
 	};
 
+	/** A time bin's interval from its SQL, e.g. '1 day'. */
+	const intervalOf = (sql) => sql.match(/INTERVAL\s*'?([^)',]+)'?/i)?.[1]?.trim() ?? '?';
+
 	function noteResult(sql, table) {
 		const x1 = table.getChild('x1')?.toArray();
 		const x2 = table.getChild('x2')?.toArray();
 		const y1 = table.getChild('y1')?.toArray();
 		if (!x1 || !x2 || !y1 || table.numRows === 0) return;
-		const interval = sql.match(/INTERVAL\s*'?([^)',]+)'?/i)?.[1]?.trim() ?? '?';
+		const interval = intervalOf(sql);
 		reads.push({ t: now(), interval, width: x2[0] - x1[0], rows: table.numRows });
 		latest = { x1, x2, y1, n: table.numRows, layout: binLayout(x1, table.numRows) };
 	}
@@ -389,6 +419,9 @@
 			const nextGesture = events.find((e) => e.kind === 'gesture' && e.t > r.t)?.t ?? Infinity;
 			const settledAt = Math.min(r.t + 1500, next, nextGesture);
 			const settled = [...frames].reverse().find((f) => f.t < settledAt && f.frac != null);
+			// The labels' own result at the new interval: until it lands they
+			// show the old bins' counts, placed under the new y.
+			const labelsAt = labelReads.find((l) => l.t >= r.t - 5 && l.interval === r.interval)?.t;
 			out.push({
 				t: r.t,
 				step: `${human(prev.width)} → ${human(r.width)}`,
@@ -396,11 +429,11 @@
 				springs: ys.filter((tr) => !tr.snap).length,
 				before: before?.frac ?? null,
 				lowest,
-				settled: settled?.frac ?? null
+				settled: settled?.frac ?? null,
+				labelLag: labelsAt == null ? null : Math.round(labelsAt - r.t)
 			});
 		}
 		rows = out;
-		const expectSnap = !overlay;
 		const one = out.filter((r) =>
 			expectSnap ? r.snaps === 1 && r.springs === 0 : r.springs === 1 && r.snaps === 0
 		).length;
@@ -471,6 +504,7 @@
 			events,
 			reads,
 			fits,
+			labelReads,
 			transitions,
 			frames,
 			rebins: rows,
@@ -505,8 +539,16 @@
 						['a', 'b', 'c'][1 + CAST(floor(random() * 3) AS INTEGER)] AS grp
 					FROM range(20000)
 				`);
-				// The overlay's level: a rule at 300 events.
+				// The overlays' level: a rule at 300 events, or a line of data
+				// at 300 across the whole range.
 				await queryEngine.exec(`CREATE TABLE rule_level AS SELECT 300.0 AS v`);
+				await queryEngine.exec(`
+					CREATE TABLE line_level AS
+					SELECT * FROM (VALUES
+						(TIMESTAMP '2023-01-01', 300.0),
+						(TIMESTAMP '2024-12-31', 300.0)
+					) t(ts, v)
+				`);
 				isLoaded = true;
 			} catch (error) {
 				console.error('Initialization error:', error);
@@ -530,15 +572,17 @@
 	<div class="container">
 		<h1>
 			Rebin session: {fit ? 'fitDomain' : 'plain'} stacked time histogram{overlay
-				? ', with a rule'
+				? `, with a ${overlay}`
 				: ''}
 		</h1>
 		<p class="variants">
-			<a href={variant(true, false)}>fitDomain</a> ·
-			<a href={variant(false, false)}>plain</a> ·
-			<a href={variant(true, true)}>fitDomain + rule</a> ·
-			<a href={variant(false, true)}>plain + rule</a> ·
-			<a href={variant(true, false, true)}>fitDomain, sparse</a>
+			<a href={variant(true)}>fitDomain</a> ·
+			<a href={variant(false)}>plain</a> ·
+			<a href={variant(true, 'rule')}>fitDomain + rule</a> ·
+			<a href={variant(false, 'rule')}>plain + rule</a> ·
+			<a href={variant(true, 'line')}>fitDomain + line</a> ·
+			<a href={variant(false, 'labels')}>plain + labels</a> ·
+			<a href={variant(true, null, true)}>fitDomain, sparse</a>
 		</p>
 		{#if sparse}
 			<p class="lede">
@@ -549,9 +593,9 @@
 		{/if}
 		<p class="lede">
 			Run session drives zooms, pans and shift+scroll through the chart. Hands off until the table
-			appears. Expected per rebin: {overlay
-				? 'one y spring, no snap.'
-				: 'one y snap, no spring, and no dip in bar height.'}
+			appears. Expected per rebin: {expectSnap
+				? `one y snap, no spring, and no dip in bar height${overlay === 'rule' ? '; the rule moves with its tick' : ''}.`
+				: `one y spring, no snap (the ${overlay === 'labels' ? 'labels are' : 'line is'} a data layer).`}
 		</p>
 		<div class="controls">
 			<button disabled={running || done} onclick={runSession}>
@@ -581,8 +625,19 @@
 								transforms={[stackY()]}
 								fitDomain={fit ? 'y' : undefined}
 							/>
-							{#if overlay}
+							{#if overlay === 'rule'}
 								<RuleMarkY table="rule_level" y="v" stroke="#c00" strokeWidth={2} />
+							{:else if overlay === 'line'}
+								<LineMark table="line_level" x="ts" y="v" stroke="#c00" strokeWidth={2} />
+							{:else if overlay === 'labels'}
+								<TextMark
+									table="events"
+									x={bin('ts')}
+									y={count()}
+									text={count()}
+									dy={-6}
+									fontSize={10}
+								/>
 							{/if}
 						{/snippet}
 					</WebGPUCanvas>
@@ -607,6 +662,7 @@
 						<th>tallest bar: before</th>
 						<th>lowest</th>
 						<th>settled</th>
+						{#if overlay === 'labels'}<th>labels lag (ms)</th>{/if}
 					</tr>
 				</thead>
 				<tbody>
@@ -619,6 +675,7 @@
 							<td>{pct(r.before)}</td>
 							<td>{pct(r.lowest)}</td>
 							<td>{pct(r.settled)}</td>
+							{#if overlay === 'labels'}<td>{r.labelLag ?? '–'}</td>{/if}
 						</tr>
 					{/each}
 				</tbody>
