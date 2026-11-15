@@ -117,6 +117,17 @@ import { fetchCategoricalDomains, fetchGlobalAggregates } from './domain-queries
 import { transformScaleKey } from './transform-scale-key';
 import { OtherRows, type SplitPlan } from './other-rows.svelte';
 
+/**
+ * Marks a rebin's instant y may move with it (#rebinLands): rules sit at a
+ * value, and under a snap they stay on their tick, whose SVG label changes
+ * in the same frame. Text at a fixed value would too, and a rule without a
+ * table, but neither registers a mark entry, so neither holds the gate.
+ * Every other mark is a data layer whose pixels a reader tracks (bars, rects,
+ * lines, areas, dots), and keeps the spring: a mean line drawn from the same
+ * bins changes unit with them.
+ */
+const REBIN_SNAPS_WITH: ReadonlySet<string> = new Set(['ruley', 'rulex']);
+
 // ---------------------------------------------------------------------------
 // Config (same shape as MarkLifecycleConfig — shared during transition)
 // ---------------------------------------------------------------------------
@@ -2738,11 +2749,11 @@ export class MarkLifecycleV2 {
 
 	/**
 	 * Whether a rebin result's value axis lands at once rather than springing.
-	 * Only where nothing else would jump: no other visible chart draws the
-	 * scale, this chart draws nothing but this mark (a rule at a fixed value
-	 * registers no extent but still moves with the domain), and the user has
-	 * not zoomed the axis. Elsewhere it springs, as before. Folding the other
-	 * marks through the snap is what would lift this.
+	 * Only where nothing would jump wrongly: no other visible chart draws the
+	 * scale, every other mark on this chart is one that belongs with the ticks
+	 * (REBIN_SNAPS_WITH), and the user has not zoomed the axis. Elsewhere it
+	 * springs, as before. Folding the other marks through the snap is what
+	 * would lift the rest.
 	 */
 	#rebinLands(scale: ContinuousScaleState): boolean {
 		if (scale.userDriven) return false;
@@ -2750,7 +2761,10 @@ export class MarkLifecycleV2 {
 		// Guides (grid, axes, frame) are not entries: they follow the scale as it
 		// lands, and the snap is right for them. A guide registered as a mark
 		// entry would turn every rebin back into a spring.
-		return this.#chartContext.config.entries.size === 1;
+		for (const [id, entry] of this.#chartContext.config.entries) {
+			if (id !== this.#markId && !REBIN_SNAPS_WITH.has(entry.markType)) return false;
+		}
+		return true;
 	}
 
 	/** The axis a bin() channel is on, when exactly one is; null without bins or with both. */
