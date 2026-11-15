@@ -325,7 +325,18 @@ export class MorphedChannels {
 		// Scale snaps first: a fold restarts the clock, which the read below
 		// then sees, and its plain fold must not copy over the folded `from`.
 		const snap = this.#snapPending;
-		if (this.#takeScaleSnaps(snap)) this.#startTransition();
+		if (this.#takeScaleSnaps(snap)) {
+			this.#startTransition();
+			// Every other channel folds from where it is too, explicitly. The
+			// clock read below may not report a restart: a mark that never had a
+			// transition gets its first clock here, and a first clock is not
+			// read as one. That every channel of such a mark has from == to is
+			// true today, but it is a chain of reasoning, not a guarantee.
+			this.#foldPending = true;
+			if (transitionsObserved()) {
+				noteTransition('morph', false, this.#affectedCharts, this.#label);
+			}
+		}
 
 		this.#readClock();
 		const t = this.#clockT;
@@ -424,6 +435,10 @@ export class MorphedChannels {
 				// draws, not on the rare frame a snap folds.
 				foldPipelineFor(this.#device, kind);
 			}
+			// "What this frame draws": nothing in JS changes gpuState between
+			// the compute work and the draw passes of one frame (frame order:
+			// updateRenderState, compute, draw). Should that order change, so
+			// does what `drawn` means.
 			const g = scale.gpuState;
 			const current = channel.current;
 			current[0] = g.domainMin;

@@ -611,6 +611,25 @@ describe('MorphedChannels folding through a scale snap', () => {
 		// Three channels, two folds: the share is on no scale.
 		expect(issued.filter((c) => c === 'pipeline fold-linear')).toHaveLength(2);
 	});
+
+	it('on the first fold of a mark that never transitioned, folds its other channels too', () => {
+		// Every update so far snapped (its first data), so it has no clock: the
+		// fold creates one, which the clock read does not report as a restart.
+		const f = fakes();
+		const y = scale(0, 100);
+		const m = folding(f, y);
+		write(m, [0, 0, 0], [10, 20, 30], [1, 1, 1]);
+		f.frame();
+		f.frame();
+		expect(f.sources.length).toBe(0);
+
+		y.snapTo(0, 50);
+		const issued = f.frame();
+		expect(issued.filter((c) => c === 'pipeline fold-linear')).toHaveLength(2);
+		// The share, on no scale, folds from where it is: the plain copy.
+		expect(issued).toContain('copy m-4-resolved -> m-4-from');
+		expect(f.sources.length).toBe(1);
+	});
 });
 
 describe('alignmentKey', () => {
