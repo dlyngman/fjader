@@ -9,8 +9,10 @@
 	 * Run session, wait for the table, then Save log (rebin-<variant>.json in
 	 * Downloads). One run per page load: reload between runs.
 	 *
-	 * The script: six zoom-ins toward the burst week (mid 2024), four pans
-	 * (off the burst and back), shift+scroll finer then coarser, six zoom-outs.
+	 * The script: zoom-ins toward the burst week (mid 2024), with three probe
+	 * rounds among them (a zoom just past the rebin threshold, which often
+	 * keeps its nice step, then a pan off the burst and back), four pans,
+	 * shift+scroll finer then coarser, six zoom-outs.
 	 * Zooms and pans are in the x axis margin, so they move x only, as a user
 	 * zooming the time axis; inside the plot they would zoom y too, and a y the
 	 * user zoomed is never refitted. Events are dispatched on the chart's own
@@ -49,7 +51,7 @@
 	import { Grid } from '$lib/components/guides';
 	import { bin } from '$lib/sql/bin';
 	import { attachQueryLog } from '$lib/query-engine/debug/query-log';
-	import { binLayout } from '$lib/gpu/bin-remap';
+	import { binLayout } from '$lib/components/marks/lifecycle/bin-layout';
 	import { windowedFit } from '$lib/components/marks/lifecycle/fit-domain';
 
 	const fit = page.url.searchParams.get('fit') !== '0';
@@ -66,6 +68,8 @@
 	const SETTLE_CAP_MS = 5000;
 	/** How long after a rebin its y transitions and its lowest bar are looked for. */
 	const AFTER_MS = 600;
+	/** Same-step zoom probes: a zoom just past the threshold, then a pan off and back. */
+	const PROBE_ROUNDS = 3;
 
 	const { queryEngine, gpuCoordinator } = initFjader();
 	const qlog = attachQueryLog(queryEngine);
@@ -78,6 +82,7 @@
 	let done = $state(false);
 	let rows = $state([]);
 	let summary = $state(null);
+	let probes = $state([]);
 	let chartEl = $state();
 
 	/** Scripted events, in order. */
@@ -288,10 +293,25 @@
 			await enter();
 			// Toward the burst week (~72% across the full extent): the zoom keeps
 			// the point under the pointer, so it stays there.
-			for (let i = 1; i <= 6; i++) {
+			for (let i = 1; i <= 3; i++) {
 				await zoom(`zoom in ${i}`, 0.72, 3, -100);
 				await settle(`zoom in ${i}`);
 			}
+			// Same-step zooms: two notches (×1.56) cross the rebin threshold (1.5)
+			// but often land on the same nice step, whose query is the same and
+			// is answered with the same table, so no result reaches the mark.
+			// The pans after it must still refit y (fitDomain).
+			for (let i = 1; i <= PROBE_ROUNDS; i++) {
+				await zoom(`probe zoom ${i}`, 0.72, 2, -100);
+				await settle(`probe zoom ${i}`);
+				await pan(`probe pan off ${i}`, 0.3, 0.9);
+				await settle(`probe pan off ${i}`);
+				await pan(`probe pan back ${i}`, 0.9, 0.3);
+				await settle(`probe pan back ${i}`);
+			}
+			// To the same depth as without the probe (six zoom-ins of three notches).
+			await zoom('zoom in 4', 0.72, 3, -100);
+			await settle('zoom in 4');
 			// Off the burst and back: x moves, the bins stay.
 			await pan('pan 1', 0.3, 0.9);
 			await settle('pan 1');
@@ -389,6 +409,38 @@
 			fits: fits.length,
 			reads: reads.length
 		};
+		probes = analyseProbes();
+	}
+
+	/**
+	 * Per probe round: whether its zoom asked for bins (a read) and kept the
+	 * step (every read the width of the one before), and the y transitions
+	 * each pan after it caused. With fitDomain each pan moves the window
+	 * between the burst and a quiet stretch, so each must refit y.
+	 */
+	function analyseProbes() {
+		const at = (label) => events.find((e) => e.kind === 'gesture' && e.label === label)?.t;
+		const out = [];
+		for (let i = 1; i <= PROBE_ROUNDS; i++) {
+			const tz = at(`probe zoom ${i}`);
+			const tOff = at(`probe pan off ${i}`);
+			const tBack = at(`probe pan back ${i}`);
+			if (tz == null || tOff == null || tBack == null) continue;
+			const tNext = events.find((e) => e.kind === 'gesture' && e.t > tBack)?.t ?? Infinity;
+			const before = [...reads].reverse().find((r) => r.t < tz);
+			const during = reads.filter((r) => r.t >= tz && r.t < tOff);
+			const keptStep = during.length > 0 && during.every((r) => r.width === before?.width);
+			const yIn = (a, b) => transitions.filter((tr) => yTransition(tr) && tr.t >= a && tr.t < b);
+			out.push({
+				round: i,
+				reads: during.length,
+				step: during.length ? human(during[during.length - 1].width) : '–',
+				keptStep,
+				off: yIn(tOff, tBack).length,
+				back: yIn(tBack, tNext).length
+			});
+		}
+		return out;
 	}
 
 	function save() {
@@ -401,6 +453,7 @@
 			transitions,
 			frames,
 			rebins: rows,
+			probes,
 			summary
 		});
 	}
@@ -534,6 +587,37 @@
 							<td>{pct(r.before)}</td>
 							<td>{pct(r.lowest)}</td>
 							<td>{pct(r.settled)}</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+
+			<h3>Zoom just past the threshold, then pan</h3>
+			<p class="lede">
+				{fit
+					? 'Each pan moves the window between the burst and a quiet stretch, so each must refit y (at least one y transition), also after a zoom that kept its step.'
+					: 'Without fitDomain, y is the whole result’s: pans move nothing on y (0 expected).'}
+			</p>
+			<table>
+				<thead>
+					<tr>
+						<th>round</th>
+						<th>reads</th>
+						<th>step</th>
+						<th>kept step</th>
+						<th>y transitions: pan off</th>
+						<th>pan back</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each probes as p (p.round)}
+						<tr>
+							<td>{p.round}</td>
+							<td>{p.reads}</td>
+							<td>{p.step}</td>
+							<td>{p.keptStep ? 'yes' : 'no'}</td>
+							<td>{p.off}</td>
+							<td>{p.back}</td>
 						</tr>
 					{/each}
 				</tbody>

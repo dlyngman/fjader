@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { binLayout } from './bin-remap';
+import { binLayout } from './bin-layout';
 
 /** Lower edges for F facets × the given bins × S rows per bin, in dense order. */
 function edges(bins: number[], series: number, facets = 1): Float32Array {

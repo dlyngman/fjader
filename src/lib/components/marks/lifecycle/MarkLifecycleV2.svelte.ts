@@ -98,14 +98,7 @@ import {
 	windowedFit,
 	withBaseline
 } from './fit-domain';
-import { binLayout } from '$lib/gpu/bin-remap';
-
-/**
- * How much a first bin's width must change for a result to be a rebin: above
- * a calendar unit's own variation (31/28), below the smallest ratio between
- * two nice steps (1.5). See #takeBinStep.
- */
-const REBIN_WIDTH_RATIO = 1.25;
+import { binLayout } from './bin-layout';
 import {
 	buildQueryParts,
 	assembleQuery,
@@ -122,6 +115,13 @@ import {
 import { fetchCategoricalDomains, fetchGlobalAggregates } from './domain-queries';
 import { transformScaleKey } from './transform-scale-key';
 import { OtherRows, type SplitPlan } from './other-rows.svelte';
+
+/**
+ * Without the dense layout, how much a first bin's width must change for a
+ * result to be a rebin: above a calendar unit's own variation (31/28), below
+ * the smallest ratio between two automatic nice steps (1.5). See #takeBinStep.
+ */
+const REBIN_WIDTH_RATIO = 1.25;
 
 // ---------------------------------------------------------------------------
 // Config (same shape as MarkLifecycleConfig — shared during transition)
@@ -500,8 +500,8 @@ export class MarkLifecycleV2 {
 	#fittedVersion = 0;
 
 	// --- Rebin results ---
-	/** The first bin's width in the last result, to tell a rebin result from any other. */
-	#lastBinWidth = 0;
+	/** The last result's first bin, and whether its rows were the dense layout (#takeBinStep). */
+	#lastBin: { first: number; width: number; dense: boolean } | null = null;
 
 	// --- Cleanup ---
 	#destroyed = false;
@@ -609,9 +609,19 @@ export class MarkLifecycleV2 {
 				getData: () => this.data,
 				triggerReBin: (axis, domain) => {
 					this.#lastBinDomain[axis] = [domain[0], domain[1]];
-					this.#skipDomainUpdateForAxis = axis;
-					this.#dataDerivedDomainsSet = false;
 					// #lastBinDomain is $state — #resolvedQueryParts recomputes automatically.
+					// A mark binned on one axis takes the rebin from the result itself
+					// (#takeBinStep), which re-registers its value axis. Clearing the
+					// flag here as well armed it for whichever result came next: a
+					// filter result re-registered y from the whole extent over the
+					// fit, and a rebin that kept its nice step sends no result at all
+					// (the same SQL, the same cached table), which left the
+					// driving-axis fit gated off until one came. 2D bins keep the
+					// reset: a heatmap's continuous colour domain re-registers through it.
+					if (this.#binnedAxis() === null) {
+						this.#skipDomainUpdateForAxis = axis;
+						this.#dataDerivedDomainsSet = false;
+					}
 				}
 			});
 			if (options.onMarkLOD) {
@@ -1507,32 +1517,35 @@ export class MarkLifecycleV2 {
 			const binnedAxis = rebin ? this.#binnedAxis() : null;
 			const valueAxis = binnedAxis === 'x' ? 'y' : binnedAxis === 'y' ? 'x' : null;
 			const valueState = valueAxis === 'x' ? xState : valueAxis === 'y' ? yState : null;
+			let fitted = false;
 			let fit: [number, number] | null | undefined = undefined;
 			let drivingTarget: [number, number] | null = null;
 			let lands = false;
 			if (binnedAxis && valueAxis && valueState) {
 				skipAxis = binnedAxis;
-				lands = this.#rebinLands(valueState);
-				const catchUp = this.#instantFor;
-				if (lands) instantFor = (scale) => scale === valueState || catchUp(scale);
 				const fitDomain = this.#reactiveConfig.fitDomain;
-				if (
-					fitDomain &&
+				fitted =
+					!!fitDomain &&
 					!this.#fitDomainSuppressed &&
-					this.#resolveFittedAxis(fitDomain) === valueAxis
-				) {
+					this.#resolveFittedAxis(fitDomain) === valueAxis;
+				if (fitted) {
 					const binnedState =
 						binnedAxis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState;
 					const target = (binnedState as ContinuousScaleState | null)?.domain?.target;
 					drivingTarget = target ? [target[0], target[1]] : null;
 					fit = this.#fitFromResult(valueAxis, drivingTarget);
-				}
-				// The fit registers the value axis in place of the whole result's
-				// extent: two registrations under one id would race to the scale.
-				if (fit !== undefined) {
+					// A fitted value axis is registered by its fit alone. The whole
+					// result's extent is not the window's (zoomed into a quiet stretch
+					// it is the burst's), and two registrations under one id would
+					// race to the scale.
 					if (valueAxis === 'x') xState = null;
 					else yState = null;
 				}
+				// At once only with the fit in hand: a fit that must be queried
+				// lands later, and springs like any other.
+				lands = (!fitted || fit !== undefined) && this.#rebinLands(valueState);
+				const catchUp = this.#instantFor;
+				if (lands) instantFor = (scale) => scale === valueState || catchUp(scale);
 			}
 
 			const domainResult = registerDataDerivedDomains(
@@ -1555,16 +1568,27 @@ export class MarkLifecycleV2 {
 			this.#dataDerivedDomainsSet = domainResult.dataDerivedDomainsSet;
 			this.#skipDomainUpdateForAxis = domainResult.skipDomainUpdateForAxis;
 
-			if (fit !== undefined && valueAxis && valueState) {
+			if (fitted && valueAxis && valueState) {
 				// The fit for this version is taken: drop a SQL fit still in flight
 				// (it is at the old bin step), skip this version's debounced refit,
 				// and let the driving-axis fit dedupe against this window.
 				++this.#fitDomainQuerySequence;
-				this.#fittedVersion = dv;
 				if (drivingTarget) this.#fitDomainLastTarget = drivingTarget;
-				if (fit) {
-					this.#applyFit(valueAxis, fit, drivingTarget, lands || this.#instantFor(valueState));
+				if (fit !== undefined) {
+					this.#fittedVersion = dv;
+					if (fit) {
+						this.#applyFit(valueAxis, fit, drivingTarget, lands || this.#instantFor(valueState));
+					}
+				} else if (!this.#transformCompiler.hasJSTransforms()) {
+					// The result cannot answer (its rows are not the dense layout, as
+					// past the dense row limit): ask the database now, not after the
+					// refit's debounce, since nothing registered the new unit.
+					this.#fittedVersion = dv;
+					const snap = this.#handle?.resultCause === 'catchUp';
+					void this.#issueFitDomainQuery(valueAxis, drivingTarget, true, snap);
 				}
+				// With JS transforms the fit reads the tooltip table, written after
+				// this result: its write refits (#onTooltipTableWritten).
 			}
 
 			markDeferredScalesReady(
@@ -2701,29 +2725,37 @@ export class MarkLifecycleV2 {
 	}
 
 	/**
-	 * Whether `data` is a rebin result: its first bin's width differs from the
-	 * last result's by more than a calendar unit's own wobble. A fact of the
-	 * result rather than a flag set when the rebin was asked for, which a
-	 * filter result landing in between could take.
+	 * Whether `data` is a rebin result: its first bin differs from the last
+	 * result's. A fact of the result rather than a flag set when the rebin was
+	 * asked for, which a filter result landing in between could take.
 	 *
-	 * The width, not the edges: a filter that empties the first bin of a
-	 * histogram without `dense()` moves its first row, not its step. Months
-	 * (28–31 days) and years (365–366) vary by at most 31/28 ≈ 1.11, and two
-	 * nice steps differ by at least 1.5 (10 → 15 min, 2 → 3 months), so
-	 * REBIN_WIDTH_RATIO between them tells the two apart.
+	 * In the dense layout (`binLayout`), the first row is the first padded bin
+	 * of the field's extent whatever a filter did, and the same bin expression
+	 * gives it the same bits: any change of its edges is a rebin, exactly. That
+	 * includes the steps a ratio misses: a user's `step`, which shift+scroll
+	 * scales by 3.5% a tick, and whole-unit intervals (10 → 9 days).
+	 *
+	 * Without that layout a filter that empties the first bin moves the first
+	 * row, so only its width is compared, by more than a calendar unit's own
+	 * wobble (months and years vary by at most 31/28 ≈ 1.11; automatic nice
+	 * steps differ by at least 1.5): REBIN_WIDTH_RATIO. A rebin of a user's
+	 * step there is missed, and takes the path of any other result.
 	 */
 	#takeBinStep(data: DataAccessor): boolean {
 		const axis = this.#binnedAxis();
 		if (!axis || data.length === 0) return false;
-		const lower = data.getColumn(`${axis}1`);
-		const upper = data.getColumn(`${axis}2`);
+		const lower = data.getColumn(`${axis}1`) as ArrayLike<number> | null;
+		const upper = data.getColumn(`${axis}2`) as ArrayLike<number> | null;
 		if (!lower || !upper) return false;
-		const width = Number(upper[0]) - Number(lower[0]);
+		const first = Number(lower[0]);
+		const width = Number(upper[0]) - first;
 		if (!(width > 0)) return false;
-		const last = this.#lastBinWidth;
-		this.#lastBinWidth = width;
-		if (last === 0) return false;
-		const ratio = width / last;
+		const dense = binLayout(lower, data.length) !== null;
+		const last = this.#lastBin;
+		this.#lastBin = { first, width, dense };
+		if (!last) return false;
+		if (dense && last.dense) return first !== last.first || width !== last.width;
+		const ratio = width / last.width;
 		return ratio > REBIN_WIDTH_RATIO || ratio < 1 / REBIN_WIDTH_RATIO;
 	}
 
@@ -2738,6 +2770,9 @@ export class MarkLifecycleV2 {
 	#rebinLands(scale: ContinuousScaleState): boolean {
 		if (scale.userDriven) return false;
 		if (this.#chartContext.shownElsewhere(scale)) return false;
+		// Guides (grid, axes, frame) are not entries: they follow the scale as it
+		// lands, and the snap is right for them. A guide registered as a mark
+		// entry would turn every rebin back into a spring.
 		return this.#chartContext.config.entries.size === 1;
 	}
 

@@ -3,11 +3,11 @@
  *
  * `dense()` gives a binned mark one row per bin per crossed key (a series),
  * ordered by facet, then by bin, then by key: row `(f·B + b)·S + s`. That
- * order is what lets a fit read only the bins in a window and, later, a
- * rebin map a new bin onto the old ones it overlaps. Both read the rows at
- * stride S, so both depend on the layout being exactly that, and row
- * correspondence has silently not held more than once upstream (see
- * `alignmentKey` in MorphedChannels). So it is checked, not assumed: anything
+ * order is what lets a fit read only the bins in a window (and, if the rebin
+ * morph is built, a rebin map a new bin onto the old ones it overlaps). Both
+ * read the rows at stride S, so both depend on the layout being exactly that,
+ * and row correspondence has silently not held more than once upstream (see
+ * `alignmentKey` in MorphedChannels). So it is checked at stride: anything
  * other than F facets of the same B ascending bins, S rows each, is null, and
  * the caller falls back to what it did without a layout.
  *
@@ -27,10 +27,11 @@ export interface BinLayout {
  * The layout of `rows` rows whose bin lower edges are `lower`, or null when
  * they are not F facets × B ascending bins × S rows per bin.
  *
- * A run of equal lower edges is one bin; its first and last rows are compared,
- * which suffices because the rows are sorted by edge. A facet starts where the
- * edge stops increasing, and every facet must repeat the first one's edges. A
- * NaN edge fails every comparison, so it is null too.
+ * A run of equal lower edges is one bin; only its first and last rows are
+ * compared. The rows between them are ASSUMED to hold the same edge, from the
+ * query's ORDER BY, not checked: checking them would read every row. A facet
+ * starts where the edge stops increasing, and every facet must repeat the
+ * first one's edges. A NaN edge fails every comparison, so it is null too.
  */
 export function binLayout(lower: ArrayLike<number>, rows: number): BinLayout | null {
 	if (rows <= 0 || lower.length < rows) return null;

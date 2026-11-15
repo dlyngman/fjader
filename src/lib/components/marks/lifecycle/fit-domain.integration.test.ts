@@ -12,7 +12,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import duckdb from 'duckdb';
 import { Query } from '@uwdata/mosaic-sql';
-import { binLayout } from '$lib/gpu/bin-remap';
+import { binLayout } from './bin-layout';
 import {
 	extentFromFitRow,
 	fitChannels,

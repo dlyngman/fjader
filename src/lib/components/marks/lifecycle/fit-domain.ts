@@ -15,7 +15,7 @@
  */
 
 import { cast, column, max, min, sql, type ExprValue, type FilterExpr } from '@uwdata/mosaic-sql';
-import type { BinLayout } from '$lib/gpu/bin-remap';
+import type { BinLayout } from './bin-layout';
 
 /**
  * The channels whose extent is the fit, for `axis`: the axis and its two
@@ -110,9 +110,10 @@ export function withBaseline(
  * every bin with no window. Null when nothing in the window has a finite
  * extent, as the SQL fit's empty answer.
  *
- * The edges are ascending at stride `series` within each facet (`binLayout`),
- * so the window's first and last bins are found by binary search and only
- * their runs are read: O(F·(log B + visible bins × S)) values. No allocation.
+ * The edges are ascending at stride `series`, and every facet repeats the
+ * first facet's bins (`binLayout`), so the window's first and last bins are
+ * found once, by binary search over the first facet, and only their runs are
+ * read in each: O(log B + F × visible bins × S) values. No allocation.
  */
 export function windowedFit(
 	lower: ArrayLike<number>,
@@ -123,32 +124,32 @@ export function windowedFit(
 ): [number, number] | null {
 	const { series, bins, facets } = layout;
 	const perFacet = bins * series;
+	let first = 0;
+	let last = bins - 1;
+	if (window) {
+		// First bin whose upper edge reaches the window's start.
+		let a = 0;
+		let b = bins;
+		while (a < b) {
+			const m = (a + b) >> 1;
+			if (upper[m * series] >= window[0]) b = m;
+			else a = m + 1;
+		}
+		first = a;
+		// Last bin whose lower edge does not pass the window's end.
+		a = -1;
+		b = bins - 1;
+		while (a < b) {
+			const m = (a + b + 1) >> 1;
+			if (lower[m * series] <= window[1]) a = m;
+			else b = m - 1;
+		}
+		last = a;
+	}
 	let lo = Infinity;
 	let hi = -Infinity;
 	for (let f = 0; f < facets; f++) {
 		const base = f * perFacet;
-		let first = 0;
-		let last = bins - 1;
-		if (window) {
-			// First bin whose upper edge reaches the window's start.
-			let a = 0;
-			let b = bins;
-			while (a < b) {
-				const m = (a + b) >> 1;
-				if (upper[base + m * series] >= window[0]) b = m;
-				else a = m + 1;
-			}
-			first = a;
-			// Last bin whose lower edge does not pass the window's end.
-			a = -1;
-			b = bins - 1;
-			while (a < b) {
-				const m = (a + b + 1) >> 1;
-				if (lower[base + m * series] <= window[1]) a = m;
-				else b = m - 1;
-			}
-			last = a;
-		}
 		const end = base + (last + 1) * series;
 		for (let c = 0; c < fitted.length; c++) {
 			const values = fitted[c];
