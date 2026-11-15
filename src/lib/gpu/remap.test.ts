@@ -1,0 +1,104 @@
+import { describe, it, expect } from 'vitest';
+import { buildBinRemap, type BinRemapSide } from './bin-remap';
+import { remapReference } from './RemapShader';
+import { binLayout } from '$lib/components/marks/lifecycle/bin-layout';
+
+/** A dense side: `edges` are the bins' bounds, each bin repeated per series and facet. */
+function side(edges: number[], series = 1, facets = 1, ids?: number[][]): BinRemapSide {
+	const lower: number[] = [];
+	const upper: number[] = [];
+	for (let f = 0; f < facets; f++) {
+		for (let b = 0; b + 1 < edges.length; b++) {
+			for (let s = 0; s < series; s++) {
+				lower.push(edges[b]);
+				upper.push(edges[b + 1]);
+			}
+		}
+	}
+	const lo = Float32Array.from(lower);
+	const layout = binLayout(lo, lo.length)!;
+	// Default ids: the series index in every run, the facet index per facet.
+	const seriesIds = Float32Array.from(lo, (_, j) => j % series);
+	const facetIds = Float32Array.from(lo, (_, j) => Math.floor(j / ((edges.length - 1) * series)));
+	return {
+		lower: lo,
+		upper: Float32Array.from(upper),
+		layout,
+		ids: ids?.map((c) => Float32Array.from(c)) ?? [seriesIds, facetIds]
+	};
+}
+
+const linear = (min: number, max: number) => [min, max, 1 / (max - min), 0];
+const SAME = linear(0, 100);
+
+/** The new rows' starting values, no scale change. */
+function remap(prev: BinRemapSide, next: BinRemapSide, old: number[], to: number[]): number[] {
+	const map = buildBinRemap(prev, next)!;
+	const out = new Float32Array(to.length);
+	return Array.from(remapReference('linear', old, to, map, SAME, SAME, to.length, out));
+}
+
+describe('the bins remap', () => {
+	it('starts a split’s children at their parent’s value', () => {
+		const from = remap(side([0, 10, 20]), side([0, 5, 10, 15, 20]), [8, 4], [3, 5, 1, 3]);
+		expect(from).toEqual([8, 8, 4, 4]);
+	});
+
+	it('starts a merge at its children’s mean', () => {
+		const from = remap(side([0, 5, 10, 15, 20]), side([0, 10, 20]), [2, 6, 1, 3], [8, 4]);
+		expect(from).toEqual([4, 2]);
+	});
+
+	it('blends the months a week spans, by overlap', () => {
+		// Months of 31 and 28 days; a week from day 28 to 35 spans both.
+		const from = remap(side([0, 31, 59]), side([28, 35]), [7, 14], [0]);
+		expect(from[0]).toBeCloseTo((3 / 7) * 7 + (4 / 7) * 14, 5);
+	});
+
+	it('starts the part of a new bin no old bin covers at its own value', () => {
+		// The new extent reaches 10 past the old one's end.
+		const from = remap(side([0, 10]), side([0, 10, 20]), [6], [5, 9]);
+		expect(from).toEqual([6, 9]);
+		const half = remap(side([0, 10]), side([0, 20]), [6], [8]);
+		expect(half[0]).toBeCloseTo(0.5 * 6 + 0.5 * 8, 5);
+	});
+
+	it('keeps each row to its own series and facet', () => {
+		// Two series, two facets; old values encode facet, bin and series.
+		const prev = side([0, 10, 20], 2, 2);
+		const next = side([0, 5, 10, 15, 20], 2, 2);
+		const old = [0, 1, 10, 11, 100, 101, 110, 111]; // f*100 + b*10 + s
+		const from = remap(prev, next, old, new Array(16).fill(0));
+		expect(from).toEqual([0, 1, 0, 1, 10, 11, 10, 11, 100, 101, 100, 101, 110, 111, 110, 111]);
+	});
+
+	it('refuses rows that do not correspond: another series set or order, other facets', () => {
+		expect(buildBinRemap(side([0, 10]), side([0, 5, 10], 2))).toBeNull();
+		expect(buildBinRemap(side([0, 10], 1, 1), side([0, 5, 10], 1, 2))).toBeNull();
+		const prev = side([0, 10], 2, 1, [[3, 7]]);
+		const swapped = side([0, 5, 10], 2, 1, [[7, 3, 7, 3]]);
+		expect(buildBinRemap(prev, swapped)).toBeNull();
+	});
+
+	it('holds the old pixels through a snap of the domain: children of a halved domain start at half', () => {
+		const map = buildBinRemap(side([0, 10, 20]), side([0, 5, 10, 15, 20]))!;
+		const out = new Float32Array(4);
+		// Drawn under [0, 100], now under [0, 50]: the same pixel is half the value.
+		remapReference('linear', [80, 40], [0, 0, 0, 0], map, linear(0, 100), linear(0, 50), 4, out);
+		expect(Array.from(out)).toEqual([40, 40, 20, 20]);
+	});
+
+	it('leaves a binding on no scale untransformed (an Other share)', () => {
+		const map = buildBinRemap(side([0, 10]), side([0, 5, 10]))!;
+		const out = new Float32Array(2);
+		remapReference('none', [0.25], [0, 0], map, linear(0, 100), linear(0, 50), 2, out);
+		expect(Array.from(out)).toEqual([0.25, 0.25]);
+	});
+
+	it('makes a row NaN when an old value is, so the resolve lands it', () => {
+		const map = buildBinRemap(side([0, 10]), side([0, 5, 10]))!;
+		const out = new Float32Array(2);
+		remapReference('linear', [NaN], [1, 2], map, SAME, SAME, 2, out);
+		expect(Number.isNaN(out[0])).toBe(true);
+	});
+});

@@ -4,6 +4,7 @@ import { TransitionClock, type ClockLoop } from '$lib/animation/TransitionClock'
 import { immediatesSupported } from './immediates';
 import { FOLD_IMMEDIATE_SIZE, foldPipelineFor } from './FoldShader';
 import { foldScaleKind, type FoldScaleKind } from './ScaleNormalize';
+import { remapPipelineFor, type RemapKind } from './RemapShader';
 
 /**
  * Channels of one mark that morph between data updates rather than replacing
@@ -122,6 +123,12 @@ interface Channel {
 	foldBindGroup: GPUBindGroup | null;
 	/** The kind `foldBindGroup` was made for: each kind has its own layout. */
 	foldBindGroupKind: FoldScaleKind | null;
+	/**
+	 * A pending remap reads this channel's old rows from here: its `resolved`
+	 * as last drawn (a buffer kept through a reallocation, or the current one).
+	 * Null without a remap, or for a channel with nothing on screen (it snaps).
+	 */
+	remapSource: GPUBuffer | null;
 }
 
 /**
@@ -163,6 +170,20 @@ export class MorphedChannels {
 	#registered = false;
 
 	#alignmentKey: number | null = null;
+
+	/**
+	 * A pending remap's map buffer (bin-remap.ts): set by a rebin write, read
+	 * by the next encode's remap dispatches, then retired. Each channel's old
+	 * rows are its `remapSource`.
+	 */
+	#remap: GPUBuffer | null = null;
+	/**
+	 * Buffers a remap has read (its map, a source kept through a
+	 * reallocation), destroyed at the start of the next encode: by then the
+	 * frame that read them has been submitted, and destroying a buffer in use
+	 * by submitted work is allowed, where one only recorded is not.
+	 */
+	#retired: GPUBuffer[] = [];
 
 	/** The next dispatch starts from `to`. */
 	#snapPending = false;
@@ -240,28 +261,20 @@ export class MorphedChannels {
 	write(
 		rowIds: ArrayLike<number>,
 		channels: readonly (readonly [number, AllowSharedBufferSource])[],
-		land: readonly number[] | 'all' = NO_BINDINGS
+		land: readonly number[] | 'all' = NO_BINDINGS,
+		/**
+		 * For a write whose row set is a rebin of the one on screen: the map
+		 * from the old bins to the new (`buildBinRemap`). The new rows then
+		 * start where the old ones they cover were drawn, and travel, rather
+		 * than snap. Ignored when the row set did not change.
+		 */
+		remap: Uint32Array | null = null
 	): boolean {
 		const key = alignmentKey(rowIds);
 		let travels = this.#alignmentKey === key;
+		const hadRows = this.#alignmentKey !== null;
 		this.#alignmentKey = key;
 
-		let reallocated = false;
-		for (const [binding, data] of channels) {
-			let channel = this.#channels.get(binding);
-			if (!channel || channel.size < data.byteLength) {
-				channel = this.#allocate(binding, data.byteLength, channel);
-				reallocated = true;
-			}
-			channel.count = data.byteLength >> 2;
-			channel.land = land === 'all' || land.includes(binding);
-			this.#device.queue.writeBuffer(channel.to, 0, data as ArrayBufferView<ArrayBuffer>);
-		}
-		// A fresh buffer holds nothing that was ever on screen, so there is
-		// nothing to fold from — including when only one channel grew.
-		if (reallocated) travels = false;
-
-		this.#dirty = true;
 		// Every channel landing travels nothing, so it starts no transition: on
 		// a shared band clock a restart would set every sibling folding for a
 		// transition with nowhere to go.
@@ -277,11 +290,66 @@ export class MorphedChannels {
 				}
 			}
 		}
-		if (travels && !allLand) this.#startTransition();
-		else if (!travels) this.#snapPending = true;
+
+		// A rebin: the new rows start from the old ones on screen, through the
+		// map. Only from rows that were drawn and with nothing pending: a
+		// second rebin before the first one ran maps from a layout `resolved`
+		// never held, so it snaps (and the pending remap is dropped).
+		let remapping = false;
+		if (!travels && remap && !allLand && hadRows) {
+			if (this.#remap) this.#retireRemap();
+			else remapping = true;
+		} else if (!travels && this.#remap) {
+			this.#retireRemap();
+		}
+
+		let reallocated = false;
+		for (const [binding, data] of channels) {
+			let channel = this.#channels.get(binding);
+			// The buffer a remap reads the old rows from: this channel's
+			// resolved, kept alive through a reallocation until it has run.
+			const source = remapping ? (channel?.resolved ?? null) : null;
+			if (!channel || channel.size < data.byteLength) {
+				channel = this.#allocate(binding, data.byteLength, channel, source !== null);
+				reallocated = true;
+			}
+			channel.count = data.byteLength >> 2;
+			channel.land = land === 'all' || land.includes(binding);
+			if (remapping) channel.remapSource = source;
+			this.#device.queue.writeBuffer(channel.to, 0, data as ArrayBufferView<ArrayBuffer>);
+		}
+		// A fresh buffer holds nothing that was ever on screen, so there is
+		// nothing to fold from — including when only one channel grew. A remap
+		// reads the old rows from the buffer it kept, so it still travels.
+		if (reallocated && !remapping) travels = false;
+
+		if (remapping) {
+			const map = this.#device.createBuffer({
+				size: Math.max(16, remap!.byteLength),
+				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+				label: `${this.#label}-remap`
+			});
+			this.#device.queue.writeBuffer(map, 0, remap as Uint32Array<ArrayBuffer>);
+			this.#remap = map;
+		}
+
+		this.#dirty = true;
+		if (remapping) {
+			this.#startTransition();
+		} else if (travels && this.#remap) {
+			// Absorbed: a pending remap takes an aligned write along (the same
+			// new rows); its transition carries the new `to`. Not a fold:
+			// `resolved` is still in the old layout.
+		} else if (travels && !allLand) {
+			this.#startTransition();
+		} else if (!travels) {
+			this.#snapPending = true;
+		}
 		if (transitionsObserved()) {
-			// Snaps when the row set changed or a buffer grew, or every channel lands.
-			noteTransition('morph', !travels || allLand, this.#affectedCharts, this.#label);
+			// Snaps when the row set changed with no map, a buffer grew, or every
+			// channel lands. A remapped rebin travels.
+			const lands = remapping ? false : !travels || allLand;
+			noteTransition('morph', lands, this.#affectedCharts, this.#label);
 		}
 
 		if (!this.#registered) {
@@ -322,10 +390,15 @@ export class MorphedChannels {
 		const channels = this.#channelList;
 		if (channels.length === 0) return;
 
+		// What a remap read last frame: that frame has been submitted since.
+		if (this.#retired.length > 0) this.#destroyRetired();
+
 		// Scale snaps first: a fold restarts the clock, which the read below
 		// then sees, and its plain fold must not copy over the folded `from`.
+		// A pending remap transforms its channels itself, from what they drew.
 		const snap = this.#snapPending;
-		if (this.#takeScaleSnaps(snap)) {
+		const remap = this.#remap;
+		if (this.#takeScaleSnaps(snap, remap !== null)) {
 			this.#startTransition();
 			// Every other channel folds from where it is too, explicitly. The
 			// clock read below may not report a restart: a mark that never had a
@@ -346,13 +419,23 @@ export class MorphedChannels {
 		if (!snap && !this.#foldPending && !this.#dirty && resolveT === this.#resolvedT) return;
 
 		let folds = false;
+		let remaps = false;
 		for (let i = 0; i < channels.length; i++) {
 			const channel = channels[i];
-			if (snap || channel.land) {
+			if (snap || channel.land || (remap && !channel.remapSource)) {
 				// A landed channel: from = to, so the mix is its new value at any t.
+				// So is a rebin's channel with no old rows on screen.
 				encoder.copyBufferToBuffer(channel.to, 0, channel.from, 0, channel.size);
 				channel.land = false;
 				channel.fold = null;
+				if (channel.remapSource && channel.remapSource !== channel.resolved) {
+					this.#retired.push(channel.remapSource);
+				}
+				channel.remapSource = null;
+			} else if (remap) {
+				// A rebin: `from` is the old rows on screen, mapped onto the new
+				// bins, written by the remap dispatch in the pass below.
+				remaps = true;
 			} else if (channel.fold) {
 				// Its scale snapped: `from` is what is on screen, re-expressed in the
 				// new domain, written by the fold dispatch in the pass below.
@@ -370,8 +453,10 @@ export class MorphedChannels {
 		this.#resolvedT = resolveT;
 
 		const pass = encoder.beginComputePass(this.#passDescriptor);
-		// Folds before resolves: each writes a `from` the resolve below reads.
-		// Dispatches in one pass see each other's writes, in order.
+		// Remaps and folds before resolves: each writes a `from` the resolve
+		// below reads. Dispatches in one pass see each other's writes, in order.
+		if (remaps) this.#encodeRemaps(pass, remap!);
+		else if (remap) this.#retireRemap();
 		if (folds) this.#encodeFolds(pass);
 
 		const { pipeline, layout } = resolvePipelineFor(this.#device);
@@ -409,7 +494,7 @@ export class MorphedChannels {
 	 * used up, and the return to view (its first frame seen) keeps nothing.
 	 * Returns whether any channel folds.
 	 */
-	#takeScaleSnaps(snap: boolean): boolean {
+	#takeScaleSnaps(snap: boolean, remapping: boolean): boolean {
 		const scaleFor = this.#scaleFor;
 		if (!scaleFor) return false;
 		const channels = this.#channelList;
@@ -447,6 +532,11 @@ export class MorphedChannels {
 			current[3] = g.p4;
 			const snapped = channel.drawnSet && scale.snapCount !== channel.snapSeen;
 			channel.snapSeen = scale.snapCount;
+			if (remapping && channel.remapSource && channel.drawnSet) {
+				// The remap transforms from what was drawn, whether or not the
+				// scale snapped too; #encodeRemaps takes `drawn` and moves it on.
+				continue;
+			}
 			if (snapped && !snap && !channel.land && (onScreen ??= this.#onScreen())) {
 				// `drawn` still holds last frame's params; #encodeFolds takes it.
 				channel.fold = kind;
@@ -457,6 +547,60 @@ export class MorphedChannels {
 			}
 		}
 		return any;
+	}
+
+	/**
+	 * The remap dispatches, one per channel with old rows: `from` takes the old
+	 * rows on screen, mapped onto the new bins (RemapShader), each transformed
+	 * from the params it was drawn with to this frame's (none for a binding on
+	 * no scale, or one never drawn). Then the map and any source kept through
+	 * a reallocation are retired.
+	 */
+	#encodeRemaps(pass: GPUComputePassEncoder, map: GPUBuffer): void {
+		const channels = this.#channelList;
+		const view = this.#foldImmediatesView;
+		for (let i = 0; i < channels.length; i++) {
+			const channel = channels[i];
+			const source = channel.remapSource;
+			if (!source) continue;
+			channel.remapSource = null;
+			const scaleKind = channel.scale ? foldScaleKind(channel.scale.scaleType) : null;
+			const kind: RemapKind = channel.drawnSet && scaleKind ? scaleKind : 'none';
+			if (channel.count > 0) {
+				const { pipeline, layout } = remapPipelineFor(this.#device, kind);
+				pass.setPipeline(pipeline);
+				// Per remap: the old buffer is a different one each rebin.
+				const bindGroup = this.#device.createBindGroup({
+					layout,
+					entries: [
+						{ binding: 0, resource: { buffer: source } },
+						{ binding: 1, resource: { buffer: channel.to } },
+						{ binding: 2, resource: { buffer: channel.from } },
+						{ binding: 3, resource: { buffer: map } }
+					]
+				});
+				view.setUint32(0, channel.count, true);
+				for (let k = 0; k < 4; k++) {
+					view.setFloat32(16 + 4 * k, channel.drawn[k], true);
+					view.setFloat32(32 + 4 * k, channel.current[k], true);
+				}
+				pass.setImmediates(0, this.#foldImmediates);
+				pass.setBindGroup(0, bindGroup);
+				pass.dispatchWorkgroups(Math.ceil(channel.count / RESOLVE_WORKGROUP));
+			}
+			if (channel.scale) {
+				channel.drawn.set(channel.current);
+				channel.drawnSet = true;
+			}
+			if (source !== channel.resolved) this.#retired.push(source);
+		}
+		this.#retired.push(map);
+		this.#remap = null;
+	}
+
+	#destroyRetired(): void {
+		for (let i = 0; i < this.#retired.length; i++) this.#retired[i].destroy();
+		this.#retired.length = 0;
 	}
 
 	/** Whether any of the mark's charts is drawn this frame (the host's draw list). */
@@ -523,13 +667,40 @@ export class MorphedChannels {
 		}
 		this.#ownClock?.stop();
 		this.#ownClock = null;
+		this.#retireRemap();
+		this.#destroyRetired();
 		for (const channel of this.#channelList) this.#destroyChannel(channel);
 		this.#channels.clear();
 		this.#channelList = [];
 	}
 
-	#allocate(binding: number, required: number, previous: Channel | undefined): Channel {
-		if (previous) this.#destroyChannel(previous);
+	/**
+	 * Drop a pending remap that will not run (another rebin came first): its
+	 * map and the sources it kept go, after this frame like any it read.
+	 */
+	#retireRemap(): void {
+		if (this.#remap) this.#retired.push(this.#remap);
+		this.#remap = null;
+		for (const channel of this.#channelList) {
+			if (channel.remapSource && channel.remapSource !== channel.resolved) {
+				this.#retired.push(channel.remapSource);
+			}
+			channel.remapSource = null;
+		}
+	}
+
+	#allocate(
+		binding: number,
+		required: number,
+		previous: Channel | undefined,
+		/** Keep the old `resolved`: a remap reads the old rows from it. */
+		keepResolved = false
+	): Channel {
+		if (previous) {
+			previous.from.destroy();
+			previous.to.destroy();
+			if (!keepResolved) previous.resolved.destroy();
+		}
 
 		const BLOCK = 256;
 		const size = (Math.ceil(Math.ceil(required * 1.5) / BLOCK) * BLOCK + 3) & ~3;
@@ -554,8 +725,18 @@ export class MorphedChannels {
 			current: new Float32Array(4),
 			scale: null,
 			foldBindGroup: null,
-			foldBindGroupKind: null
+			foldBindGroupKind: null,
+			remapSource: null
 		};
+		// What was drawn describes the screen, not the buffers: a reallocated
+		// channel keeps it, which a remap's transform reads (most zoom-in rebins
+		// reallocate).
+		if (previous) {
+			channel.drawn.set(previous.drawn);
+			channel.drawnSet = previous.drawnSet;
+			channel.snapSeen = previous.snapSeen;
+			channel.scale = previous.scale;
+		}
 		this.#channels.set(binding, channel);
 		this.#channelList = [...this.#channels.values()];
 		return channel;
