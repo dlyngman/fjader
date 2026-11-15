@@ -55,6 +55,11 @@ export interface QueryParts {
 	 * histogram to every bin; preagg reads copy them, so both paths pad alike.
 	 */
 	bins?: Record<string, BinPadding> | null;
+	/**
+	 * `bins` as one comparable string (`binSpecKey`), built once with the parts:
+	 * a result's rebin test compares it with the last result's, per result.
+	 */
+	binKey?: string | null;
 	/** The query reads a preagg table that already holds its padding rows. */
 	padded?: boolean;
 	orderChannels: string[] | null;

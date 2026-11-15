@@ -99,6 +99,7 @@ import {
 	withBaseline
 } from './fit-domain';
 import { binLayout } from './bin-layout';
+import { binSpecKey, isRebin } from './rebin';
 import {
 	buildQueryParts,
 	assembleQuery,
@@ -335,6 +336,8 @@ export class MarkLifecycleV2 {
 		const nullDrops = this.#nullDrops(semanticSelect, resolvedSelect);
 		if (nullDrops.length > 0) parts.nullDrops = nullDrops;
 		parts.bins = this.#binPadding();
+		// Once per parts, not per result: each result compares it (#takeBinStep).
+		parts.binKey = binSpecKey(parts.bins);
 
 		return parts;
 	});
@@ -2719,24 +2722,18 @@ export class MarkLifecycleV2 {
 
 	/**
 	 * Whether the current result is a rebin result: computed from other bins
-	 * than the last one. A fact of the result rather than a flag set when the
-	 * rebin was asked for, which a filter result landing in between could take.
-	 *
-	 * Read from the parts the result was computed from (the handle's
-	 * `resultParts`, stamped by the query that produced it): their bin spec,
-	 * `parts.bins`, is what each bin channel resolves to (its interval or
-	 * alpha, count and origin), set whether or not `dense()` padded the rows.
-	 * So it is exact for automatic nice steps, a user's `step` (shift+scroll
-	 * scales it by 3.5% a tick), whole-unit intervals and months alike, and a
-	 * filter, which changes the rows but not the bins, never reads as a rebin.
+	 * than the last one (see rebin.ts). A fact of the result rather than a flag
+	 * set when the rebin was asked for, which a filter result landing in
+	 * between could take. Read from the parts the result was computed from (the
+	 * handle's `resultParts`, stamped by the query that produced it), whose
+	 * `binKey` was built with them: a string compare per result.
 	 */
 	#takeBinStep(): boolean {
 		if (!this.#binnedAxis()) return false;
-		const bins = this.#handle?.resultParts?.bins;
-		const key = bins ? JSON.stringify(bins) : null;
+		const key = this.#handle?.resultParts?.binKey ?? null;
 		const last = this.#lastBinSpec;
 		this.#lastBinSpec = key;
-		return key !== null && last !== null && key !== last;
+		return isRebin(last, key);
 	}
 
 	/**
