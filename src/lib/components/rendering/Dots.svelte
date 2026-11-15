@@ -286,11 +286,15 @@
 	// Radius is deliberately left static. It is a quantity, so it could morph,
 	// but whether a dot should resize on the same clock as it travels is a
 	// design question rather than a consequence of this one.
+	// The morphed channel is measured on the value axis: a folding snap of
+	// that scale holds it on its pixels (MorphedChannels).
+	const SCALED_Y = [BINDINGS.Y];
+	const SCALED_X = [BINDINGS.X];
 	$effect(() => {
 		if (!renderer?.resourcesCreated || !bandAxis) return;
 		const land = landsNow() ? 'all' : undefined;
-		if (bandAxis === 'x') renderer.writeMorphed('x', xData, [[BINDINGS.Y, yData]], land);
-		else renderer.writeMorphed('y', yData, [[BINDINGS.X, xData]], land);
+		if (bandAxis === 'x') renderer.writeMorphed('x', xData, [[BINDINGS.Y, yData]], land, SCALED_Y);
+		else renderer.writeMorphed('y', yData, [[BINDINGS.X, xData]], land, SCALED_X);
 	});
 	$effect(() => {
 		if (renderer?.resourcesCreated && !morphX) renderer.writeAttribute(BINDINGS.X, xData);

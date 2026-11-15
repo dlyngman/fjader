@@ -1565,23 +1565,30 @@ export class MarkLifecycleV2 {
 				if (lands) instantFor = (scale) => scale === valueState || catchUp(scale);
 			}
 
-			const domainResult = registerDataDerivedDomains(
-				data,
-				this.#channelsNeedingDataDomain,
-				additionalChannels,
-				skipAxis,
-				this.#config.zeroBaseline,
-				this.actualXScaleType,
-				this.actualYScaleType,
-				xState,
-				yState,
-				this.#bandDomainFromData,
-				this.#bandScaleForDomain('x'),
-				this.#bandScaleForDomain('y'),
-				this.#markId,
-				instantFor,
-				this.#colorScaleState
-			);
+			let domainResult!: ReturnType<typeof registerDataDerivedDomains>;
+			const register = () => {
+				domainResult = registerDataDerivedDomains(
+					data,
+					this.#channelsNeedingDataDomain,
+					additionalChannels,
+					skipAxis,
+					this.#config.zeroBaseline,
+					this.actualXScaleType,
+					this.actualYScaleType,
+					xState,
+					yState,
+					this.#bandDomainFromData,
+					this.#bandScaleForDomain('x'),
+					this.#bandScaleForDomain('y'),
+					this.#markId,
+					instantFor,
+					this.#colorScaleState
+				);
+			};
+			// A rebin's snap folds: the morphing marks on the value axis hold
+			// their pixels through the change of unit, then glide.
+			if (lands && valueState) valueState.folding(register);
+			else register();
 			this.#dataDerivedDomainsSet = domainResult.dataDerivedDomainsSet;
 			this.#skipDomainUpdateForAxis = domainResult.skipDomainUpdateForAxis;
 
@@ -1594,7 +1601,10 @@ export class MarkLifecycleV2 {
 				if (fit !== undefined) {
 					this.#fittedVersion = dv;
 					if (fit) {
-						this.#applyFit(valueAxis, fit, drivingTarget, lands || this.#instantFor(valueState));
+						const apply = () =>
+							this.#applyFit(valueAxis, fit, drivingTarget, lands || this.#instantFor(valueState));
+						if (lands) valueState.folding(apply);
+						else apply();
 					}
 				} else if (!this.#transformCompiler.hasJSTransforms()) {
 					// The result cannot answer (its rows are not the dense layout, as
