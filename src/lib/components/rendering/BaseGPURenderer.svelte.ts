@@ -1,7 +1,7 @@
 import { UNIFORM_STAND_IN_BYTES } from './uniform-sizes';
 import type { GPUCoordinator, DataBindingEntry, LayerRegistrationResult } from '$lib/gpu';
 import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
-import { MorphedChannels, type ClockHost } from '$lib/gpu/MorphedChannels';
+import { MorphedChannels, type ClockHost, type FoldScale } from '$lib/gpu/MorphedChannels';
 
 export interface RendererOptions {
 	zIndex?: number;
@@ -20,6 +20,9 @@ export interface InitConfig {
 
 /** Warned once per page, not per mark. */
 let warnedMorphUnsupported = false;
+
+/** writeMorphed's `scaled` when nothing is: no binding folds. */
+const NO_SCALED: readonly number[] = [];
 
 export class BaseGPURenderer {
 	// Core properties
@@ -49,6 +52,8 @@ export class BaseGPURenderer {
 	#morphed: MorphedChannels | null = null;
 	/** The band axis of the last morphed write — whose scale's clock they adopt. */
 	#morphAxis: 'x' | 'y' | null = null;
+	/** The morphed bindings measured on the value axis (writeMorphed's `scaled`). */
+	#scaledBindings: readonly number[] = NO_SCALED;
 
 	// State management
 	#resourcesCreated = $state(false);
@@ -313,7 +318,13 @@ export class BaseGPURenderer {
 		bandIds: ArrayLike<number>,
 		channels: readonly (readonly [number, AllowSharedBufferSource])[],
 		/** Bindings that land at once rather than travel (see MorphedChannels.write). */
-		land?: readonly number[] | 'all'
+		land?: readonly number[] | 'all',
+		/**
+		 * Bindings whose values are measured on the value axis (the one that is
+		 * not `bandAxis`): a folding snap of that scale folds them, so they hold
+		 * their pixels and glide. Not a band id or an Other share.
+		 */
+		scaled: readonly number[] = NO_SCALED
 	): void {
 		if (!this.#device) return;
 
@@ -344,8 +355,22 @@ export class BaseGPURenderer {
 				const slots = (scale as { slots?: Partial<ClockHost> } | null)?.slots;
 				return slots?.clock && slots.startTransition ? (slots as ClockHost) : null;
 			},
-			affectedCharts: () => this.#chartsToRedraw()
+			affectedCharts: () => this.#chartsToRedraw(),
+			// The value axis's scale, for the bindings measured on it. Runs on
+			// every encode: an array scan of two, no allocation.
+			scaleFor: (binding) => {
+				if (!this.#scaledBindings.includes(binding)) return null;
+				const axis = this.#morphAxis;
+				const scale =
+					axis === 'x'
+						? this.#chartContext.yScaleState
+						: axis === 'y'
+							? this.#chartContext.xScaleState
+							: null;
+				return (scale as FoldScale | null) ?? null;
+			}
 		});
+		this.#scaledBindings = scaled;
 
 		// A binding that was static until now gives up its buffer; the morphed
 		// channel's resolved buffer takes its place in the bind group.

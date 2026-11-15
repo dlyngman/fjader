@@ -52,6 +52,7 @@ import {
 } from './SizeScaleShaderLib';
 import { NO_GROUP } from './identity-slot-packing';
 import { isNanExpr } from './NanShaderLib';
+import { normalizeExpr } from './ScaleNormalize';
 import { DEFAULT_INACTIVE_OPACITY } from '$lib/scales/ActivityTable';
 
 /**
@@ -78,12 +79,9 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
 
 		implementation: (suffix, axis) => `
       fn scaleLinear${suffix}From(value: f32, scale: ScaleParam) -> f32 {
-        // ★ Use generic field names
-        let domainMin = scale.p1;
-        let domainScale = scale.p3;
-        
-        let normalized = (value - domainMin) * domainScale;
-        
+        // The domain step shared with the fold (ScaleNormalize).
+        let normalized = ${normalizeExpr('linear', 'value', 'scale')};
+
         let rangeMin = frameUniforms.rangeMin.${axis};
         let rangeMax = frameUniforms.rangeMax.${axis};
         let rangeSize = rangeMax - rangeMin;
@@ -124,11 +122,8 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
 
 		implementation: (suffix, axis) => `
       fn scaleLog${suffix}From(value: f32, scale: ScaleParam) -> f32 {
-        let logDomainMin = scale.p1;
-        let logDomainScale = scale.p3;
-
-        let logValue = log(max(value, 1e-38));
-        let normalized = (logValue - logDomainMin) * logDomainScale;
+        // The domain step shared with the fold (ScaleNormalize).
+        let normalized = ${normalizeExpr('log', 'value', 'scale')};
 
         let rangeMin = frameUniforms.rangeMin.${axis};
         let rangeMax = frameUniforms.rangeMax.${axis};
@@ -163,17 +158,9 @@ const SCALE_FRAGMENTS: Record<string, ScaleFragment> = {
 		functionCall: (value, suffix) => `scaleSymlog${suffix}(${value})`,
 
 		implementation: (suffix, axis) => `
-      fn symlogTransform${suffix}(value: f32, constant: f32) -> f32 {
-        return sign(value) * log(1.0 + abs(value / constant));
-      }
-
       fn scaleSymlog${suffix}From(value: f32, scale: ScaleParam) -> f32 {
-        let symlogMin = scale.p1;
-        let symlogScale = scale.p3;
-        let constant = scale.p4;
-
-        let transformed = symlogTransform${suffix}(value, constant);
-        let normalized = (transformed - symlogMin) * symlogScale;
+        // The domain step shared with the fold (ScaleNormalize).
+        let normalized = ${normalizeExpr('symlog', 'value', 'scale')};
 
         let rangeMin = frameUniforms.rangeMin.${axis};
         let rangeMax = frameUniforms.rangeMax.${axis};

@@ -2,6 +2,8 @@ import { noteTransition, transitionsObserved } from '$lib/animation/transition-l
 import { RESOLVE_IMMEDIATE_SIZE, RESOLVE_WORKGROUP, resolvePipelineFor } from './ResolveShader';
 import { TransitionClock, type ClockLoop } from '$lib/animation/TransitionClock';
 import { immediatesSupported } from './immediates';
+import { FOLD_IMMEDIATE_SIZE, foldPipelineFor } from './FoldShader';
+import { foldScaleKind, type FoldScaleKind } from './ScaleNormalize';
 
 /**
  * Channels of one mark that morph between data updates rather than replacing
@@ -41,6 +43,28 @@ const NO_BINDINGS: readonly number[] = [];
 export interface MorphHost extends ClockLoop {
 	registerComputeWork(key: string, fn: (encoder: GPUCommandEncoder) => void): void;
 	removeComputeWork(key: string): void;
+	/**
+	 * Whether a chart is in this frame's draw list. A mark whose charts are
+	 * not records what it would fold from but does not fold: nobody sees it.
+	 * Absent: every chart counts as drawn.
+	 */
+	chartDrawnThisFrame?(chartId: string): boolean;
+}
+
+/**
+ * The scale a morphing channel's values are measured on, as a fold reads it:
+ * its params as the shaders read them (`gpuState`, packed as
+ * `#writeScaleParam` packs them) and the count of its folding snaps.
+ */
+export interface FoldScale {
+	readonly snapCount: number;
+	readonly gpuState: {
+		readonly domainMin: number;
+		readonly domainMax: number;
+		readonly domainScale: number;
+		readonly p4: number;
+	};
+	readonly scaleType?: string;
 }
 
 /** A scale's slots, when they own a data-transition clock marks can adopt. */
@@ -61,9 +85,16 @@ export interface MorphedChannelsOptions {
 	clockHost(): ClockHost | null;
 	/** Charts to redraw while this mark's OWN clock runs. */
 	affectedCharts(): string[];
+	/**
+	 * The scale a binding's values are measured on, or null for one that is
+	 * not (a band id, an Other share). Asked on every encode, like `clockHost`.
+	 * Absent: no binding folds.
+	 */
+	scaleFor?(binding: number): FoldScale | null;
 }
 
 interface Channel {
+	binding: number;
 	from: GPUBuffer;
 	to: GPUBuffer;
 	resolved: GPUBuffer;
@@ -74,6 +105,23 @@ interface Channel {
 	bindGroup: GPUBindGroup | null;
 	/** Written to land at once rather than travel: `from` takes `to` at the next encode. */
 	land: boolean;
+	/**
+	 * The params of this channel's scale at its last encode: what its values
+	 * were drawn with. Packed as the shaders read them. Valid once `drawnSet`.
+	 */
+	drawn: Float32Array;
+	drawnSet: boolean;
+	/** The scale's `snapCount` at the last encode. */
+	snapSeen: number;
+	/** This encode folds the channel through the scale's snap, into `current`. */
+	fold: FoldScaleKind | null;
+	/** The scale's params as this frame draws them. */
+	current: Float32Array;
+	/** The scale `drawn` and `snapSeen` belong to. */
+	scale: FoldScale | null;
+	foldBindGroup: GPUBindGroup | null;
+	/** The kind `foldBindGroup` was made for: each kind has its own layout. */
+	foldBindGroupKind: FoldScaleKind | null;
 }
 
 /**
@@ -104,6 +152,7 @@ export class MorphedChannels {
 	#label: string;
 	#clockHostFor: () => ClockHost | null;
 	#affectedCharts: () => string[];
+	#scaleFor: ((binding: number) => FoldScale | null) | null;
 
 	#channels = new Map<number, Channel>();
 	/**
@@ -142,6 +191,9 @@ export class MorphedChannels {
 	/** `count`, `t`, `offset`. A channel owns its buffers, so `offset` stays 0. */
 	#immediates = new ArrayBuffer(RESOLVE_IMMEDIATE_SIZE);
 	#immediatesView = new DataView(this.#immediates);
+	/** The fold's: `count`, then the drawn and current params (FoldShader). */
+	#foldImmediates = new ArrayBuffer(FOLD_IMMEDIATE_SIZE);
+	#foldImmediatesView = new DataView(this.#foldImmediates);
 
 	/**
 	 * Whether this browser can run the resolve kernel at all.
@@ -163,6 +215,7 @@ export class MorphedChannels {
 		this.#label = options.label;
 		this.#clockHostFor = options.clockHost;
 		this.#affectedCharts = options.affectedCharts;
+		this.#scaleFor = options.scaleFor ?? null;
 		this.#passDescriptor = { label: `${options.label}-resolve` };
 	}
 
@@ -269,20 +322,41 @@ export class MorphedChannels {
 		const channels = this.#channelList;
 		if (channels.length === 0) return;
 
+		// Scale snaps first: a fold restarts the clock, which the read below
+		// then sees, and its plain fold must not copy over the folded `from`.
+		const snap = this.#snapPending;
+		if (this.#takeScaleSnaps(snap)) {
+			this.#startTransition();
+			// Every other channel folds from where it is too, explicitly. The
+			// clock read below may not report a restart: a mark that never had a
+			// transition gets its first clock here, and a first clock is not
+			// read as one. That every channel of such a mark has from == to is
+			// true today, but it is a chain of reasoning, not a guarantee.
+			this.#foldPending = true;
+			if (transitionsObserved()) {
+				noteTransition('morph', false, this.#affectedCharts, this.#label);
+			}
+		}
+
 		this.#readClock();
 		const t = this.#clockT;
 		if (this.#clockRestarted) this.#foldPending = true;
-		const snap = this.#snapPending;
 		const resolveT = snap ? 1 : t;
 
 		if (!snap && !this.#foldPending && !this.#dirty && resolveT === this.#resolvedT) return;
 
+		let folds = false;
 		for (let i = 0; i < channels.length; i++) {
 			const channel = channels[i];
 			if (snap || channel.land) {
 				// A landed channel: from = to, so the mix is its new value at any t.
 				encoder.copyBufferToBuffer(channel.to, 0, channel.from, 0, channel.size);
 				channel.land = false;
+				channel.fold = null;
+			} else if (channel.fold) {
+				// Its scale snapped: `from` is what is on screen, re-expressed in the
+				// new domain, written by the fold dispatch in the pass below.
+				folds = true;
 			} else if (this.#foldPending) {
 				// A transition interrupted mid-flight continues from where it is,
 				// and one at rest copies `to` onto itself, which is correct without
@@ -295,8 +369,12 @@ export class MorphedChannels {
 		this.#dirty = false;
 		this.#resolvedT = resolveT;
 
-		const { pipeline, layout } = resolvePipelineFor(this.#device);
 		const pass = encoder.beginComputePass(this.#passDescriptor);
+		// Folds before resolves: each writes a `from` the resolve below reads.
+		// Dispatches in one pass see each other's writes, in order.
+		if (folds) this.#encodeFolds(pass);
+
+		const { pipeline, layout } = resolvePipelineFor(this.#device);
 		pass.setPipeline(pipeline);
 		this.#immediatesView.setFloat32(4, resolveT, true);
 		for (let i = 0; i < channels.length; i++) {
@@ -317,6 +395,120 @@ export class MorphedChannels {
 			pass.dispatchWorkgroups(Math.ceil(channel.count / RESOLVE_WORKGROUP));
 		}
 		pass.end();
+	}
+
+	/**
+	 * Record what each scaled channel is drawn with this frame, and mark the
+	 * ones whose scale made a folding snap since their last encode (its
+	 * `snapCount` moved) to fold from the params they were drawn with to these.
+	 * Every frame, at rest too: a fold needs the params of the frame before it.
+	 *
+	 * Not on a snap of the row set (`snap`: nothing aligned to fold), not for a
+	 * channel landing at once, and not while none of the mark's charts is drawn
+	 * this frame: nobody sees it, so the params are recorded and the snap is
+	 * used up, and the return to view (its first frame seen) keeps nothing.
+	 * Returns whether any channel folds.
+	 */
+	#takeScaleSnaps(snap: boolean): boolean {
+		const scaleFor = this.#scaleFor;
+		if (!scaleFor) return false;
+		const channels = this.#channelList;
+		// Asked once, and only when a snap is seen: the common frame asks nothing.
+		let onScreen: boolean | null = null;
+		let any = false;
+		for (let i = 0; i < channels.length; i++) {
+			const channel = channels[i];
+			channel.fold = null;
+			const scale = scaleFor(channel.binding);
+			const kind = scale ? foldScaleKind(scale.scaleType) : null;
+			if (!scale || !kind) {
+				channel.scale = null;
+				channel.drawnSet = false;
+				continue;
+			}
+			// Another scale's count says nothing about this one's snaps.
+			if (scale !== channel.scale) {
+				channel.scale = scale;
+				channel.drawnSet = false;
+				// Built now rather than at the first fold (cached per device and
+				// kind): a shader that does not compile shows when the mark first
+				// draws, not on the rare frame a snap folds.
+				foldPipelineFor(this.#device, kind);
+			}
+			// "What this frame draws": nothing in JS changes gpuState between
+			// the compute work and the draw passes of one frame (frame order:
+			// updateRenderState, compute, draw). Should that order change, so
+			// does what `drawn` means.
+			const g = scale.gpuState;
+			const current = channel.current;
+			current[0] = g.domainMin;
+			current[1] = g.domainMax;
+			current[2] = g.domainScale;
+			current[3] = g.p4;
+			const snapped = channel.drawnSet && scale.snapCount !== channel.snapSeen;
+			channel.snapSeen = scale.snapCount;
+			if (snapped && !snap && !channel.land && (onScreen ??= this.#onScreen())) {
+				// `drawn` still holds last frame's params; #encodeFolds takes it.
+				channel.fold = kind;
+				any = true;
+			} else {
+				channel.drawn.set(current);
+				channel.drawnSet = true;
+			}
+		}
+		return any;
+	}
+
+	/** Whether any of the mark's charts is drawn this frame (the host's draw list). */
+	#onScreen(): boolean {
+		const drawn = this.#host.chartDrawnThisFrame;
+		if (!drawn) return true;
+		const charts = this.#affectedCharts();
+		for (let i = 0; i < charts.length; i++) {
+			if (drawn.call(this.#host, charts[i])) return true;
+		}
+		return false;
+	}
+
+	/**
+	 * The fold dispatches, one per folding channel: `from` takes its on-screen
+	 * values in the new domain (FoldShader). Each then draws with the params it
+	 * folded into.
+	 */
+	#encodeFolds(pass: GPUComputePassEncoder): void {
+		const channels = this.#channelList;
+		const view = this.#foldImmediatesView;
+		for (let i = 0; i < channels.length; i++) {
+			const channel = channels[i];
+			const kind = channel.fold;
+			if (!kind) continue;
+			channel.fold = null;
+			if (channel.count > 0) {
+				const { pipeline, layout } = foldPipelineFor(this.#device, kind);
+				pass.setPipeline(pipeline);
+				// The layout is the kind's, so a bind group is too.
+				if (channel.foldBindGroupKind !== kind) {
+					channel.foldBindGroup = this.#device.createBindGroup({
+						layout,
+						entries: [
+							{ binding: 0, resource: { buffer: channel.resolved } },
+							{ binding: 1, resource: { buffer: channel.from } }
+						]
+					});
+					channel.foldBindGroupKind = kind;
+				}
+				view.setUint32(0, channel.count, true);
+				for (let k = 0; k < 4; k++) {
+					view.setFloat32(16 + 4 * k, channel.drawn[k], true);
+					view.setFloat32(32 + 4 * k, channel.current[k], true);
+				}
+				pass.setImmediates(0, this.#foldImmediates);
+				pass.setBindGroup(0, channel.foldBindGroup!);
+				pass.dispatchWorkgroups(Math.ceil(channel.count / RESOLVE_WORKGROUP));
+			}
+			channel.drawn.set(channel.current);
+			channel.drawnSet = true;
+		}
 	}
 
 	/**
@@ -345,14 +537,24 @@ export class MorphedChannels {
 		const make = (role: string) =>
 			this.#device.createBuffer({ size, usage, label: `${this.#label}-${binding}-${role}` });
 
+		// A fresh channel was never drawn, so it has nothing to fold from.
 		const channel: Channel = {
+			binding,
 			from: make('from'),
 			to: make('to'),
 			resolved: make('resolved'),
 			size,
 			count: 0,
 			bindGroup: null,
-			land: false
+			land: false,
+			drawn: new Float32Array(4),
+			drawnSet: false,
+			snapSeen: 0,
+			fold: null,
+			current: new Float32Array(4),
+			scale: null,
+			foldBindGroup: null,
+			foldBindGroupKind: null
 		};
 		this.#channels.set(binding, channel);
 		this.#channelList = [...this.#channels.values()];

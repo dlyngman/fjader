@@ -2224,6 +2224,15 @@ export class GPUCoordinator {
 	}
 
 	/**
+	 * Whether a chart is in this frame's draw list. The list is stamped before
+	 * compute work runs, so compute work can ask (MorphedChannels: a mark folds
+	 * only where it is drawn).
+	 */
+	chartDrawnThisFrame(chartId: string): boolean {
+		return this.#registeredCharts.get(chartId)?._lastRenderFrame === this.#frameId;
+	}
+
+	/**
 	 * Register a callback invoked when a chart's effective visibility changes.
 	 * Effective visibility = IntersectionObserver visible AND page visible.
 	 * Used by ChartCell to report into the chart's ChartVisibility.

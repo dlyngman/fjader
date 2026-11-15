@@ -125,6 +125,19 @@ export class LinearScaleState {
 		p4: 0
 	};
 
+	/**
+	 * Counts the instant domain changes made inside `folding()`. A morphing
+	 * mark that sees it change folds its on-screen values into the new domain,
+	 * so they hold their pixels and then glide (MorphedChannels). It says that
+	 * the domain snapped, not by how much: the mark maps between the params it
+	 * drew with and the ones it will draw with. Only this counter tells such a
+	 * snap from a spring, which changes the params every frame too. Plain, not
+	 * reactive: read per encode.
+	 */
+	snapCount = 0;
+	/** Nesting of `folding()` calls; an instant change while above 0 bumps `snapCount`. */
+	#foldDepth = 0;
+
 	// --- Constraints ---
 	domainLimits = { min: -Infinity, max: Infinity, minWidth: 1e-10 };
 	zoomLimits = { max: 10, min: 100 }; // max = pan multiplier, min = zoom divisor
@@ -807,6 +820,29 @@ export class LinearScaleState {
 		this.#updateGpuState();
 		this._version++;
 		this._targetVersion++; // Trigger reactivity for target watchers
+		if (this.#foldDepth > 0) {
+			this.snapCount++;
+			// Every chart drawing this scale draws, and folds, in the same frame:
+			// a chart left out would draw its old values under the new domain.
+			const charts = this._affectedChartsArray;
+			for (let i = 0; i < charts.length; i++) this.#gpuCoordinator?.invalidateChart(charts[i]);
+		}
+	}
+
+	/**
+	 * Run `update`, and let an instant domain change it makes fold: bump
+	 * `snapCount`, so morphing marks hold their pixels through it and glide.
+	 * For a snap whose new domain is a change of unit (a rebin), not one that
+	 * nobody watched (an entrance, a catch-up). An update that changes nothing,
+	 * or springs, leaves the count alone.
+	 */
+	folding(update: () => void): void {
+		this.#foldDepth++;
+		try {
+			update();
+		} finally {
+			this.#foldDepth--;
+		}
 	}
 
 	#setStiffness(stiffness: number): void {

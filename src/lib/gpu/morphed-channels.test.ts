@@ -40,7 +40,7 @@ function fakes() {
 		createShaderModule: () => ({}),
 		createBindGroupLayout: () => ({}),
 		createPipelineLayout: () => ({}),
-		createComputePipeline: () => ({}),
+		createComputePipeline: ({ label }: { label: string }) => ({ label }),
 		createBindGroup: () => ({}),
 		queue: {
 			writeBuffer(buffer: FakeBuffer) {
@@ -56,7 +56,10 @@ function fakes() {
 		beginComputePass() {
 			log.push('pass');
 			return {
-				setPipeline() {},
+				// Fold pipelines only: the resolve's would change every exact list below.
+				setPipeline(pipeline: { label?: string }) {
+					if (pipeline.label?.startsWith('fold')) log.push(`pipeline ${pipeline.label}`);
+				},
 				setBindGroup() {},
 				setImmediates(_offset: number, data: ArrayBuffer) {
 					const view = new DataView(data);
@@ -451,6 +454,181 @@ describe('MorphedChannels', () => {
 		expect(m.drop(2)).toBe(false);
 		expect(m.resolved(2)).toBeUndefined();
 		expect(m.resolved(3)).toBeDefined();
+	});
+});
+
+describe('MorphedChannels folding through a scale snap', () => {
+	/** A value-axis scale as a fold reads it: params as drawn, and its snap count. */
+	function scale(min: number, max: number) {
+		return {
+			snapCount: 0,
+			scaleType: 'linear',
+			gpuState: { domainMin: min, domainMax: max, domainScale: 1 / (max - min), p4: 0 },
+			/** An instant change of domain that folds (`folding` + `#setInstant`). */
+			snapTo(lo: number, hi: number) {
+				this.gpuState = { domainMin: lo, domainMax: hi, domainScale: 1 / (hi - lo), p4: 0 };
+				this.snapCount++;
+			},
+			/** A frame of a spring: the params move, the count does not. */
+			springTo(lo: number, hi: number) {
+				this.gpuState = { domainMin: lo, domainMax: hi, domainScale: 1 / (hi - lo), p4: 0 };
+			}
+		};
+	}
+
+	/** Channels 2 and 3 on the value axis; 4 is an Other share, on no scale. */
+	function folding(
+		f: ReturnType<typeof fakes>,
+		y: ReturnType<typeof scale>,
+		onScreen = () => true
+	) {
+		f.host.chartDrawnThisFrame = () => onScreen();
+		return new MorphedChannels({
+			device: f.device,
+			host: f.host,
+			label: 'm',
+			clockHost: () => null,
+			affectedCharts: () => ['chart-1'],
+			scaleFor: (binding) => (binding === 2 || binding === 3 ? y : null)
+		});
+	}
+
+	const write = (m: MorphedChannels, a: number[], b: number[], share?: number[]) =>
+		m.write(ids, [
+			[2, values(...a)],
+			[3, values(...b)],
+			...(share ? ([[4, values(...share)]] as const) : [])
+		]);
+
+	/** A mark at rest under the domain [0, 100]. */
+	function atRest(
+		f: ReturnType<typeof fakes>,
+		y: ReturnType<typeof scale>,
+		onScreen?: () => boolean
+	) {
+		const m = folding(f, y, onScreen);
+		write(m, [0, 0, 0], [10, 20, 30]);
+		f.frame();
+		f.frame();
+		return m;
+	}
+
+	it('folds a snapped channel in place of the plain copy, and starts a transition', () => {
+		const f = fakes();
+		const y = scale(0, 100);
+		atRest(f, y);
+
+		y.snapTo(0, 50);
+		const issued = f.frame();
+		// Each channel: the fold kernel writes `from`, no copy over it.
+		expect(issued.filter((c) => c === 'pipeline fold-linear')).toHaveLength(2);
+		expect(issued).not.toContain('copy m-2-resolved -> m-2-from');
+		expect(issued).not.toContain('copy m-3-resolved -> m-3-from');
+		// The folds come before the resolves, and the resolve runs at t = 0.
+		const firstFold = issued.indexOf('pipeline fold-linear');
+		const resolves = issued.filter((c) => c.startsWith('imm count=3 t=0'));
+		expect(firstFold).toBeGreaterThan(-1);
+		expect(resolves.length).toBeGreaterThanOrEqual(2);
+		expect(f.sources.length).toBe(1);
+	});
+
+	it('does not fold through a spring: the params move every frame, the count does not', () => {
+		const f = fakes();
+		const y = scale(0, 100);
+		atRest(f, y);
+
+		y.springTo(0, 80);
+		expect(f.frame()).toEqual([]);
+		y.springTo(0, 60);
+		expect(f.frame()).toEqual([]);
+	});
+
+	it('folds once for two snaps before one encode, from what was drawn to what will be', () => {
+		const f = fakes();
+		const y = scale(0, 100);
+		atRest(f, y);
+
+		y.snapTo(0, 50);
+		y.snapTo(0, 25);
+		const issued = f.frame();
+		expect(issued.filter((c) => c === 'pipeline fold-linear')).toHaveLength(2);
+		// And not again on the next frame: the snaps are used up.
+		const next = f.frame();
+		expect(next.filter((c) => c.startsWith('pipeline fold'))).toHaveLength(0);
+	});
+
+	it('does not fold a channel it has never drawn: nothing on screen to keep', () => {
+		const f = fakes();
+		const y = scale(0, 100);
+		const m = folding(f, y);
+		write(m, [0, 0, 0], [10, 20, 30]);
+		y.snapTo(0, 50);
+		const issued = f.frame();
+		expect(issued.filter((c) => c.startsWith('pipeline fold'))).toHaveLength(0);
+		expect(issued).toContain('copy m-2-to -> m-2-from');
+	});
+
+	it('off screen, records the snap and uses it up: no fold then, none on return', () => {
+		const f = fakes();
+		const y = scale(0, 100);
+		let onScreen = true;
+		atRest(f, y, () => onScreen);
+
+		onScreen = false;
+		y.snapTo(0, 50);
+		expect(f.frame().filter((c) => c.startsWith('pipeline fold'))).toHaveLength(0);
+		expect(f.sources.length).toBe(0);
+
+		onScreen = true;
+		expect(f.frame().filter((c) => c.startsWith('pipeline fold'))).toHaveLength(0);
+		expect(f.sources.length).toBe(0);
+	});
+
+	it('lets a snap of the row set win: aligned rows are what a fold needs', () => {
+		const f = fakes();
+		const y = scale(0, 100);
+		const m = atRest(f, y);
+
+		y.snapTo(0, 50);
+		m.write(new Float32Array([0, 1, 2, 3]), [
+			[2, values(0, 0, 0, 0)],
+			[3, values(5, 6, 7, 8)]
+		]);
+		const issued = f.frame();
+		expect(issued.filter((c) => c.startsWith('pipeline fold'))).toHaveLength(0);
+	});
+
+	it('never folds a binding on no scale (an Other share)', () => {
+		const f = fakes();
+		const y = scale(0, 100);
+		const m = folding(f, y);
+		write(m, [0, 0, 0], [10, 20, 30], [1, 1, 1]);
+		f.frame();
+		f.frame();
+
+		y.snapTo(0, 50);
+		const issued = f.frame();
+		// Three channels, two folds: the share is on no scale.
+		expect(issued.filter((c) => c === 'pipeline fold-linear')).toHaveLength(2);
+	});
+
+	it('on the first fold of a mark that never transitioned, folds its other channels too', () => {
+		// Every update so far snapped (its first data), so it has no clock: the
+		// fold creates one, which the clock read does not report as a restart.
+		const f = fakes();
+		const y = scale(0, 100);
+		const m = folding(f, y);
+		write(m, [0, 0, 0], [10, 20, 30], [1, 1, 1]);
+		f.frame();
+		f.frame();
+		expect(f.sources.length).toBe(0);
+
+		y.snapTo(0, 50);
+		const issued = f.frame();
+		expect(issued.filter((c) => c === 'pipeline fold-linear')).toHaveLength(2);
+		// The share, on no scale, folds from where it is: the plain copy.
+		expect(issued).toContain('copy m-4-resolved -> m-4-from');
+		expect(f.sources.length).toBe(1);
 	});
 });
 

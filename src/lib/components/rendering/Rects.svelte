@@ -359,6 +359,10 @@
 	// (values, then band ids after the instant layout), the second springs.
 	// A morph SPRING right after a morph snap on a return points here.
 	let lastMorphedVersion = -1;
+	// The morphed edges measured on the value axis: a folding snap of that
+	// scale holds them on their pixels (MorphedChannels). Not the Other share.
+	const SCALED_Y = [BINDINGS.Y0, BINDINGS.Y1];
+	const SCALED_X = [BINDINGS.X0, BINDINGS.X1];
 	function landsNow(): boolean {
 		const first = dataVersion !== lastMorphedVersion;
 		lastMorphedVersion = dataVersion;
@@ -384,14 +388,16 @@
 				'x',
 				x0Data,
 				[[BINDINGS.Y0, y0Data], [BINDINGS.Y1, y1Data], ...split],
-				land
+				land,
+				SCALED_Y
 			);
 		} else {
 			renderer.writeMorphed(
 				'y',
 				y0Data,
 				[[BINDINGS.X0, x0Data], [BINDINGS.X1, x1Data], ...split],
-				land
+				land,
+				SCALED_X
 			);
 		}
 	});
