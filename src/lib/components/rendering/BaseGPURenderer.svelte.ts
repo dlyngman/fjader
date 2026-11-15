@@ -324,7 +324,9 @@ export class BaseGPURenderer {
 		 * not `bandAxis`): a folding snap of that scale folds them, so they hold
 		 * their pixels and glide. Not a band id or an Other share.
 		 */
-		scaled: readonly number[] = NO_SCALED
+		scaled: readonly number[] = NO_SCALED,
+		/** A rebin's map from the rows on screen to these (MorphedChannels.write). */
+		remap: Uint32Array | null = null
 	): void {
 		if (!this.#device) return;
 
@@ -385,7 +387,7 @@ export class BaseGPURenderer {
 		}
 
 		this.#morphAxis = bandAxis;
-		if (this.#morphed.write(bandIds, channels, land) || rebind) {
+		if (this.#morphed.write(bandIds, channels, land, remap) || rebind) {
 			this.#scheduleBindGroupUpdate();
 		} else if (!this.#bindGroupUpdateScheduled) {
 			this.invalidateLayer();

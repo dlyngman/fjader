@@ -43,6 +43,10 @@
 	 * - with the line: one y spring, no snap; the bars may dip and recover while
 	 *   y springs (the gate keeps the line, a data layer, from jumping).
 	 * - no SQL fit queries: a binned mark fits from its result.
+	 * - bars: "morph" where the rebin was remapped (the new bars start where the
+	 *   old ones were drawn and travel), "snap" where it was not (past the dense
+	 *   row limit, or a layout that does not correspond). The tallest-bar
+	 *   columns read the data, not the morph in flight: watch the morph itself.
 	 */
 	import { page } from '$app/state';
 	import { count } from '@uwdata/mosaic-sql';
@@ -427,6 +431,14 @@
 				step: `${human(prev.width)} → ${human(r.width)}`,
 				snaps: ys.filter((tr) => tr.snap).length,
 				springs: ys.filter((tr) => !tr.snap).length,
+				// The bars' own transition at the rebin's write: travels if remapped.
+				bars: (() => {
+					const ms = transitions.filter(
+						(tr) => tr.part === 'morph' && tr.t >= r.t - 5 && tr.t < Math.min(r.t + 100, end)
+					);
+					if (ms.length === 0) return '–';
+					return ms.some((tr) => !tr.snap) ? 'morph' : 'snap';
+				})(),
 				before: before?.frac ?? null,
 				lowest,
 				settled: settled?.frac ?? null,
@@ -659,6 +671,7 @@
 						<th>bin step</th>
 						<th>y snaps</th>
 						<th>y springs</th>
+						<th>bars</th>
 						<th>tallest bar: before</th>
 						<th>lowest</th>
 						<th>settled</th>
@@ -672,6 +685,7 @@
 							<td>{r.step}</td>
 							<td>{r.snaps}</td>
 							<td>{r.springs}</td>
+							<td>{r.bars}</td>
 							<td>{pct(r.before)}</td>
 							<td>{pct(r.lowest)}</td>
 							<td>{pct(r.settled)}</td>

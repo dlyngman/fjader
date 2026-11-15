@@ -74,6 +74,12 @@
 		 * animate as usual.
 		 */
 		landsFor?: number;
+		/**
+		 * A binned mark's rebin map (MarkLifecycleV2.takeRemap): called once per
+		 * data version written, so it maps from what the GPU holds. With a map,
+		 * a rebin's bars start where the old bars they cover were drawn.
+		 */
+		takeRemap?: (() => Uint32Array | null) | null;
 		zIndex?: number;
 		colorMode?: number;
 		colorScaleIndex?: number;
@@ -115,6 +121,7 @@
 		facetData = null,
 		dataVersion,
 		landsFor = 0,
+		takeRemap = null,
 		zIndex = 0,
 		colorMode = 0,
 		colorScaleIndex = 0,
@@ -363,10 +370,11 @@
 	// scale holds them on their pixels (MorphedChannels). Not the Other share.
 	const SCALED_Y = [BINDINGS.Y0, BINDINGS.Y1];
 	const SCALED_X = [BINDINGS.X0, BINDINGS.X1];
-	function landsNow(): boolean {
+	/** Whether this is the first morphed write of the current data version. */
+	function firstOfVersion(): boolean {
 		const first = dataVersion !== lastMorphedVersion;
 		lastMorphedVersion = dataVersion;
-		return first && landsFor !== 0 && landsFor === dataVersion;
+		return first;
 	}
 
 	// The measure axis's two edges morph, as ONE write per data update, so one
@@ -382,14 +390,20 @@
 		// split and the bar land together. A share that changes alone (a click)
 		// starts a transition of its own on that clock.
 		const split = splitData ? ([[BINDINGS.SHARE, splitData]] as const) : [];
-		const land = landsNow() ? 'all' : splitData && !splitSlides ? [BINDINGS.SHARE] : undefined;
+		const first = firstOfVersion();
+		const lands = first && landsFor !== 0 && landsFor === dataVersion;
+		const land = lands ? 'all' : splitData && !splitSlides ? [BINDINGS.SHARE] : undefined;
+		// Once per version, so the map is from the rows the GPU holds. A later
+		// write of the same version (an Other split click) is aligned.
+		const remap = first ? (takeRemap?.() ?? null) : null;
 		if (bandAxis === 'x') {
 			renderer.writeMorphed(
 				'x',
 				x0Data,
 				[[BINDINGS.Y0, y0Data], [BINDINGS.Y1, y1Data], ...split],
 				land,
-				SCALED_Y
+				SCALED_Y,
+				remap
 			);
 		} else {
 			renderer.writeMorphed(
@@ -397,7 +411,8 @@
 				y0Data,
 				[[BINDINGS.X0, x0Data], [BINDINGS.X1, x1Data], ...split],
 				land,
-				SCALED_X
+				SCALED_X,
+				remap
 			);
 		}
 	});

@@ -56,9 +56,13 @@ function fakes() {
 		beginComputePass() {
 			log.push('pass');
 			return {
-				// Fold pipelines only: the resolve's would change every exact list below.
+				// Fold and remap pipelines only: the resolve's would change every
+				// exact list below.
 				setPipeline(pipeline: { label?: string }) {
-					if (pipeline.label?.startsWith('fold')) log.push(`pipeline ${pipeline.label}`);
+					const label = pipeline.label ?? '';
+					if (label.startsWith('fold') || label.startsWith('remap')) {
+						log.push(`pipeline ${label}`);
+					}
 				},
 				setBindGroup() {},
 				setImmediates(_offset: number, data: ArrayBuffer) {
@@ -629,6 +633,140 @@ describe('MorphedChannels folding through a scale snap', () => {
 		// The share, on no scale, folds from where it is: the plain copy.
 		expect(issued).toContain('copy m-4-resolved -> m-4-from');
 		expect(f.sources.length).toBe(1);
+	});
+});
+
+describe('MorphedChannels remapping a rebin', () => {
+	const y = {
+		snapCount: 0,
+		scaleType: 'linear',
+		gpuState: { domainMin: 0, domainMax: 100, domainScale: 0.01, p4: 0 }
+	};
+	/** Channels 2 and 3 on the value axis; 4 an Other share. */
+	function remapping(f: ReturnType<typeof fakes>) {
+		return new MorphedChannels({
+			device: f.device,
+			host: f.host,
+			label: 'm',
+			clockHost: () => null,
+			affectedCharts: () => ['chart-1'],
+			scaleFor: (binding) => (binding === 2 || binding === 3 ? y : null)
+		});
+	}
+	// A map's words; its contents are the kernel's business (remap.test.ts).
+	const MAP = new Uint32Array(16);
+	const oldIds = new Float32Array([0, 10]);
+	const newIds = new Float32Array([0, 5, 10, 15]);
+
+	/** Two bins on screen, at rest. */
+	function onScreen(f: ReturnType<typeof fakes>) {
+		const m = remapping(f);
+		m.write(oldIds, [
+			[2, values(0, 0)],
+			[3, values(8, 4)]
+		]);
+		f.frame();
+		f.frame();
+		return m;
+	}
+	const rebin = (m: MorphedChannels, map: Uint32Array | null = MAP, share = false) =>
+		m.write(
+			newIds,
+			[
+				[2, values(0, 0, 0, 0)],
+				[3, values(3, 5, 1, 3)],
+				...(share ? ([[4, values(1, 1, 1, 1)]] as const) : [])
+			],
+			undefined,
+			map
+		);
+
+	it('remaps a rebin instead of snapping: before the resolves, from t = 0', () => {
+		const f = fakes();
+		const m = onScreen(f);
+		rebin(m);
+		const issued = f.frame();
+		expect(issued.filter((c) => c === 'pipeline remap-linear')).toHaveLength(2);
+		expect(issued).not.toContain('copy m-2-to -> m-2-from');
+		expect(issued).not.toContain('copy m-3-to -> m-3-from');
+		expect(issued.some((c) => c.startsWith('imm count=4 t=0'))).toBe(true);
+		expect(f.sources.length).toBe(1);
+	});
+
+	it('keeps the old resolved through a reallocation until the frame after it was read', () => {
+		const f = fakes();
+		const m = onScreen(f);
+		// Two rows to four, in buffers of 256 B: no reallocation needed for this
+		// size, so grow past it to force one.
+		const big = (n: number) => new Float32Array(n);
+		m.write(
+			new Float32Array(Array.from({ length: 200 }, (_, i) => i)),
+			[
+				[2, big(200)],
+				[3, big(200)]
+			],
+			undefined,
+			MAP
+		);
+		const writeLog = [...f.log];
+		expect(writeLog).toContain('destroy m-2-from');
+		expect(writeLog).not.toContain('destroy m-2-resolved');
+		const remapFrame = f.frame();
+		expect(remapFrame.filter((c) => c === 'pipeline remap-linear')).toHaveLength(2);
+		expect(remapFrame).not.toContain('destroy m-2-resolved');
+		const next = f.frame();
+		expect(next).toContain('destroy m-2-resolved');
+		expect(next).toContain('destroy m-remap');
+	});
+
+	it('takes an aligned write along while a remap is pending: no fold, one transition', () => {
+		const f = fakes();
+		const m = onScreen(f);
+		rebin(m);
+		const starts = f.sources.length;
+		rebin(m, null); // the same new rows, other values
+		const issued = f.frame();
+		expect(issued.filter((c) => c === 'pipeline remap-linear')).toHaveLength(2);
+		expect(issued).not.toContain('copy m-2-resolved -> m-2-from');
+		expect(f.sources.length).toBe(starts);
+	});
+
+	it('snaps a second rebin before the first ran: its map is from a layout never drawn', () => {
+		const f = fakes();
+		const m = onScreen(f);
+		rebin(m);
+		m.write(
+			new Float32Array([0, 2, 4, 6, 8, 10, 12, 14]),
+			[
+				[2, values(0, 0, 0, 0, 0, 0, 0, 0)],
+				[3, values(1, 1, 1, 1, 1, 1, 1, 1)]
+			],
+			undefined,
+			MAP
+		);
+		const issued = f.frame();
+		expect(issued.filter((c) => c.startsWith('pipeline remap'))).toHaveLength(0);
+		expect(issued).toContain('copy m-2-to -> m-2-from');
+		// Never recorded in a command buffer, so it goes at the next encode.
+		expect(issued).toContain('destroy m-remap');
+	});
+
+	it('remaps a binding on no scale untransformed, and snaps a channel with no old rows', () => {
+		const f = fakes();
+		const m = onScreen(f);
+		rebin(m, MAP, true); // the share (4) is new: nothing of it on screen
+		const issued = f.frame();
+		expect(issued.filter((c) => c === 'pipeline remap-linear')).toHaveLength(2);
+		expect(issued).toContain('copy m-4-to -> m-4-from');
+	});
+
+	it('snaps a rebin with no map, as before', () => {
+		const f = fakes();
+		const m = onScreen(f);
+		rebin(m, null);
+		const issued = f.frame();
+		expect(issued.filter((c) => c.startsWith('pipeline remap'))).toHaveLength(0);
+		expect(issued).toContain('copy m-2-to -> m-2-from');
 	});
 });
 
