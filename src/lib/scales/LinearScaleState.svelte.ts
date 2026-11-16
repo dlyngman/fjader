@@ -929,6 +929,18 @@ export class LinearScaleState {
 	 * keeps its momentum through a retarget, and a fast takeover can overshoot
 	 * 1 and come back. Marks mix by the same `f`, so they extrapolate with the
 	 * axis, and the width floor holds `a`.
+	 *
+	 * KNOWN, ACCEPTED: a speed kink when the domain's MINIMUM moves at the seam
+	 * (y panned mid-tween, or a fitted mark whose domain does not start at 0).
+	 * Straight paths to the new target can point against the old motion, so
+	 * low values can reverse: measured 0.46 of the fastest value's speed for
+	 * [100, 300] → [150, 200] (unit-tween.test.ts, the hitch tests). A
+	 * zero-based axis — every histogram's count axis, the common case — is
+	 * exact, and so is panning x during a rebin, which leaves y's minimum
+	 * alone. Checked on device and accepted (2026-11). If it ever reads badly:
+	 * carry the old velocity the fit misses as a decaying two-float residual
+	 * that the axis and the morphing marks both add, not a pan that ends the
+	 * segment (that drops marks back onto the live-domain resolve, which dips).
 	 */
 	#tweenTo(min: number, max: number): void {
 		const c = this.toSpringSpace(min);
