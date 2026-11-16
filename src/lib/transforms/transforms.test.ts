@@ -270,7 +270,8 @@ describe('Transforms', () => {
 				.groupby(column('category'));
 			const sql = compiler.applyToQuery(q).toString();
 
-			expect(sql).toMatch(/ROW_NUMBER\(\) OVER \(ORDER BY "y2" DESC\)/);
+			// Ties broken on the band, so the top n is deterministic.
+			expect(sql).toMatch(/ROW_NUMBER\(\) OVER \(ORDER BY "y2" DESC, "x"\)/);
 			expect(sql).toMatch(/"__dplot_rank" <= 3/);
 			// Published rather than consumed and dropped: the band axis reads this
 			// column to order itself, because row order does not survive the stack

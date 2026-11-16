@@ -1273,3 +1273,45 @@ describe('topN includeOthers in SQL', () => {
 		}
 	});
 });
+
+describe('topN with tied values', () => {
+	// Every category's total is the same. Without a tie-break the top n is
+	// whichever rows the window happens to see first: two reads of the same
+	// data (base and preagg, or before and after a window move) could disagree,
+	// and a category swap in and out of the top and Other on an ordinary update.
+	let db: DB;
+	// Forty names: a GROUP BY's output order follows its hash, not insertion,
+	// and with this many it is far from alphabetical.
+	const CATS = Array.from({ length: 40 }, (_, i) => `cat${String(i).padStart(2, '0')}`);
+	const rows = (cats: string[]) => cats.map((c) => `('${c}', 10)`).join(', ');
+
+	beforeAll(async () => {
+		db = openDB();
+		// The same data in two insertion orders, and many rows per category, so
+		// the window sees them in different orders.
+		const many = (cats: string[]) =>
+			`SELECT category, revenue FROM (VALUES ${rows(cats)}) AS t(category, revenue), range(50)`;
+		await db.run(`CREATE TABLE ties_up AS ${many(CATS)}`);
+		await db.run(`CREATE TABLE ties_down AS ${many([...CATS].reverse())}`);
+	});
+
+	afterAll(async () => {
+		await db.close();
+	});
+
+	it('breaks ties on the band, as the grouped path and rank() do: the same top n either way', async () => {
+		for (const table of ['ties_up', 'ties_down']) {
+			const config = { ...VERTICAL, table };
+			const compiler = new TransformCompiler([topN(2)], config);
+			const parts = buildQueryParts({ x: column('category'), y2: sum('revenue') }, undefined, true);
+			const q = assembleQuery({ table, parts, transformCompiler: compiler }).toString();
+			const ranked = (await db.all(q))
+				.map((r) => ({ x: r.x as string, rank: Number(r[RANK_COLUMN]) }))
+				.sort((p, q2) => p.rank - q2.rank);
+			expect(ranked).toEqual([
+				{ x: 'cat00', rank: 1 },
+				{ x: 'cat01', rank: 2 }
+			]);
+		}
+	});
+});
