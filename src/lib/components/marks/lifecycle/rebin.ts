@@ -17,6 +17,23 @@
 
 import type { BinPadding, BinWindow } from '$lib/types';
 
+/**
+ * Whether a rebin result's value axis TWEENS to its new unit (inside the
+ * scale's `folding()`), the usual case: every consumer of the scale follows
+ * the render domain, static marks glide and morphing ones ride the tween.
+ *
+ * Not for a catch-up result (a chart back in view after the shared axis was
+ * zoomed while it was off screen): its bars land at once (`land: 'all'`), so
+ * the axis must land with them. A tween under landed bars would leave them at
+ * half or double height for its length: the duck, on every return to view.
+ * Its instant registration then snaps, as any change nobody watched does.
+ *
+ * Not for an axis the user zoomed: a rebin does not override that.
+ */
+export function rebinTweens(userDriven: boolean, catchUp: boolean): boolean {
+	return !userDriven && !catchUp;
+}
+
 /** `bins` as one comparable string; null without any (no bin channel, or none resolved yet). */
 export function binSpecKey(bins: Record<string, BinPadding> | null | undefined): string | null {
 	return bins ? JSON.stringify(bins) : null;

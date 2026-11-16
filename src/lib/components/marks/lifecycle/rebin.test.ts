@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { AutoBinNode } from '$lib/sql/bin';
 import type { BinPadding } from '$lib/types';
-import { binRowsMoved, binSpecKey, isRebin } from './rebin';
+import { binRowsMoved, binSpecKey, isRebin, rebinTweens } from './rebin';
 
 /** The spec a mark's parts carry for one bin channel, as the lifecycle builds it. */
 function spec(
@@ -74,5 +74,21 @@ describe('rows moved: a rebin, or a window moved over the same bins', () => {
 		expect(binRowsMoved('a', null, 'a', null)).toBe(false);
 		expect(binRowsMoved('a', null, 'a', [0, 10])).toBe(true);
 		expect(binRowsMoved('a', [0, 10], 'a', null)).toBe(true);
+	});
+});
+
+describe('how a rebin moves its value axis', () => {
+	it('tweens: every consumer follows the render domain, the bars ride it', () => {
+		expect(rebinTweens(false, false)).toBe(true);
+	});
+
+	it('a catch-up does not tween: its bars land at once, so the axis lands with them', () => {
+		// A tween under landed bars would leave them at half or double height.
+		expect(rebinTweens(false, true)).toBe(false);
+	});
+
+	it('an axis the user zoomed is not overridden', () => {
+		expect(rebinTweens(true, false)).toBe(false);
+		expect(rebinTweens(true, true)).toBe(false);
 	});
 });
