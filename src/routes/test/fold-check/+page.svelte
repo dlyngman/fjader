@@ -1,20 +1,22 @@
 <script>
 	/**
-	 * Fold check: a scale snap that folds, run on the GPU.
-	 *
-	 * In the rebin flow nothing folds yet (the rebinning mark's own rows change,
-	 * which snaps), so this page makes a folding snap directly, on marks that
-	 * morph and whose rows do not change: bars on a band x (Rects) with a
-	 * linear y, dots on a band x (Dots) with a log y and with a symlog y.
+	 * Unit-change check: a change of a scale's unit, as a rebin makes it, run
+	 * on device for every kind of consumer of the scale.
 	 *
 	 * Fold: `y.folding(() => y.domain.set(..., { instant: true }))`, toggling
-	 * the domain between its own and twice its top. Expected: the axis changes
-	 * in one frame, the marks hold their pixels, then glide to their new
-	 * height; no WebGPU errors in the console. The log lists, per press, a
-	 * `domain … snap` and a `morph … spring` (the fold).
+	 * the domain between its own and twice its top. The scale tweens its
+	 * render domain so every value moves linearly in pixels. Expected: every
+	 * mark glides together, with the axis, from where it was to where it
+	 * belongs, and nothing has code of its own for it:
+	 * - bars on a band x (Rects), dots on a band x (Dots), with a linear, a log
+	 *   and a symlog y;
+	 * - overlays on one linear y: an area, a line, raw dots, a rule (GPU), and
+	 *   SVG text labels; hover the line mid-glide and the tooltip follows too.
+	 * No WebGPU errors in the console. The log lists, per press, a
+	 * `domain … spring` (the tween).
 	 *
-	 * Snap (no fold): the same change outside `folding()`, for comparison: the
-	 * marks jump with the axis, and the log has no morph.
+	 * Snap (no fold): the same change outside `folding()`, for comparison:
+	 * everything jumps with the axis.
 	 */
 	import { initFjader } from '$lib';
 	import { onMount } from 'svelte';
@@ -26,7 +28,11 @@
 		AxisBottom,
 		WebGPUCanvas,
 		BarMarkY,
-		DotsMark
+		DotsMark,
+		AreaMarkY,
+		LineMark,
+		RuleMarkY,
+		TextMark
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 	import ScaleGrab from './ScaleGrab.svelte';
@@ -40,7 +46,8 @@
 	const charts = {
 		linear: { scale: null, doubled: false, base: null },
 		log: { scale: null, doubled: false, base: null },
-		symlog: { scale: null, doubled: false, base: null }
+		symlog: { scale: null, doubled: false, base: null },
+		overlays: { scale: null, doubled: false, base: null }
 	};
 
 	function press(name, fold) {
@@ -84,6 +91,13 @@
 					('a', 2.0), ('b', 8.0), ('c', 30.0), ('d', 120.0), ('e', 400.0), ('f', 900.0)
 				) t(cat, v)
 			`);
+			// The overlays: a smooth curve over a numeric x, and a rule's level.
+			await queryEngine.exec(`
+				CREATE TABLE overlay_data AS
+				SELECT i::DOUBLE AS i, round(40 + 30 * sin(i / 3.0) + i * 2, 1) AS v
+				FROM range(0, 21) t(i)
+			`);
+			await queryEngine.exec(`CREATE TABLE overlay_rule AS SELECT 50.0 AS v`);
 			isLoaded = true;
 		})();
 		return off;
@@ -96,11 +110,12 @@
 	<div class="container">
 		<h1>Fold check</h1>
 		<p class="lede">
-			Fold: the axis changes in one frame, the marks hold their pixels, then glide. Snap: the marks
-			jump with the axis. Watch the console for WebGPU errors.
+			Fold: a change of unit. Every mark, the labels and the axis glide together, each value in a
+			straight line. Hover the line mid-glide: the tooltip follows. Snap: everything jumps. Watch
+			the console for WebGPU errors.
 		</p>
 		<div class="grid">
-			{#each [['linear', 'Bars, linear y'], ['log', 'Dots, log y'], ['symlog', 'Dots, symlog y']] as [name, title] (name)}
+			{#each [['linear', 'Bars, linear y'], ['log', 'Dots, log y'], ['symlog', 'Dots, symlog y'], ['overlays', 'Area, line, dots, rule, labels: one linear y']] as [name, title] (name)}
 				<section>
 					<h3>{title}</h3>
 					<div class="controls">
@@ -121,6 +136,12 @@
 										<ScaleGrab onScale={(get) => (charts[name].scale = get)} />
 										{#if name === 'linear'}
 											<BarMarkY table="fold_data" x="cat" y={sum('v')} />
+										{:else if name === 'overlays'}
+											<AreaMarkY table="overlay_data" x="i" y="v" fillOpacity={0.2} />
+											<LineMark table="overlay_data" x="i" y="v" strokeWidth={2} />
+											<DotsMark table="overlay_data" x="i" y="v" r={3} />
+											<RuleMarkY table="overlay_rule" y="v" stroke="#c00" strokeWidth={2} />
+											<TextMark table="overlay_data" x="i" y="v" text="v" dy={-10} fontSize={9} />
 										{:else}
 											<DotsMark
 												table="fold_data"
