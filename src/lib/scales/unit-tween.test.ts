@@ -201,4 +201,93 @@ describe('a unit-change tween', () => {
 		}
 		expect(run[run.length - 1][1]).toBeCloseTo(1e6, 0);
 	});
+
+	it('publishes the f it rendered, extrapolated, with the target’s params', () => {
+		const s = onScreen(new LinearScaleState('y'), 0, 700);
+		expect(s.tween).toBeNull();
+		s.folding(() => s.domain.set([0, 100], { instant: true }));
+		expect(s.tween?.targetParams).toEqual({
+			domainMin: 0,
+			domainMax: 100,
+			domainScale: 0.01,
+			p4: 0
+		});
+		for (let i = 0; i < 10; i++) s.step();
+		s.updateRenderState(0);
+		const stepped = s.tween!.f;
+		s.updateRenderState(0.004);
+		const f = s.tween!.f;
+		expect(f).toBeGreaterThan(stepped);
+		// The axis was drawn at that f: every value sits on its line at f.
+		for (const v of [10, 50, 90]) {
+			const expected = (1 - f) * at(v, [0, 700]) + f * at(v, [0, 100]);
+			expect(at(v, [...s.domain.current] as [number, number])).toBeCloseTo(expected, 9);
+		}
+	});
+
+	it('numbers its segments: each retarget starts one; none at rest', () => {
+		const s = onScreen(new LinearScaleState('y'), 0, 700);
+		s.folding(() => s.domain.set([0, 100], { instant: true }));
+		const first = s.tween!.segment;
+		frames(s, 10);
+		s.folding(() => s.domain.set([0, 20], { instant: true }));
+		expect(s.tween!.segment).toBe(first + 1);
+		expect(s.tween!.f).toBe(0);
+		expect(s.tween!.targetParams.domainMax).toBe(20);
+		s.domain.set([0, 30]); // a fit mid-tween: a segment too
+		expect(s.tween!.segment).toBe(first + 2);
+		frames(s);
+		expect(s.tween).toBeNull();
+	});
+});
+
+/**
+ * Two rebins 100 ms apart: the largest change of on-screen speed at the seam,
+ * over values across the second target, as a share of the fastest value's
+ * speed. Speeds are taken over 10 µs on each side, extrapolated from the same
+ * instant, so a retarget's change of acceleration (any spring has one) does
+ * not count: only a change of velocity does.
+ */
+function hitch(first: [number, number], second: [number, number]): number {
+	const eps = 1e-5;
+	const s = onScreen(new LinearScaleState('y'), 0, 700);
+	s.folding(() => s.domain.set(first, { instant: true }));
+	frames(s, 36); // 100 ms at 360 Hz
+	const now = [...s.domain.current] as [number, number];
+	s.updateRenderState(eps);
+	const old = [...s.domain.current] as [number, number];
+	s.folding(() => s.domain.set(second, { instant: true }));
+	s.updateRenderState(eps);
+	const next = [...s.domain.current] as [number, number];
+	let worst = 0;
+	let fastest = 0;
+	for (const u of [0, 0.25, 0.5, 0.75, 1]) {
+		const v = second[0] + u * (second[1] - second[0]);
+		const before = (at(v, old) - at(v, now)) / eps;
+		const after = (at(v, next) - at(v, now)) / eps;
+		worst = Math.max(worst, Math.abs(after - before));
+		fastest = Math.max(fastest, Math.abs(before));
+	}
+	return worst / fastest;
+}
+
+describe('back-to-back rebins (the hitch test)', () => {
+	it('carry speed with no kink on a zero-based axis', () => {
+		// Measured 8e-4: the 10 µs of acceleration, not a kink.
+		expect(hitch([0, 100], [0, 20])).toBeLessThan(1e-2);
+	});
+
+	it('carry speed through a reversal too: f dips below 0 and turns back', () => {
+		// Zooming in, then out past the start: the fitted f′ is negative. Clamped
+		// at 0 this was a full stop (a kink of 1).
+		expect(hitch([0, 100], [0, 600])).toBeLessThan(1e-2);
+	});
+
+	it('kink when the domain minimum moves: measured, not small', () => {
+		// Straight paths to the new target can point against the old motion: here
+		// the bottom value reverses (+0.16 → −0.28 plot heights/s). One scalar f′
+		// cannot match that. Measured 0.46 of the fastest value's speed; this
+		// pins it so a change shows up.
+		expect(hitch([100, 300], [150, 200])).toBeLessThan(0.5);
+	});
 });

@@ -6,7 +6,7 @@ import { noteTransition, transitionsObserved } from '$lib/animation/transition-l
 import { scaleLinear } from 'd3-scale';
 import type { ScaleLinear, ScaleContinuousNumeric } from 'd3-scale';
 import { extent as d3Extent } from 'd3-array';
-import { SpringPair, SPRING_PRESETS } from '$lib/animation';
+import { Spring, SpringPair, SPRING_PRESETS } from '$lib/animation';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 
 // =============================================================================
@@ -57,6 +57,18 @@ export interface GpuScaleState {
 	domainMax: number;
 	domainScale: number;
 	p4: number; // scale-type-specific: symlog constant C, 0 for linear/log/time
+}
+
+/**
+ * A unit-change tween as morphing marks read it (`LinearScaleState.tween`).
+ * A new `segment` means the domain retargeted: re-anchor from what is on
+ * screen. `f` is the progress this frame was rendered at; `targetParams` the
+ * target domain as the shaders read it.
+ */
+export interface ScaleTween {
+	segment: number;
+	f: number;
+	targetParams: GpuScaleState;
 }
 
 interface DomainAccessor {
@@ -153,26 +165,37 @@ export class LinearScaleState {
 	// --- Unit-change tween ---
 	/**
 	 * A unit change's tween, while one runs: the render domain moves so every
-	 * fixed value travels linearly in pixels (#tweenTo). A spring pair on the
-	 * domain's slope and offset in place of its endpoints, normalized to the
-	 * target: `a = S · W` (→ 1) and `b = (A − c) · S` (→ 0), with S = 1 / width,
-	 * A the domain's min, `c` and `W` the target's min and width, all in
-	 * spring space. A value's position is `(g(v) − c) · S − b`, linear in both,
-	 * and two identical springs share their time profile: so it moves in a
-	 * straight line. Both are in units of the plot's height, so one precision
-	 * fits any domain (time offsets around 3e7 included).
+	 * value on the scale travels linearly in pixels from where it was drawn to
+	 * where the target domain puts it, on ONE progress `f: 0 → 1` (#tweenTo).
 	 *
-	 * Exactly straight for a tween that starts at rest. One that takes over a
-	 * moving spring's velocity (or is retargeted mid-way) curves in (a, b): it
-	 * stays continuous and every value still moves in step, but not on a line.
+	 * In coordinates normalized to the target — `a = S · W`, `b = (A − c) · S`,
+	 * with S = 1 / drawn width, A the drawn min, `c` and `W` the target's min
+	 * and width, all in spring space — a value at `u = (g(v) − c) / W` sits at
+	 * `a·u − b`. A segment fixes its start `(a₀, b₀)` and moves both on `f`:
+	 * `a = a₀ + f·(1 − a₀)`, `b = b₀·(1 − f)`. So a value's position is
+	 * `(1 − f)·n(D_start, v) + f·n(D_target, v)`: a straight line in pixels,
+	 * and the progress marks morph on (`tween`), so a pure change of unit holds
+	 * a bar's height exactly.
 	 *
-	 * Runs at the reset stiffness: a pan or zoom on this axis during a tween
-	 * retargets it (#setTarget) and so feels like a reset spring until it ends.
+	 * A retarget (another rebin, a fit, a pan or zoom on this axis) starts a NEW
+	 * SEGMENT from the domain drawn now, so positions stay continuous. Its
+	 * starting velocity is fitted to the old motion (#tweenTo); exact on a
+	 * zero-based axis, a small kink otherwise. Runs at the reset stiffness.
 	 */
-	#tween: SpringPair | null = null;
+	#tween: Spring | null = null;
+	/** The segment's start, in the target's coordinates. */
+	#tweenA0 = 1;
+	#tweenB0 = 0;
 	#tweenPivot = 0;
 	#tweenWidth = 1;
-	#tweenOut = new Float64Array(2);
+	/** Rest precision on `f`: TWEEN_PRECISION plot heights over the segment's longest path. */
+	#tweenPrecision = TWEEN_PRECISION;
+	/** What marks read (`tween`), mutated in place. `f` is the one this frame rendered. */
+	#published: ScaleTween = {
+		segment: 0,
+		f: 0,
+		targetParams: { domainMin: 0, domainMax: 1, domainScale: 1, p4: 0 }
+	};
 
 	// --- Constraints ---
 	domainLimits = { min: -Infinity, max: Infinity, minWidth: 1e-10 };
@@ -447,7 +470,7 @@ export class LinearScaleState {
 		const tween = this.#tween;
 		if (tween) {
 			tween.step();
-			if (tween.isAtRest(TWEEN_PRECISION)) this.#endTween();
+			if (tween.isAtRest(this.#tweenPrecision)) this.#endTween();
 			return;
 		}
 		this.#springPair.step();
@@ -459,8 +482,10 @@ export class LinearScaleState {
 	 */
 	updateRenderState(extrapolationDt: number): void {
 		if (this.#tween) {
-			this.#tween.getRenderableInto(extrapolationDt, this.#tweenOut);
-			this.#fromTween(this.#tweenOut[0], this.#tweenOut[1], this.#springOutput);
+			// The f marks read is the one this frame's domain was drawn from.
+			const f = this.#tween.getRenderable(extrapolationDt);
+			this.#published.f = f;
+			this.#fromTween(f, this.#springOutput);
 		} else {
 			this.#springPair.getRenderableInto(extrapolationDt, this.#springOutput);
 		}
@@ -888,11 +913,29 @@ export class LinearScaleState {
 	}
 
 	/**
-	 * Tween the render domain to [min, max] so every fixed value moves
-	 * linearly in pixels (see `#tween`), from where it is drawn now: from the
-	 * endpoint spring, carrying its velocity, or from a tween already running,
-	 * retargeted. The velocities convert by the same linear maps as the
-	 * values, so back-to-back changes stay continuous.
+	 * The unit-change tween while one runs, for morphing marks to ride: its
+	 * segment (a new number means re-anchor from what is on screen), the
+	 * progress `f` this frame was rendered at, and the target domain's params
+	 * packed as the shaders read them. Null when no tween runs. Reused: read
+	 * it, don't hold it.
+	 */
+	get tween(): Readonly<ScaleTween> | null {
+		return this.#tween ? this.#published : null;
+	}
+
+	/**
+	 * Start a tween segment to [min, max] (see `#tween`), from where the
+	 * domain is drawn now: from the endpoint spring, or from a segment already
+	 * running. Positions are continuous. Velocity: the old motion, converted
+	 * by the same linear maps as the values, gives each value `u` a velocity
+	 * `va·u − vb`; the new segment moves it at `f′·((1 − a₀)·u + b₀)`. One `f′`
+	 * cannot match every `u` unless the two are parallel, so it is fitted by
+	 * least squares at the target's two ends (u = 0, 1). On a zero-based axis
+	 * `b` stays 0 and the fit is exact for every value. Not clamped either way:
+	 * a negative `f′` dips `f` below 0 and turns back, as the endpoint spring
+	 * keeps its momentum through a retarget, and a fast takeover can overshoot
+	 * 1 and come back. Marks mix by the same `f`, so they extrapolate with the
+	 * axis, and the width floor holds `a`.
 	 */
 	#tweenTo(min: number, max: number): void {
 		const c = this.toSpringSpace(min);
@@ -908,14 +951,22 @@ export class LinearScaleState {
 		let vb: number;
 		const tween = this.#tween;
 		if (tween) {
-			// From the running tween's coordinates (pivot c0, width W0) to the
-			// new target's: a' = a·W/W0, b' = b + (c0 − c)·a/W0.
+			// Where the segment is, in its own coordinates (pivot c0, width W0)...
+			const f = tween.current;
+			const fv = tween.velocity;
+			const a0 = this.#tweenA0;
+			const b0 = this.#tweenB0;
+			const a1 = a0 + f * (1 - a0);
+			const b1 = b0 * (1 - f);
+			const va1 = fv * (1 - a0);
+			const vb1 = -fv * b0;
+			// ...and in the new target's: a' = a·W/W0, b' = b + (c0 − c)·a/W0.
 			const c0 = this.#tweenPivot;
 			const W0 = this.#tweenWidth;
-			a = (tween.currentA * W) / W0;
-			b = tween.currentB + ((c0 - c) * tween.currentA) / W0;
-			va = (tween.a.velocity * W) / W0;
-			vb = tween.b.velocity + ((c0 - c) * tween.a.velocity) / W0;
+			a = (a1 * W) / W0;
+			b = b1 + ((c0 - c) * a1) / W0;
+			va = (va1 * W) / W0;
+			vb = vb1 + ((c0 - c) * va1) / W0;
 		} else {
 			// From the endpoint spring: A, B and their velocities, spring space.
 			const pair = this.#springPair;
@@ -932,26 +983,52 @@ export class LinearScaleState {
 			va = (-W * vW) / (w * w);
 			vb = (vA * w - (A - c) * vW) / (w * w);
 		}
-		const next = tween ?? new SpringPair(a, b, SCALE_SPRING_PRESETS.reset, TWEEN_PRECISION);
-		next.set(a, b);
-		next.a.velocity = va;
-		next.b.velocity = vb;
-		next.setTarget(1, 0);
+		// The path to the target at u = 0 and u = 1, and the velocity there.
+		const d0 = b;
+		const d1 = 1 - a + b;
+		const v0 = -vb;
+		const v1 = va - vb;
+		const dd = d0 * d0 + d1 * d1;
+		const fv = dd > 1e-24 ? (v0 * d0 + v1 * d1) / dd : 0;
+
+		const next = tween ?? new Spring(0, SCALE_SPRING_PRESETS.reset);
+		next.set(0);
+		next.velocity = fv;
+		next.setTarget(1);
 		this.#tween = next;
+		this.#tweenA0 = a;
+		this.#tweenB0 = b;
 		this.#tweenPivot = c;
 		this.#tweenWidth = W;
+		// A path is linear in u, so its longest is at an end.
+		this.#tweenPrecision = TWEEN_PRECISION / Math.max(Math.abs(d0), Math.abs(d1), 1e-12);
+
+		const published = this.#published;
+		published.segment++;
+		published.f = 0;
+		// From the spring-space endpoints the tween lands on (#endTween), not from
+		// [min, max]: on a log scale the round trip can differ in the last bit,
+		// and marks must mix toward exactly the domain they land in.
+		this.transformForGpu(
+			this.fromSpringSpace(c),
+			this.fromSpringSpace(c + W),
+			published.targetParams
+		);
+
 		this._targetVersion++; // Trigger reactivity for target watchers
 		this.#ensureAnimating();
 	}
 
 	/**
-	 * Spring-space endpoints [A, B] of tween coordinates (a, b). `a` is kept
+	 * Spring-space endpoints [A, B] at the segment's progress `f`. `a` is kept
 	 * above a small positive floor: from rest a critically damped spring never
-	 * crosses its target, but a tween that takes over a fast-widening
-	 * endpoint spring's velocity can overshoot `a` through zero, and the width
+	 * crosses its target, but a segment that takes over a fast-widening
+	 * spring's velocity can overshoot, carrying `a` through zero, and the width
 	 * would turn infinite or negative for every consumer of the scale.
 	 */
-	#fromTween(a: number, b: number, out: Float64Array): void {
+	#fromTween(f: number, out: Float64Array): void {
+		const a = this.#tweenA0 + f * (1 - this.#tweenA0);
+		const b = this.#tweenB0 * (1 - f);
 		const width = this.#tweenWidth / Math.max(a, TWEEN_MIN_A);
 		const A = this.#tweenPivot + b * width;
 		out[0] = A;
@@ -967,7 +1044,7 @@ export class LinearScaleState {
 
 	/** The spring-space endpoints drawn now, whichever spring runs. */
 	#currentSpring(out: Float64Array): void {
-		if (this.#tween) this.#fromTween(this.#tween.currentA, this.#tween.currentB, out);
+		if (this.#tween) this.#fromTween(this.#tween.current, out);
 		else {
 			out[0] = this.#springPair.currentA;
 			out[1] = this.#springPair.currentB;
