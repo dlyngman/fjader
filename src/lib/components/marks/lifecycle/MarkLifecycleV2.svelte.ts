@@ -1588,11 +1588,12 @@ export class MarkLifecycleV2 {
 					this.#colorScaleState
 				);
 			};
-			// An instant registration, as before: not yet inside `folding()`. A
-			// tween of y while the bars snap to their new values would leave them
-			// at half or double height for its length; the rebin tweens once the
-			// bars resolve in pixel space, in the same change.
-			register();
+			// A change of unit: inside `folding()` the value axis tweens its
+			// render domain (every consumer glides linearly in pixels), and the
+			// rebinning bars resolve in pixel space from the remap, so they hold
+			// their height while it does.
+			if (lands && valueState) valueState.folding(register);
+			else register();
 			this.#dataDerivedDomainsSet = domainResult.dataDerivedDomainsSet;
 			this.#skipDomainUpdateForAxis = domainResult.skipDomainUpdateForAxis;
 
@@ -1605,8 +1606,11 @@ export class MarkLifecycleV2 {
 				if (fit !== undefined) {
 					this.#fittedVersion = dv;
 					if (fit) {
-						// Instant, not yet inside `folding()`: see the registration above.
-						this.#applyFit(valueAxis, fit, drivingTarget, lands || this.#instantFor(valueState));
+						// A change of unit, as the registration above.
+						const apply = () =>
+							this.#applyFit(valueAxis, fit, drivingTarget, lands || this.#instantFor(valueState));
+						if (lands) valueState.folding(apply);
+						else apply();
 					}
 				} else if (!this.#transformCompiler.hasJSTransforms()) {
 					// The result cannot answer (its rows are not the dense layout, as

@@ -1,10 +1,15 @@
 import { noteTransition, transitionsObserved } from '$lib/animation/transition-log';
-import { RESOLVE_IMMEDIATE_SIZE, RESOLVE_WORKGROUP, resolvePipelineFor } from './ResolveShader';
+import {
+	RESOLVE_IMMEDIATE_SIZE,
+	RESOLVE_WORKGROUP,
+	SCALED_RESOLVE_IMMEDIATE_SIZE,
+	resolvePipelineFor,
+	scaledResolvePipelineFor
+} from './ResolveShader';
 import { TransitionClock, type ClockLoop } from '$lib/animation/TransitionClock';
 import { immediatesSupported } from './immediates';
-import { FOLD_IMMEDIATE_SIZE, foldPipelineFor } from './FoldShader';
 import { foldScaleKind, type FoldScaleKind } from './ScaleNormalize';
-import { remapPipelineFor, type RemapKind } from './RemapShader';
+import { REMAP_IMMEDIATE_SIZE, remapPipelineFor, type RemapKind } from './RemapShader';
 
 /**
  * Channels of one mark that morph between data updates rather than replacing
@@ -32,7 +37,32 @@ import { remapPipelineFor, type RemapKind } from './RemapShader';
  * desynchronise on a retarget, and the bar reaches its rank before or after it
  * finishes growing. It OWNS one otherwise. Adoption is safe across marks because
  * a mark with no new data folds to where it already is and does not move.
+ *
+ * THE SCALE. A channel measured on a continuous scale (`scaleFor`: a bar's
+ * value edges) resolves in pixel space: `from` keeps the scale params it was
+ * drawn under (`fromParams`, taken whenever `from` is set: a snap or a landing
+ * takes this frame's, a fold or a remap the previous frame's), and the resolve
+ * mixes the two POSITIONS, drawn under the scale as it is now (ResolveShader).
+ * Any other channel (an Other share, a band id) resolves as a plain mix.
+ *
+ * THE RIDE. While the scale runs a unit-change tween (`tween`: a rebin's new
+ * unit), a scaled channel that is moving rides it instead of its own clock:
+ * `to` is placed under the TARGET domain and the mix weight is the channel's
+ * share of the scale's progress, `g = (f − f0) / (1 − f0)`, `f0` the f its
+ * `from` was drawn at. Every value on the scale then travels on one progress,
+ * from where it was drawn to where the target puts it, so a pure change of
+ * unit holds a bar's height exactly; against the moving domain instead, `to`
+ * would be a moving end point and bars dip. Every segment start re-anchors (a
+ * new segment, data landing, the mark's own transition), the tween's end
+ * lands, and a channel at rest stays out: drawn under the moving domain, `to`
+ * already follows the static path, at no cost.
  */
+
+/**
+ * How close to 1 a fold's `f0` lands instead of riding: `g = (f − f0)/(1 − f0)`
+ * has nothing left to divide. Far below a tween's rest precision on f.
+ */
+const LAND_EPS = 1e-4;
 
 /** No bindings: the default for `write`'s `land`. */
 const NO_BINDINGS: readonly number[] = [];
@@ -44,21 +74,14 @@ const NO_BINDINGS: readonly number[] = [];
 export interface MorphHost extends ClockLoop {
 	registerComputeWork(key: string, fn: (encoder: GPUCommandEncoder) => void): void;
 	removeComputeWork(key: string): void;
-	/**
-	 * Whether a chart is in this frame's draw list. A mark whose charts are
-	 * not records what it would fold from but does not fold: nobody sees it.
-	 * Absent: every chart counts as drawn.
-	 */
-	chartDrawnThisFrame?(chartId: string): boolean;
 }
 
 /**
- * The scale a morphing channel's values are measured on, as a fold reads it:
- * its params as the shaders read them (`gpuState`, packed as
- * `#writeScaleParam` packs them) and the count of its folding snaps.
+ * The scale a morphing channel's values are measured on, as its resolve reads
+ * it: the params the shaders draw with (`gpuState`, packed as
+ * `#writeScaleParam` packs them) and its type.
  */
-export interface FoldScale {
-	readonly snapCount: number;
+export interface ChannelScale {
 	readonly gpuState: {
 		readonly domainMin: number;
 		readonly domainMax: number;
@@ -66,6 +89,16 @@ export interface FoldScale {
 		readonly p4: number;
 	};
 	readonly scaleType?: string;
+	/**
+	 * The scale's unit-change tween while one runs (`LinearScaleState.tween`):
+	 * its segment, the progress `f` this frame was drawn at, and the target
+	 * domain's params. Null or absent otherwise.
+	 */
+	readonly tween?: Readonly<{
+		segment: number;
+		f: number;
+		targetParams: ChannelScale['gpuState'];
+	}> | null;
 }
 
 /** A scale's slots, when they own a data-transition clock marks can adopt. */
@@ -89,9 +122,9 @@ export interface MorphedChannelsOptions {
 	/**
 	 * The scale a binding's values are measured on, or null for one that is
 	 * not (a band id, an Other share). Asked on every encode, like `clockHost`.
-	 * Absent: no binding folds.
+	 * Absent: every binding resolves as a plain mix.
 	 */
-	scaleFor?(binding: number): FoldScale | null;
+	scaleFor?(binding: number): ChannelScale | null;
 }
 
 interface Channel {
@@ -107,22 +140,49 @@ interface Channel {
 	/** Written to land at once rather than travel: `from` takes `to` at the next encode. */
 	land: boolean;
 	/**
-	 * The params of this channel's scale at its last encode: what its values
-	 * were drawn with. Packed as the shaders read them. Valid once `drawnSet`.
+	 * The params of this channel's scale at its last encode: what `resolved`
+	 * holds values under. Packed as the shaders read them. Valid once
+	 * `drawnSet`.
 	 */
 	drawn: Float32Array;
 	drawnSet: boolean;
-	/** The scale's `snapCount` at the last encode. */
-	snapSeen: number;
-	/** This encode folds the channel through the scale's snap, into `current`. */
-	fold: FoldScaleKind | null;
 	/** The scale's params as this frame draws them. */
 	current: Float32Array;
-	/** The scale `drawn` and `snapSeen` belong to. */
-	scale: FoldScale | null;
-	foldBindGroup: GPUBindGroup | null;
-	/** The kind `foldBindGroup` was made for: each kind has its own layout. */
-	foldBindGroupKind: FoldScaleKind | null;
+	/** The params `from` holds values under: set wherever `from` is. */
+	fromParams: Float32Array;
+	/**
+	 * Riding the scale's tween: the channel mixes by its share of the scale's
+	 * progress, `g = (f − f0) / (1 − f0)`, with `to` under the target params.
+	 * Set when `from` is taken during a tween (a fold, a remap), cleared when
+	 * `from` takes `to` (a snap, a landing, the tween's end).
+	 */
+	riding: boolean;
+	/** The segment ridden, and the scale's `f` that `from` was drawn at. */
+	segment: number;
+	f0: number;
+	/** This frame's tween as read (#readScales): whether one runs, its segment, f, target. */
+	tweenOn: boolean;
+	tweenSegment: number;
+	tweenF: number;
+	target: Float32Array;
+	/** The tween's segment (−1: none) and f at the last encode: what `resolved` was drawn at. */
+	drawnSegment: number;
+	drawnF: number;
+	/** From the tween, for the next encode: fold into a new segment; land (the tween ended). */
+	foldHere: boolean;
+	landHere: boolean;
+	/**
+	 * `from` took `to` (a snap, a landing) and nothing has been taken from the
+	 * screen since: the value is `to`, exactly, whatever t a clock still
+	 * running says and wherever the domain goes. Cleared by a fold or a remap.
+	 */
+	settled: boolean;
+	/** The scale `drawn` belongs to, and the kind it resolves with (null: a plain mix). */
+	scale: ChannelScale | null;
+	kind: FoldScaleKind | null;
+	/** The pixel-space resolve's bind group, and the kind its layout belongs to. */
+	scaledBindGroup: GPUBindGroup | null;
+	scaledBindGroupKind: FoldScaleKind | null;
 	/**
 	 * A pending remap reads this channel's old rows from here: its `resolved`
 	 * as last drawn (a buffer kept through a reallocation, or the current one).
@@ -159,7 +219,7 @@ export class MorphedChannels {
 	#label: string;
 	#clockHostFor: () => ClockHost | null;
 	#affectedCharts: () => string[];
-	#scaleFor: ((binding: number) => FoldScale | null) | null;
+	#scaleFor: ((binding: number) => ChannelScale | null) | null;
 
 	#channels = new Map<number, Channel>();
 	/**
@@ -193,6 +253,8 @@ export class MorphedChannels {
 	#dirty = false;
 	/** The t `resolved` was last computed at. */
 	#resolvedT = 1;
+	/** A channel rides a tween, or has a fold or landing from one: no early return. */
+	#tweenWork = false;
 
 	/**
 	 * The clock last read, and its version then — to notice a restart this mark
@@ -212,9 +274,12 @@ export class MorphedChannels {
 	/** `count`, `t`, `offset`. A channel owns its buffers, so `offset` stays 0. */
 	#immediates = new ArrayBuffer(RESOLVE_IMMEDIATE_SIZE);
 	#immediatesView = new DataView(this.#immediates);
-	/** The fold's: `count`, then the drawn and current params (FoldShader). */
-	#foldImmediates = new ArrayBuffer(FOLD_IMMEDIATE_SIZE);
-	#foldImmediatesView = new DataView(this.#foldImmediates);
+	/** The pixel-space resolve's: `count`, `t`, `offset`, a pad, then `fromParams` and `current`. */
+	#scaledImmediates = new ArrayBuffer(SCALED_RESOLVE_IMMEDIATE_SIZE);
+	#scaledImmediatesView = new DataView(this.#scaledImmediates);
+	/** The remap's: `count` padded to 16, then the drawn and current params (RemapShader). */
+	#remapImmediates = new ArrayBuffer(REMAP_IMMEDIATE_SIZE);
+	#remapImmediatesView = new DataView(this.#remapImmediates);
 
 	/**
 	 * Whether this browser can run the resolve kernel at all.
@@ -341,6 +406,10 @@ export class MorphedChannels {
 			// new rows); its transition carries the new `to`. Not a fold:
 			// `resolved` is still in the old layout.
 		} else if (travels && !allLand) {
+			// Every transition a mark starts folds from what is on screen, whether
+			// or not a clock read would notice it: an own clock created by this
+			// write has never been read, and its first read is not a restart.
+			this.#foldPending = true;
 			this.#startTransition();
 		} else if (!travels) {
 			this.#snapPending = true;
@@ -393,41 +462,37 @@ export class MorphedChannels {
 		// What a remap read last frame: that frame has been submitted since.
 		if (this.#retired.length > 0) this.#destroyRetired();
 
-		// Scale snaps first: a fold restarts the clock, which the read below
-		// then sees, and its plain fold must not copy over the folded `from`.
-		// A pending remap transforms its channels itself, from what they drew.
+		// Each scaled channel's params as this frame draws them.
+		this.#readScales();
+
 		const snap = this.#snapPending;
 		const remap = this.#remap;
-		if (this.#takeScaleSnaps(snap, remap !== null)) {
-			this.#startTransition();
-			// Every other channel folds from where it is too, explicitly. The
-			// clock read below may not report a restart: a mark that never had a
-			// transition gets its first clock here, and a first clock is not
-			// read as one. That every channel of such a mark has from == to is
-			// true today, but it is a chain of reasoning, not a guarantee.
-			this.#foldPending = true;
-			if (transitionsObserved()) {
-				noteTransition('morph', false, this.#affectedCharts, this.#label);
-			}
-		}
-
 		this.#readClock();
 		const t = this.#clockT;
 		if (this.#clockRestarted) this.#foldPending = true;
 		const resolveT = snap ? 1 : t;
 
-		if (!snap && !this.#foldPending && !this.#dirty && resolveT === this.#resolvedT) return;
+		if (
+			!snap &&
+			!this.#foldPending &&
+			!this.#dirty &&
+			resolveT === this.#resolvedT &&
+			!this.#tweenWork
+		) {
+			this.#moveDrawn();
+			return;
+		}
 
-		let folds = false;
 		let remaps = false;
 		for (let i = 0; i < channels.length; i++) {
 			const channel = channels[i];
 			if (snap || channel.land || (remap && !channel.remapSource)) {
 				// A landed channel: from = to, so the mix is its new value at any t.
-				// So is a rebin's channel with no old rows on screen.
-				encoder.copyBufferToBuffer(channel.to, 0, channel.from, 0, channel.size);
-				channel.land = false;
-				channel.fold = null;
+				// So is a rebin's channel with no old rows on screen. `to` is
+				// drawn under this frame's params, and so is `from` now. It does
+				// not ride a tween: drawn under the moving domain, `to` already
+				// follows every static value's path.
+				this.#landChannel(encoder, channel);
 				if (channel.remapSource && channel.remapSource !== channel.resolved) {
 					this.#retired.push(channel.remapSource);
 				}
@@ -436,16 +501,30 @@ export class MorphedChannels {
 				// A rebin: `from` is the old rows on screen, mapped onto the new
 				// bins, written by the remap dispatch in the pass below.
 				remaps = true;
-			} else if (channel.fold) {
-				// Its scale snapped: `from` is what is on screen, re-expressed in the
-				// new domain, written by the fold dispatch in the pass below.
-				folds = true;
-			} else if (this.#foldPending) {
+				channel.settled = false;
+				this.#ride(channel);
+			} else if (this.#foldPending || channel.foldHere) {
 				// A transition interrupted mid-flight continues from where it is,
 				// and one at rest copies `to` onto itself, which is correct without
-				// being a special case.
-				encoder.copyBufferToBuffer(channel.resolved, 0, channel.from, 0, channel.size);
+				// being a special case. `resolved` holds values under last frame's
+				// params, so `from` does now: every fold takes them. A fold during a
+				// tween rides it from the f those params were drawn at.
+				if (!this.#ride(channel) && channel.tweenOn && channel.kind) {
+					// Folded as the tween lands (f0 at 1): nothing left to ride.
+					this.#landChannel(encoder, channel);
+				} else {
+					encoder.copyBufferToBuffer(channel.resolved, 0, channel.from, 0, channel.size);
+					channel.fromParams.set(channel.drawnSet ? channel.drawn : channel.current);
+					channel.settled = false;
+				}
+			} else if (channel.landHere) {
+				// The tween ended: the domain is its target, so `to` is where the
+				// ride ends. Landing it stops a clock still running from
+				// mixing it back.
+				this.#landChannel(encoder, channel);
 			}
+			channel.foldHere = false;
+			channel.landHere = false;
 		}
 		this.#snapPending = false;
 		this.#foldPending = false;
@@ -453,119 +532,214 @@ export class MorphedChannels {
 		this.#resolvedT = resolveT;
 
 		const pass = encoder.beginComputePass(this.#passDescriptor);
-		// Remaps and folds before resolves: each writes a `from` the resolve
-		// below reads. Dispatches in one pass see each other's writes, in order.
+		// Remaps before resolves: each writes a `from` the resolve below reads.
+		// Dispatches in one pass see each other's writes, in order.
 		if (remaps) this.#encodeRemaps(pass, remap!);
 		else if (remap) this.#retireRemap();
-		if (folds) this.#encodeFolds(pass);
 
-		const { pipeline, layout } = resolvePipelineFor(this.#device);
-		pass.setPipeline(pipeline);
 		this.#immediatesView.setFloat32(4, resolveT, true);
+		let plainSet = false;
 		for (let i = 0; i < channels.length; i++) {
 			const channel = channels[i];
 			if (channel.count === 0) continue;
-
-			channel.bindGroup ??= this.#device.createBindGroup({
-				layout,
-				entries: [
-					{ binding: 0, resource: { buffer: channel.from } },
-					{ binding: 1, resource: { buffer: channel.to } },
-					{ binding: 2, resource: { buffer: channel.resolved } }
-				]
-			});
-			this.#immediatesView.setUint32(0, channel.count, true);
-			pass.setImmediates(0, this.#immediates);
-			pass.setBindGroup(0, channel.bindGroup);
+			const kind = channel.kind;
+			if (kind) {
+				const { pipeline, layout } = scaledResolvePipelineFor(this.#device, kind);
+				pass.setPipeline(pipeline);
+				plainSet = false;
+				if (channel.scaledBindGroupKind !== kind) {
+					channel.scaledBindGroup = this.#device.createBindGroup({
+						layout,
+						entries: [
+							{ binding: 0, resource: { buffer: channel.from } },
+							{ binding: 1, resource: { buffer: channel.to } },
+							{ binding: 2, resource: { buffer: channel.resolved } }
+						]
+					});
+					channel.scaledBindGroupKind = kind;
+				}
+				// Riding: its share of the scale's progress, unclamped (the axis
+				// overshoots with f, and so does the bar), `to` under the target.
+				// Otherwise the mark's clock, `to` under this frame's params.
+				const riding = channel.riding;
+				const view = this.#scaledImmediatesView;
+				view.setUint32(0, channel.count, true);
+				view.setFloat32(
+					4,
+					riding ? (channel.tweenF - channel.f0) / (1 - channel.f0) : resolveT,
+					true
+				);
+				view.setUint32(12, !riding && (channel.settled || resolveT >= 1) ? 1 : 0, true);
+				const toParams = riding ? channel.target : channel.current;
+				for (let k = 0; k < 4; k++) {
+					view.setFloat32(16 + 4 * k, channel.fromParams[k], true);
+					view.setFloat32(32 + 4 * k, toParams[k], true);
+					view.setFloat32(48 + 4 * k, channel.current[k], true);
+				}
+				pass.setImmediates(0, this.#scaledImmediates);
+				pass.setBindGroup(0, channel.scaledBindGroup!);
+			} else {
+				const { pipeline, layout } = resolvePipelineFor(this.#device);
+				if (!plainSet) {
+					pass.setPipeline(pipeline);
+					plainSet = true;
+				}
+				channel.bindGroup ??= this.#device.createBindGroup({
+					layout,
+					entries: [
+						{ binding: 0, resource: { buffer: channel.from } },
+						{ binding: 1, resource: { buffer: channel.to } },
+						{ binding: 2, resource: { buffer: channel.resolved } }
+					]
+				});
+				this.#immediatesView.setUint32(0, channel.count, true);
+				pass.setImmediates(0, this.#immediates);
+				pass.setBindGroup(0, channel.bindGroup);
+			}
 			pass.dispatchWorkgroups(Math.ceil(channel.count / RESOLVE_WORKGROUP));
 		}
 		pass.end();
+		this.#moveDrawn();
 	}
 
 	/**
-	 * Record what each scaled channel is drawn with this frame, and mark the
-	 * ones whose scale made a folding snap since their last encode (its
-	 * `snapCount` moved) to fold from the params they were drawn with to these.
-	 * Every frame, at rest too: a fold needs the params of the frame before it.
-	 *
-	 * Not on a snap of the row set (`snap`: nothing aligned to fold), not for a
-	 * channel landing at once, and not while none of the mark's charts is drawn
-	 * this frame: nobody sees it, so the params are recorded and the snap is
-	 * used up, and the return to view (its first frame seen) keeps nothing.
-	 * Returns whether any channel folds.
+	 * Each scaled channel's scale and its params as this frame draws them
+	 * (`current`). "What this frame draws": nothing in JS changes gpuState
+	 * between the compute work and the draw passes of one frame (frame order:
+	 * updateRenderState, compute, draw). Should that order change, so does what
+	 * `drawn` means. A channel whose scale changes starts with no record, and
+	 * builds its pipeline at once, so a shader that does not compile shows when
+	 * the mark first draws.
 	 */
-	#takeScaleSnaps(snap: boolean, remapping: boolean): boolean {
+	#readScales(): void {
 		const scaleFor = this.#scaleFor;
-		if (!scaleFor) return false;
 		const channels = this.#channelList;
-		// Asked once, and only when a snap is seen: the common frame asks nothing.
-		let onScreen: boolean | null = null;
-		let any = false;
+		let work = false;
 		for (let i = 0; i < channels.length; i++) {
 			const channel = channels[i];
-			channel.fold = null;
-			const scale = scaleFor(channel.binding);
+			const scale = scaleFor ? scaleFor(channel.binding) : null;
 			const kind = scale ? foldScaleKind(scale.scaleType) : null;
 			if (!scale || !kind) {
 				channel.scale = null;
+				channel.kind = null;
 				channel.drawnSet = false;
+				channel.tweenOn = false;
+				channel.tweenSegment = -1;
+				if (channel.riding) {
+					channel.landHere = true;
+					work = true;
+				}
 				continue;
 			}
-			// Another scale's count says nothing about this one's snaps.
-			if (scale !== channel.scale) {
+			if (scale !== channel.scale || kind !== channel.kind) {
 				channel.scale = scale;
+				channel.kind = kind;
 				channel.drawnSet = false;
-				// Built now rather than at the first fold (cached per device and
-				// kind): a shader that does not compile shows when the mark first
-				// draws, not on the rare frame a snap folds.
-				foldPipelineFor(this.#device, kind);
+				scaledResolvePipelineFor(this.#device, kind);
 			}
-			// "What this frame draws": nothing in JS changes gpuState between
-			// the compute work and the draw passes of one frame (frame order:
-			// updateRenderState, compute, draw). Should that order change, so
-			// does what `drawn` means.
 			const g = scale.gpuState;
 			const current = channel.current;
 			current[0] = g.domainMin;
 			current[1] = g.domainMax;
 			current[2] = g.domainScale;
 			current[3] = g.p4;
-			const snapped = channel.drawnSet && scale.snapCount !== channel.snapSeen;
-			channel.snapSeen = scale.snapCount;
-			if (remapping && channel.remapSource && channel.drawnSet) {
-				// The remap transforms from what was drawn, whether or not the
-				// scale snapped too; #encodeRemaps takes `drawn` and moves it on.
-				continue;
-			}
-			if (snapped && !snap && !channel.land && (onScreen ??= this.#onScreen())) {
-				// `drawn` still holds last frame's params; #encodeFolds takes it.
-				channel.fold = kind;
-				any = true;
+			// A channel that has not drawn yet holds values under these params.
+			if (!channel.drawnSet) channel.fromParams.set(current);
+
+			const tween = scale.tween ?? null;
+			if (tween) {
+				channel.tweenOn = true;
+				channel.tweenSegment = tween.segment;
+				channel.tweenF = tween.f;
+				const p = tween.targetParams;
+				const target = channel.target;
+				target[0] = p.domainMin;
+				target[1] = p.domainMax;
+				target[2] = p.domainScale;
+				target[3] = p.p4;
 			} else {
-				channel.drawn.set(current);
-				channel.drawnSet = true;
+				channel.tweenOn = false;
+				channel.tweenSegment = -1;
+			}
+			if (channel.riding) {
+				// A new segment re-anchors from the screen; the tween's end lands.
+				if (!tween) channel.landHere = true;
+				else if (tween.segment !== channel.segment) channel.foldHere = true;
+				work = true;
+			} else if (tween && this.#resolvedT < 1) {
+				// Mid-way on its own clock when a tween runs: join it, or its `to`
+				// would chase the moving domain. A channel at rest stays out: drawn
+				// under the moving domain it already follows the static path.
+				channel.foldHere = true;
+				work = true;
 			}
 		}
-		return any;
+		this.#tweenWork = work;
+	}
+
+	/**
+	 * Start riding the scale's tween from `from` as about to be taken (a fold,
+	 * a remap: last frame's screen), or not, without one. `f0` is the f that
+	 * screen was drawn at: last frame's within the same segment, 0 on a new
+	 * one (it starts where the last one was drawn). False also when `f0` is at
+	 * 1 (|1 − f0| below LAND_EPS, either side: a fold during an overshoot has
+	 * f0 > 1 and still rides, g running 0 → 1 as f falls back): the tween is
+	 * landing and `g` would divide by nothing.
+	 */
+	#ride(channel: Channel): boolean {
+		if (!channel.kind || !channel.tweenOn) {
+			channel.riding = false;
+			return false;
+		}
+		const f0 = channel.drawnSegment === channel.tweenSegment ? channel.drawnF : 0;
+		if (Math.abs(1 - f0) < LAND_EPS) {
+			channel.riding = false;
+			return false;
+		}
+		channel.f0 = f0;
+		channel.segment = channel.tweenSegment;
+		channel.riding = true;
+		return true;
+	}
+
+	/** `from` takes `to`, under this frame's params: the mix is `to` at any t. */
+	#landChannel(encoder: GPUCommandEncoder, channel: Channel): void {
+		encoder.copyBufferToBuffer(channel.to, 0, channel.from, 0, channel.size);
+		channel.fromParams.set(channel.current);
+		channel.land = false;
+		channel.riding = false;
+		channel.settled = true;
+	}
+
+	/** After an encode: what was drawn this frame is what the next one moves from. */
+	#moveDrawn(): void {
+		const channels = this.#channelList;
+		for (let i = 0; i < channels.length; i++) {
+			const channel = channels[i];
+			if (!channel.kind) continue;
+			channel.drawn.set(channel.current);
+			channel.drawnSet = true;
+			channel.drawnSegment = channel.tweenOn ? channel.tweenSegment : -1;
+			channel.drawnF = channel.tweenF;
+		}
 	}
 
 	/**
 	 * The remap dispatches, one per channel with old rows: `from` takes the old
-	 * rows on screen, mapped onto the new bins (RemapShader), each transformed
-	 * from the params it was drawn with to this frame's (none for a binding on
-	 * no scale, or one never drawn). Then the map and any source kept through
-	 * a reallocation are retired.
+	 * rows on screen, mapped onto the new bins (RemapShader), in the units they
+	 * were drawn in, which become `fromParams`. Then the map and any source
+	 * kept through a reallocation are retired.
 	 */
 	#encodeRemaps(pass: GPUComputePassEncoder, map: GPUBuffer): void {
 		const channels = this.#channelList;
-		const view = this.#foldImmediatesView;
+		const view = this.#remapImmediatesView;
 		for (let i = 0; i < channels.length; i++) {
 			const channel = channels[i];
 			const source = channel.remapSource;
 			if (!source) continue;
 			channel.remapSource = null;
-			const scaleKind = channel.scale ? foldScaleKind(channel.scale.scaleType) : null;
-			const kind: RemapKind = channel.drawnSet && scaleKind ? scaleKind : 'none';
+			const drawn = channel.drawnSet ? channel.drawn : channel.current;
+			const kind: RemapKind = channel.kind ?? 'none';
 			if (channel.count > 0) {
 				const { pipeline, layout } = remapPipelineFor(this.#device, kind);
 				pass.setPipeline(pipeline);
@@ -581,17 +755,14 @@ export class MorphedChannels {
 				});
 				view.setUint32(0, channel.count, true);
 				for (let k = 0; k < 4; k++) {
-					view.setFloat32(16 + 4 * k, channel.drawn[k], true);
+					view.setFloat32(16 + 4 * k, drawn[k], true);
 					view.setFloat32(32 + 4 * k, channel.current[k], true);
 				}
-				pass.setImmediates(0, this.#foldImmediates);
+				pass.setImmediates(0, this.#remapImmediates);
 				pass.setBindGroup(0, bindGroup);
 				pass.dispatchWorkgroups(Math.ceil(channel.count / RESOLVE_WORKGROUP));
 			}
-			if (channel.scale) {
-				channel.drawn.set(channel.current);
-				channel.drawnSet = true;
-			}
+			channel.fromParams.set(drawn);
 			if (source !== channel.resolved) this.#retired.push(source);
 		}
 		this.#retired.push(map);
@@ -601,58 +772,6 @@ export class MorphedChannels {
 	#destroyRetired(): void {
 		for (let i = 0; i < this.#retired.length; i++) this.#retired[i].destroy();
 		this.#retired.length = 0;
-	}
-
-	/** Whether any of the mark's charts is drawn this frame (the host's draw list). */
-	#onScreen(): boolean {
-		const drawn = this.#host.chartDrawnThisFrame;
-		if (!drawn) return true;
-		const charts = this.#affectedCharts();
-		for (let i = 0; i < charts.length; i++) {
-			if (drawn.call(this.#host, charts[i])) return true;
-		}
-		return false;
-	}
-
-	/**
-	 * The fold dispatches, one per folding channel: `from` takes its on-screen
-	 * values in the new domain (FoldShader). Each then draws with the params it
-	 * folded into.
-	 */
-	#encodeFolds(pass: GPUComputePassEncoder): void {
-		const channels = this.#channelList;
-		const view = this.#foldImmediatesView;
-		for (let i = 0; i < channels.length; i++) {
-			const channel = channels[i];
-			const kind = channel.fold;
-			if (!kind) continue;
-			channel.fold = null;
-			if (channel.count > 0) {
-				const { pipeline, layout } = foldPipelineFor(this.#device, kind);
-				pass.setPipeline(pipeline);
-				// The layout is the kind's, so a bind group is too.
-				if (channel.foldBindGroupKind !== kind) {
-					channel.foldBindGroup = this.#device.createBindGroup({
-						layout,
-						entries: [
-							{ binding: 0, resource: { buffer: channel.resolved } },
-							{ binding: 1, resource: { buffer: channel.from } }
-						]
-					});
-					channel.foldBindGroupKind = kind;
-				}
-				view.setUint32(0, channel.count, true);
-				for (let k = 0; k < 4; k++) {
-					view.setFloat32(16 + 4 * k, channel.drawn[k], true);
-					view.setFloat32(32 + 4 * k, channel.current[k], true);
-				}
-				pass.setImmediates(0, this.#foldImmediates);
-				pass.setBindGroup(0, channel.foldBindGroup!);
-				pass.dispatchWorkgroups(Math.ceil(channel.count / RESOLVE_WORKGROUP));
-			}
-			channel.drawn.set(channel.current);
-			channel.drawnSet = true;
-		}
 	}
 
 	/**
@@ -720,22 +839,36 @@ export class MorphedChannels {
 			land: false,
 			drawn: new Float32Array(4),
 			drawnSet: false,
-			snapSeen: 0,
-			fold: null,
 			current: new Float32Array(4),
+			fromParams: new Float32Array(4),
+			riding: false,
+			segment: -1,
+			f0: 0,
+			tweenOn: false,
+			tweenSegment: -1,
+			tweenF: 0,
+			target: new Float32Array(4),
+			drawnSegment: -1,
+			drawnF: 0,
+			foldHere: false,
+			landHere: false,
+			settled: false,
 			scale: null,
-			foldBindGroup: null,
-			foldBindGroupKind: null,
+			kind: null,
+			scaledBindGroup: null,
+			scaledBindGroupKind: null,
 			remapSource: null
 		};
 		// What was drawn describes the screen, not the buffers: a reallocated
-		// channel keeps it, which a remap's transform reads (most zoom-in rebins
-		// reallocate).
+		// channel keeps it, which a remap reads (most zoom-in rebins reallocate).
 		if (previous) {
 			channel.drawn.set(previous.drawn);
 			channel.drawnSet = previous.drawnSet;
-			channel.snapSeen = previous.snapSeen;
+			channel.drawnSegment = previous.drawnSegment;
+			channel.drawnF = previous.drawnF;
+			channel.current.set(previous.current);
 			channel.scale = previous.scale;
+			channel.kind = previous.kind;
 		}
 		this.#channels.set(binding, channel);
 		this.#channelList = [...this.#channels.values()];

@@ -80,12 +80,22 @@ describe('the bins remap', () => {
 		expect(buildBinRemap(prev, swapped)).toBeNull();
 	});
 
-	it('holds the old pixels through a snap of the domain: children of a halved domain start at half', () => {
+	it('keeps the old rows in the units they were drawn in, whatever the domain is now', () => {
+		// The pixel-space resolve carries them from there (fromParams = drawn).
 		const map = buildBinRemap(side([0, 10, 20]), side([0, 5, 10, 15, 20]))!;
 		const out = new Float32Array(4);
-		// Drawn under [0, 100], now under [0, 50]: the same pixel is half the value.
 		remapReference('linear', [80, 40], [0, 0, 0, 0], map, linear(0, 100), linear(0, 50), 4, out);
-		expect(Array.from(out)).toEqual([40, 40, 20, 20]);
+		expect(Array.from(out)).toEqual([80, 80, 40, 40]);
+	});
+
+	it('re-expresses the uncovered part’s own value in the old units', () => {
+		// A new bin half past the old extent: half its start is the old row, half
+		// its new value, which under [0, 50] is the pixel 2× that value has under
+		// [0, 100].
+		const map = buildBinRemap(side([0, 10]), side([0, 20]))!;
+		const out = new Float32Array(1);
+		remapReference('linear', [60], [10], map, linear(0, 100), linear(0, 50), 1, out);
+		expect(out[0]).toBeCloseTo(0.5 * 60 + 0.5 * 20, 4);
 	});
 
 	it('leaves a binding on no scale untransformed (an Other share)', () => {
