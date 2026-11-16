@@ -152,13 +152,6 @@ export class LinearScaleState {
 		p4: 0
 	};
 
-	/**
-	 * The per-mark fold's trigger (MorphedChannels): a count of folding snaps.
-	 * No longer bumped: a change of unit tweens the render domain instead
-	 * (#tweenTo), which every consumer of the scale follows by itself. Stays 0
-	 * until the fold machinery is replaced by pixel-space resolves.
-	 */
-	snapCount = 0;
 	/** Nesting of `folding()` calls; an instant change while above 0 tweens (`#tweenTo`). */
 	#foldDepth = 0;
 

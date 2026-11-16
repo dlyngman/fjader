@@ -1,7 +1,7 @@
 import { UNIFORM_STAND_IN_BYTES } from './uniform-sizes';
 import type { GPUCoordinator, DataBindingEntry, LayerRegistrationResult } from '$lib/gpu';
 import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
-import { MorphedChannels, type ClockHost, type FoldScale } from '$lib/gpu/MorphedChannels';
+import { MorphedChannels, type ClockHost, type ChannelScale } from '$lib/gpu/MorphedChannels';
 
 export interface RendererOptions {
 	zIndex?: number;
@@ -321,10 +321,13 @@ export class BaseGPURenderer {
 		land?: readonly number[] | 'all',
 		/**
 		 * Bindings whose values are measured on the value axis (the one that is
-		 * not `bandAxis`): a folding snap of that scale folds them, so they hold
-		 * their pixels and glide. Not a band id or an Other share.
+		 * not `bandAxis`): they resolve in pixel space under that scale, so they
+		 * glide linearly on screen even while the scale moves. Not a band id or
+		 * an Other share.
 		 */
-		scaled: readonly number[] = NO_SCALED
+		scaled: readonly number[] = NO_SCALED,
+		/** A rebin's map from the rows on screen to these (MorphedChannels.write). */
+		remap: Uint32Array | null = null
 	): void {
 		if (!this.#device) return;
 
@@ -367,7 +370,7 @@ export class BaseGPURenderer {
 						: axis === 'y'
 							? this.#chartContext.xScaleState
 							: null;
-				return (scale as FoldScale | null) ?? null;
+				return (scale as ChannelScale | null) ?? null;
 			}
 		});
 		this.#scaledBindings = scaled;
@@ -385,7 +388,7 @@ export class BaseGPURenderer {
 		}
 
 		this.#morphAxis = bandAxis;
-		if (this.#morphed.write(bandIds, channels, land) || rebind) {
+		if (this.#morphed.write(bandIds, channels, land, remap) || rebind) {
 			this.#scheduleBindGroupUpdate();
 		} else if (!this.#bindGroupUpdateScheduled) {
 			this.invalidateLayer();

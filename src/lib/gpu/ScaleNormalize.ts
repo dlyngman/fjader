@@ -3,10 +3,12 @@
  * data value to [0, 1] across the domain, `invert` takes it back.
  *
  * The vertex stage draws a value through `normalize` and then the range step
- * (ScaleTemplateSystem); the fold (FoldShader) maps values drawn under one
- * domain into another through `invert(current, normalize(drawn, v))`. Both
- * paste these same expressions, so a folded value is drawn by the code that
- * made it: the fold and the draw cannot disagree about what a domain means.
+ * (ScaleTemplateSystem); the pixel-space resolve (ResolveShader) mixes the
+ * positions of values drawn under two domains and maps the result back with
+ * `invert`, and the remap (RemapShader) re-expresses a value in another
+ * domain. All paste these same expressions, so a resolved value is drawn by
+ * the code that placed it: the resolve and the draw cannot disagree about what
+ * a domain means.
  *
  * `scale` names a `ScaleParam` (p1..p4, as `#writeScaleParam` packs a scale's
  * `gpuState`). Time scales are linear in offsets from t0.

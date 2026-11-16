@@ -1,4 +1,11 @@
 import { isNanExpr } from './NanShaderLib';
+import {
+	invertExpr,
+	invertReference,
+	normalizeExpr,
+	normalizeReference,
+	type FoldScaleKind
+} from './ScaleNormalize';
 /**
  * The resolve kernel: `resolved[j] = mix(from[j], to[j], t)` over one range.
  *
@@ -172,6 +179,146 @@ export function resolvePipelineFor(device: GPUDevice): ResolvePipeline {
 		});
 		entry = { pipeline, layout };
 		PIPELINES.set(device, entry);
+	}
+	return entry;
+}
+
+/**
+ * THE PIXEL-SPACE RESOLVE, for a channel measured on a continuous scale.
+ *
+ *   resolved = invert(now, mix(normalize(fromP, from), normalize(toP, to), t))
+ *
+ * `from` was drawn under the scale's params `fromP` (captured when `from` was
+ * set: a snap, a fold, a remap). `to` is placed under `toP`: the TARGET domain
+ * while the scale runs a unit-change tween (`LinearScaleState.tween`), this
+ * frame's otherwise. The mix is drawn under this frame's params, `now`.
+ *
+ * Mixing POSITIONS, not values, keeps the morph linear in pixels while the
+ * scale moves; placing `to` under the target, not under `now`, keeps it from
+ * chasing a moving end point. On a tween every value on the scale, static or
+ * morphing, then travels from where it was drawn to where the target puts it
+ * on the scale's own progress (`t` = the channel's share of it, `g`), so a
+ * pure change of unit holds a bar's height exactly. Against `now` instead,
+ * bars dipped to 79% mid-way on a 7 d → 1 d rebin.
+ *
+ * `t` is NOT clamped: a tween's progress can overshoot 1 (or dip below 0)
+ * and the axis extrapolates with it, so the bar does too. The caller says
+ * when a value has landed (`land`): it then takes `to` itself, not through
+ * the round trip, so a finished value carries no f32 rounding whatever the
+ * domain does afterwards. A NaN on either side takes `to` as in the plain
+ * resolve, and so does a degenerate current domain (no width to place a
+ * value in).
+ *
+ * Immediates: `count`, `t`, `offset`, `land`, then `fromP`, `toP` and `now`
+ * as the draw passes pack a scale (64 B).
+ */
+export const SCALED_RESOLVE_IMMEDIATE_SIZE = 64;
+
+export function scaledResolveShader(kind: FoldScaleKind): string {
+	return /* wgsl */ `
+requires immediate_address_space;
+
+struct ScaleParam {
+  p1: f32,
+  p2: f32,
+  p3: f32,
+  p4: f32,
+};
+
+struct Params {
+  count: u32,
+  t: f32,
+  offset: u32,
+  land: u32,
+  fromP: ScaleParam,
+  toP: ScaleParam,
+  now: ScaleParam,
+};
+
+@group(0) @binding(0) var<storage, read>       valueFrom: array<f32>;
+@group(0) @binding(1) var<storage, read>       valueTo:   array<f32>;
+@group(0) @binding(2) var<storage, read_write> resolved:  array<f32>;
+var<immediate> params: Params;
+
+@compute @workgroup_size(${RESOLVE_WORKGROUP})
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  if (gid.x >= params.count) {
+    return;
+  }
+  let j = params.offset + gid.x;
+  let a = valueFrom[j];
+  let b = valueTo[j];
+  let fromP = params.fromP;
+  let toP = params.toP;
+  let now = params.now;
+  let position = mix(${normalizeExpr(kind, 'a', 'fromP')}, ${normalizeExpr(kind, 'b', 'toP')}, params.t);
+  let takeTo = params.land != 0u || ${isNanExpr('a')} || ${isNanExpr('b')} || now.p3 == 0.0;
+  resolved[j] = select(${invertExpr(kind, 'position', 'now')}, b, takeTo);
+}
+`;
+}
+
+/** The pixel-space resolve in JS, asserted against the kernel's intent. Params as `[p1, p2, p3, p4]`. */
+export function scaledResolveReference(
+	kind: FoldScaleKind,
+	valueFrom: ArrayLike<number>,
+	valueTo: ArrayLike<number>,
+	t: number,
+	fromP: ArrayLike<number>,
+	toP: ArrayLike<number>,
+	now: ArrayLike<number>,
+	out: Float32Array,
+	land = false
+): Float32Array {
+	for (let j = 0; j < valueTo.length; j++) {
+		const a = valueFrom[j];
+		const b = valueTo[j];
+		if (land || Number.isNaN(a) || Number.isNaN(b) || now[2] === 0) {
+			out[j] = b;
+			continue;
+		}
+		const position =
+			(1 - t) * normalizeReference(kind, a, fromP) + t * normalizeReference(kind, b, toP);
+		out[j] = invertReference(kind, position, now);
+	}
+	return out;
+}
+
+const SCALED_PIPELINES = new WeakMap<GPUDevice, Map<FoldScaleKind, ResolvePipeline>>();
+
+/** One pixel-space resolve pipeline per device and scale kind, shared by every mark. */
+export function scaledResolvePipelineFor(device: GPUDevice, kind: FoldScaleKind): ResolvePipeline {
+	let byKind = SCALED_PIPELINES.get(device);
+	if (!byKind) {
+		byKind = new Map();
+		SCALED_PIPELINES.set(device, byKind);
+	}
+	let entry = byKind.get(kind);
+	if (!entry) {
+		const stage = GPUShaderStage.COMPUTE;
+		const label = `resolve-${kind}`;
+		const layout = device.createBindGroupLayout({
+			label,
+			entries: [
+				{ binding: 0, visibility: stage, buffer: { type: 'read-only-storage' } },
+				{ binding: 1, visibility: stage, buffer: { type: 'read-only-storage' } },
+				{ binding: 2, visibility: stage, buffer: { type: 'storage' } }
+			]
+		});
+		const pipeline = device.createComputePipeline({
+			label,
+			layout: device.createPipelineLayout({
+				label,
+				bindGroupLayouts: [layout],
+				immediateSize: SCALED_RESOLVE_IMMEDIATE_SIZE
+			}),
+			compute: {
+				module: device.createShaderModule({ label, code: scaledResolveShader(kind) }),
+				entryPoint: 'main'
+			}
+		});
+		entry = { pipeline, layout };
+		byKind.set(kind, entry);
 	}
 	return entry;
 }

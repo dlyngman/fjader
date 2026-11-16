@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { MorphedChannels, alignmentKey, type ClockHost, type MorphHost } from './MorphedChannels';
 import { TransitionClock } from '$lib/animation/TransitionClock';
+import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
+import { scaledResolveReference } from './ResolveShader';
 
 // A fake device that records what reaches the GPU, so the claims below are
 // about commands issued rather than about internal flags.
@@ -56,14 +58,33 @@ function fakes() {
 		beginComputePass() {
 			log.push('pass');
 			return {
-				// Fold pipelines only: the resolve's would change every exact list below.
+				// Pixel-space resolve and remap pipelines only: the plain resolve's
+				// would change every exact list below.
 				setPipeline(pipeline: { label?: string }) {
-					if (pipeline.label?.startsWith('fold')) log.push(`pipeline ${pipeline.label}`);
+					const label = pipeline.label ?? '';
+					if (label.startsWith('resolve-') || label.startsWith('remap')) {
+						log.push(`pipeline ${label}`);
+					}
 				},
 				setBindGroup() {},
 				setImmediates(_offset: number, data: ArrayBuffer) {
 					const view = new DataView(data);
-					log.push(`imm count=${view.getUint32(0, true)} t=${view.getFloat32(4, true)}`);
+					const head = `imm count=${view.getUint32(0, true)} t=${view.getFloat32(4, true)}`;
+					// 64 B (pixel-space resolve): `land`, then fromP, toP and now; their
+					// domain mins tell them apart. `to` shown only when it is not `now`
+					// (a ride's target). 48 B (remap): drawn and now.
+					let params = '';
+					if (data.byteLength === 64) {
+						const from = view.getFloat32(16, true);
+						const to = view.getFloat32(32, true);
+						const now = view.getFloat32(48, true);
+						params = ` from=${from} now=${now}`;
+						if (to !== now) params += ` to=${to}`;
+						if (view.getUint32(12, true) !== 0) params += ' land';
+					} else if (data.byteLength === 48) {
+						params = ` from=${view.getFloat32(16, true)} now=${view.getFloat32(32, true)}`;
+					}
+					log.push(head + params);
 				},
 				dispatchWorkgroups(n: number) {
 					log.push(`dispatch ${n}`);
@@ -457,32 +478,21 @@ describe('MorphedChannels', () => {
 	});
 });
 
-describe('MorphedChannels folding through a scale snap', () => {
-	/** A value-axis scale as a fold reads it: params as drawn, and its snap count. */
+describe('MorphedChannels resolving in pixel space', () => {
+	/** A value-axis scale as a resolve reads it: its params as drawn. */
 	function scale(min: number, max: number) {
 		return {
-			snapCount: 0,
 			scaleType: 'linear',
 			gpuState: { domainMin: min, domainMax: max, domainScale: 1 / (max - min), p4: 0 },
-			/** An instant change of domain that folds (`folding` + `#setInstant`). */
-			snapTo(lo: number, hi: number) {
-				this.gpuState = { domainMin: lo, domainMax: hi, domainScale: 1 / (hi - lo), p4: 0 };
-				this.snapCount++;
-			},
-			/** A frame of a spring: the params move, the count does not. */
-			springTo(lo: number, hi: number) {
+			/** A frame of the domain moving (a tween, a spring). */
+			moveTo(lo: number, hi: number) {
 				this.gpuState = { domainMin: lo, domainMax: hi, domainScale: 1 / (hi - lo), p4: 0 };
 			}
 		};
 	}
 
 	/** Channels 2 and 3 on the value axis; 4 is an Other share, on no scale. */
-	function folding(
-		f: ReturnType<typeof fakes>,
-		y: ReturnType<typeof scale>,
-		onScreen = () => true
-	) {
-		f.host.chartDrawnThisFrame = () => onScreen();
+	function folding(f: ReturnType<typeof fakes>, y: ReturnType<typeof scale>) {
 		return new MorphedChannels({
 			device: f.device,
 			host: f.host,
@@ -501,134 +511,208 @@ describe('MorphedChannels folding through a scale snap', () => {
 		]);
 
 	/** A mark at rest under the domain [0, 100]. */
-	function atRest(
-		f: ReturnType<typeof fakes>,
-		y: ReturnType<typeof scale>,
-		onScreen?: () => boolean
-	) {
-		const m = folding(f, y, onScreen);
+	function atRest(f: ReturnType<typeof fakes>, y: ReturnType<typeof scale>) {
+		const m = folding(f, y);
 		write(m, [0, 0, 0], [10, 20, 30]);
 		f.frame();
 		f.frame();
 		return m;
 	}
 
-	it('folds a snapped channel in place of the plain copy, and starts a transition', () => {
+	it('resolves a scaled channel in pixel space; a snap takes this frame’s params', () => {
 		const f = fakes();
-		const y = scale(0, 100);
-		atRest(f, y);
-
-		y.snapTo(0, 50);
-		const issued = f.frame();
-		// Each channel: the fold kernel writes `from`, no copy over it.
-		expect(issued.filter((c) => c === 'pipeline fold-linear')).toHaveLength(2);
-		expect(issued).not.toContain('copy m-2-resolved -> m-2-from');
-		expect(issued).not.toContain('copy m-3-resolved -> m-3-from');
-		// The folds come before the resolves, and the resolve runs at t = 0.
-		const firstFold = issued.indexOf('pipeline fold-linear');
-		const resolves = issued.filter((c) => c.startsWith('imm count=3 t=0'));
-		expect(firstFold).toBeGreaterThan(-1);
-		expect(resolves.length).toBeGreaterThanOrEqual(2);
-		expect(f.sources.length).toBe(1);
-	});
-
-	it('does not fold through a spring: the params move every frame, the count does not', () => {
-		const f = fakes();
-		const y = scale(0, 100);
-		atRest(f, y);
-
-		y.springTo(0, 80);
-		expect(f.frame()).toEqual([]);
-		y.springTo(0, 60);
-		expect(f.frame()).toEqual([]);
-	});
-
-	it('folds once for two snaps before one encode, from what was drawn to what will be', () => {
-		const f = fakes();
-		const y = scale(0, 100);
-		atRest(f, y);
-
-		y.snapTo(0, 50);
-		y.snapTo(0, 25);
-		const issued = f.frame();
-		expect(issued.filter((c) => c === 'pipeline fold-linear')).toHaveLength(2);
-		// And not again on the next frame: the snaps are used up.
-		const next = f.frame();
-		expect(next.filter((c) => c.startsWith('pipeline fold'))).toHaveLength(0);
-	});
-
-	it('does not fold a channel it has never drawn: nothing on screen to keep', () => {
-		const f = fakes();
-		const y = scale(0, 100);
+		const y = scale(5, 100);
 		const m = folding(f, y);
 		write(m, [0, 0, 0], [10, 20, 30]);
-		y.snapTo(0, 50);
 		const issued = f.frame();
-		expect(issued.filter((c) => c.startsWith('pipeline fold'))).toHaveLength(0);
-		expect(issued).toContain('copy m-2-to -> m-2-from');
+		// Both value channels through the pixel-space resolve, from = now: a snap.
+		expect(issued.filter((c) => c === 'pipeline resolve-linear')).toHaveLength(2);
+		expect(issued.filter((c) => c === 'imm count=3 t=1 from=5 now=5 land')).toHaveLength(2);
 	});
 
-	it('off screen, records the snap and uses it up: no fold then, none on return', () => {
-		const f = fakes();
-		const y = scale(0, 100);
-		let onScreen = true;
-		atRest(f, y, () => onScreen);
-
-		onScreen = false;
-		y.snapTo(0, 50);
-		expect(f.frame().filter((c) => c.startsWith('pipeline fold'))).toHaveLength(0);
-		expect(f.sources.length).toBe(0);
-
-		onScreen = true;
-		expect(f.frame().filter((c) => c.startsWith('pipeline fold'))).toHaveLength(0);
-		expect(f.sources.length).toBe(0);
-	});
-
-	it('lets a snap of the row set win: aligned rows are what a fold needs', () => {
+	it('takes the previous frame’s params on a fold: what resolved was drawn under', () => {
 		const f = fakes();
 		const y = scale(0, 100);
 		const m = atRest(f, y);
 
-		y.snapTo(0, 50);
-		m.write(new Float32Array([0, 1, 2, 3]), [
-			[2, values(0, 0, 0, 0)],
-			[3, values(5, 6, 7, 8)]
+		// The domain moves (a tween's frame), then new data folds from the screen.
+		y.moveTo(10, 60);
+		f.frame();
+		y.moveTo(20, 50);
+		write(m, [0, 0, 0], [5, 6, 7]);
+		const issued = f.frame();
+		expect(issued).toContain('copy m-2-resolved -> m-2-from');
+		// `from` holds values under last frame's params (min 10), `to` under now's (20).
+		expect(issued.filter((c) => c === 'imm count=3 t=0 from=10 now=20')).toHaveLength(2);
+	});
+
+	it('costs nothing at rest while the domain moves: a finished value is `to`', () => {
+		const f = fakes();
+		const y = scale(0, 100);
+		atRest(f, y);
+		y.moveTo(0, 80);
+		expect(f.frame()).toEqual([]);
+		y.moveTo(0, 60);
+		expect(f.frame()).toEqual([]);
+	});
+
+	it('resolves a binding on no scale as a plain mix (an Other share)', () => {
+		const f = fakes();
+		const y = scale(0, 100);
+		const m = folding(f, y);
+		write(m, [0, 0, 0], [10, 20, 30], [1, 1, 1]);
+		const issued = f.frame();
+		// Three channels: two pixel-space, one plain (12 B of immediates, no params).
+		expect(issued.filter((c) => c === 'pipeline resolve-linear')).toHaveLength(2);
+		expect(issued.filter((c) => c === 'imm count=3 t=1')).toHaveLength(1);
+	});
+
+	it('restarts carry each channel’s params with its `from`, whatever moved between', () => {
+		const f = fakes();
+		const y = scale(0, 100);
+		const m = atRest(f, y);
+		write(m, [0, 0, 0], [5, 6, 7]);
+		f.frame(); // the transition starts under min 0
+		y.moveTo(30, 90);
+		f.frame(); // drawn under min 30
+		y.moveTo(40, 90);
+		write(m, [0, 0, 0], [8, 9, 1]); // a restart mid-way: from = resolved, under 30
+		const issued = f.frame();
+		expect(issued.filter((c) => c.includes('from=30 now=40'))).toHaveLength(2);
+	});
+});
+
+describe('MorphedChannels remapping a rebin', () => {
+	const y = {
+		snapCount: 0,
+		scaleType: 'linear',
+		gpuState: { domainMin: 0, domainMax: 100, domainScale: 0.01, p4: 0 }
+	};
+	/** Channels 2 and 3 on the value axis; 4 an Other share. */
+	function remapping(f: ReturnType<typeof fakes>) {
+		return new MorphedChannels({
+			device: f.device,
+			host: f.host,
+			label: 'm',
+			clockHost: () => null,
+			affectedCharts: () => ['chart-1'],
+			scaleFor: (binding) => (binding === 2 || binding === 3 ? y : null)
+		});
+	}
+	// A map's words; its contents are the kernel's business (remap.test.ts).
+	const MAP = new Uint32Array(16);
+	const oldIds = new Float32Array([0, 10]);
+	const newIds = new Float32Array([0, 5, 10, 15]);
+
+	/** Two bins on screen, at rest. */
+	function onScreen(f: ReturnType<typeof fakes>) {
+		const m = remapping(f);
+		m.write(oldIds, [
+			[2, values(0, 0)],
+			[3, values(8, 4)]
 		]);
-		const issued = f.frame();
-		expect(issued.filter((c) => c.startsWith('pipeline fold'))).toHaveLength(0);
-	});
+		f.frame();
+		f.frame();
+		return m;
+	}
+	const rebin = (m: MorphedChannels, map: Uint32Array | null = MAP, share = false) =>
+		m.write(
+			newIds,
+			[
+				[2, values(0, 0, 0, 0)],
+				[3, values(3, 5, 1, 3)],
+				...(share ? ([[4, values(1, 1, 1, 1)]] as const) : [])
+			],
+			undefined,
+			map
+		);
 
-	it('never folds a binding on no scale (an Other share)', () => {
+	it('remaps a rebin instead of snapping: before the resolves, from t = 0', () => {
 		const f = fakes();
-		const y = scale(0, 100);
-		const m = folding(f, y);
-		write(m, [0, 0, 0], [10, 20, 30], [1, 1, 1]);
-		f.frame();
-		f.frame();
-
-		y.snapTo(0, 50);
+		const m = onScreen(f);
+		rebin(m);
 		const issued = f.frame();
-		// Three channels, two folds: the share is on no scale.
-		expect(issued.filter((c) => c === 'pipeline fold-linear')).toHaveLength(2);
-	});
-
-	it('on the first fold of a mark that never transitioned, folds its other channels too', () => {
-		// Every update so far snapped (its first data), so it has no clock: the
-		// fold creates one, which the clock read does not report as a restart.
-		const f = fakes();
-		const y = scale(0, 100);
-		const m = folding(f, y);
-		write(m, [0, 0, 0], [10, 20, 30], [1, 1, 1]);
-		f.frame();
-		f.frame();
-		expect(f.sources.length).toBe(0);
-
-		y.snapTo(0, 50);
-		const issued = f.frame();
-		expect(issued.filter((c) => c === 'pipeline fold-linear')).toHaveLength(2);
-		// The share, on no scale, folds from where it is: the plain copy.
-		expect(issued).toContain('copy m-4-resolved -> m-4-from');
+		expect(issued.filter((c) => c === 'pipeline remap-linear')).toHaveLength(2);
+		expect(issued).not.toContain('copy m-2-to -> m-2-from');
+		expect(issued).not.toContain('copy m-3-to -> m-3-from');
+		expect(issued.some((c) => c.startsWith('imm count=4 t=0'))).toBe(true);
 		expect(f.sources.length).toBe(1);
+	});
+
+	it('keeps the old resolved through a reallocation until the frame after it was read', () => {
+		const f = fakes();
+		const m = onScreen(f);
+		// Two rows to four, in buffers of 256 B: no reallocation needed for this
+		// size, so grow past it to force one.
+		const big = (n: number) => new Float32Array(n);
+		m.write(
+			new Float32Array(Array.from({ length: 200 }, (_, i) => i)),
+			[
+				[2, big(200)],
+				[3, big(200)]
+			],
+			undefined,
+			MAP
+		);
+		const writeLog = [...f.log];
+		expect(writeLog).toContain('destroy m-2-from');
+		expect(writeLog).not.toContain('destroy m-2-resolved');
+		const remapFrame = f.frame();
+		expect(remapFrame.filter((c) => c === 'pipeline remap-linear')).toHaveLength(2);
+		expect(remapFrame).not.toContain('destroy m-2-resolved');
+		const next = f.frame();
+		expect(next).toContain('destroy m-2-resolved');
+		expect(next).toContain('destroy m-remap');
+	});
+
+	it('takes an aligned write along while a remap is pending: no fold, one transition', () => {
+		const f = fakes();
+		const m = onScreen(f);
+		rebin(m);
+		const starts = f.sources.length;
+		rebin(m, null); // the same new rows, other values
+		const issued = f.frame();
+		expect(issued.filter((c) => c === 'pipeline remap-linear')).toHaveLength(2);
+		expect(issued).not.toContain('copy m-2-resolved -> m-2-from');
+		expect(f.sources.length).toBe(starts);
+	});
+
+	it('snaps a second rebin before the first ran: its map is from a layout never drawn', () => {
+		const f = fakes();
+		const m = onScreen(f);
+		rebin(m);
+		m.write(
+			new Float32Array([0, 2, 4, 6, 8, 10, 12, 14]),
+			[
+				[2, values(0, 0, 0, 0, 0, 0, 0, 0)],
+				[3, values(1, 1, 1, 1, 1, 1, 1, 1)]
+			],
+			undefined,
+			MAP
+		);
+		const issued = f.frame();
+		expect(issued.filter((c) => c.startsWith('pipeline remap'))).toHaveLength(0);
+		expect(issued).toContain('copy m-2-to -> m-2-from');
+		// Never recorded in a command buffer, so it goes at the next encode.
+		expect(issued).toContain('destroy m-remap');
+	});
+
+	it('remaps a binding on no scale untransformed, and snaps a channel with no old rows', () => {
+		const f = fakes();
+		const m = onScreen(f);
+		rebin(m, MAP, true); // the share (4) is new: nothing of it on screen
+		const issued = f.frame();
+		expect(issued.filter((c) => c === 'pipeline remap-linear')).toHaveLength(2);
+		expect(issued).toContain('copy m-4-to -> m-4-from');
+	});
+
+	it('snaps a rebin with no map, as before', () => {
+		const f = fakes();
+		const m = onScreen(f);
+		rebin(m, null);
+		const issued = f.frame();
+		expect(issued.filter((c) => c.startsWith('pipeline remap'))).toHaveLength(0);
+		expect(issued).toContain('copy m-2-to -> m-2-from');
 	});
 });
 
@@ -645,5 +729,210 @@ describe('alignmentKey', () => {
 		const buffer = new Float32Array([9, 1.5, 2.5]);
 		const view = new Float32Array(buffer.buffer, 4, 2);
 		expect(alignmentKey(view)).toBe(alignmentKey(new Float32Array([1.5, 2.5])));
+	});
+});
+
+describe('MorphedChannels riding a scale’s tween', () => {
+	const params = (lo: number, hi: number) => ({
+		domainMin: lo,
+		domainMax: hi,
+		domainScale: 1 / (hi - lo),
+		p4: 0
+	});
+
+	/** A value-axis scale whose unit-change tween the test drives. */
+	function tweening(lo: number, hi: number) {
+		return {
+			scaleType: 'linear',
+			gpuState: params(lo, hi),
+			tween: null as null | { segment: number; f: number; targetParams: GpuParams },
+			/** A frame: the domain drawn now, and the tween's progress if one runs. */
+			at(a: number, b: number, f?: number) {
+				this.gpuState = params(a, b);
+				if (this.tween && f !== undefined) this.tween.f = f;
+			},
+			start(segment: number, a: number, b: number) {
+				this.tween = { segment, f: 0, targetParams: params(a, b) };
+			},
+			end(a: number, b: number) {
+				this.tween = null;
+				this.gpuState = params(a, b);
+			}
+		};
+	}
+	type GpuParams = ReturnType<typeof params>;
+
+	function riding(f: ReturnType<typeof fakes>, y: ReturnType<typeof tweening>) {
+		return new MorphedChannels({
+			device: f.device,
+			host: f.host,
+			label: 'm',
+			clockHost: () => null,
+			affectedCharts: () => ['chart-1'],
+			scaleFor: (binding) => (binding === 2 ? y : null)
+		});
+	}
+	const write = (m: MorphedChannels, v: number[]) => m.write(ids, [[2, values(...v)]]);
+	/** The scaled resolves' immediates, as the fake logs them. */
+	const imms = (issued: string[]) => issued.filter((c) => c.startsWith('imm count=3 '));
+	/** The `t` the first scaled resolve was dispatched with. */
+	const t = (issued: string[]) => Number(/ t=(\S+)/.exec(imms(issued)[0])![1]);
+
+	/** A mark on screen at rest under [0, 100]. */
+	function atRest(f: ReturnType<typeof fakes>, y: ReturnType<typeof tweening>) {
+		const m = riding(f, y);
+		write(m, [10, 20, 30]);
+		f.frame();
+		f.frame();
+		return m;
+	}
+
+	it('costs nothing at rest while a tween runs: drawn under the moving domain, `to` is on the static path', () => {
+		const f = fakes();
+		const y = tweening(0, 100);
+		atRest(f, y);
+		y.start(1, 5, 25);
+		y.at(2, 80, 0.3);
+		expect(f.frame()).toEqual([]);
+	});
+
+	it('rides from the f last drawn: data mid-segment mixes by g, `to` under the target', () => {
+		const f = fakes();
+		const y = tweening(0, 100);
+		const m = atRest(f, y);
+		y.start(1, 5, 25);
+		y.at(4, 30, 0.95);
+		f.frame(); // drawn at f = 0.95, under min 4
+		write(m, [1, 2, 3]);
+		y.at(4.5, 29, 0.96);
+		const issued = f.frame();
+		expect(issued).toContain('copy m-2-resolved -> m-2-from');
+		// from: last frame's params; to: the target's; mixed by g, not landed.
+		expect(imms(issued)[0]).toMatch(/ from=4 now=4\.5 to=5$/);
+		// g = (0.96 − 0.95) / (1 − 0.95): no jump, a fifth of what is left.
+		expect(t(issued)).toBeCloseTo(0.2, 5);
+		y.at(5, 25, 1);
+		expect(t(f.frame())).toBeCloseTo(1, 6);
+	});
+
+	it('folds during an overshoot (f0 > 1) and still runs g from 0 to 1', () => {
+		const f = fakes();
+		const y = tweening(0, 100);
+		const m = atRest(f, y);
+		y.start(1, 5, 25);
+		y.at(5.1, 24, 1.03);
+		f.frame(); // drawn at f = 1.03
+		write(m, [1, 2, 3]);
+		y.at(5.05, 24.5, 1.02);
+		expect(t(f.frame())).toBeCloseTo(1 / 3, 5);
+		y.at(5, 25, 1);
+		expect(t(f.frame())).toBeCloseTo(1, 6);
+	});
+
+	it('lands instead of riding when f0 is at 1: g would divide by nothing', () => {
+		const f = fakes();
+		const y = tweening(0, 100);
+		const m = atRest(f, y);
+		y.start(1, 5, 25);
+		y.at(5, 25, 1.00001);
+		f.frame();
+		write(m, [1, 2, 3]);
+		const issued = f.frame();
+		expect(issued).toContain('copy m-2-to -> m-2-from');
+		expect(issued).not.toContain('copy m-2-resolved -> m-2-from');
+	});
+
+	it('re-anchors on a new segment from the screen, with f0 = 0', () => {
+		const f = fakes();
+		const y = tweening(0, 100);
+		const m = atRest(f, y);
+		y.start(1, 5, 25);
+		y.at(1, 80, 0.2);
+		f.frame();
+		write(m, [1, 2, 3]);
+		y.at(1.5, 70, 0.3);
+		f.frame(); // riding segment 1
+		y.start(2, 10, 50); // a retarget: a new segment
+		y.at(1.6, 69, 0.01);
+		const issued = f.frame();
+		expect(issued).toContain('copy m-2-resolved -> m-2-from');
+		expect(imms(issued)[0]).toMatch(/ from=1\.5 now=1\.6\d* to=10$/);
+		expect(t(issued)).toBeCloseTo(0.01, 6);
+	});
+
+	it('lands when the tween ends: `to` exactly, whatever its own clock says', () => {
+		const f = fakes();
+		const y = tweening(0, 100);
+		const m = atRest(f, y);
+		y.start(1, 5, 25);
+		y.at(1, 80, 0.2);
+		f.frame();
+		write(m, [1, 2, 3]); // starts its own clock too
+		y.at(1.5, 70, 0.3);
+		f.frame();
+		y.end(5, 25);
+		const issued = f.frame();
+		expect(issued).toContain('copy m-2-to -> m-2-from');
+		expect(imms(issued)[0]).toMatch(/ land$/);
+	});
+
+	it('joins a tween mid-way through its own transition, from the screen', () => {
+		const f = fakes();
+		const y = tweening(0, 100);
+		const m = atRest(f, y);
+		write(m, [1, 2, 3]); // its own transition; the fake loop never advances t
+		f.frame();
+		y.start(1, 5, 25);
+		y.at(0.5, 90, 0.05);
+		const issued = f.frame();
+		expect(issued).toContain('copy m-2-resolved -> m-2-from');
+		expect(t(issued)).toBeCloseTo(0.05, 6);
+	});
+});
+
+describe('the pixel-space resolve on a real tween (reference)', () => {
+	/** A bar's height as a share of the plot, every frame of a k× change of the y unit. */
+	function heights(k: number, from: number, to: number) {
+		const s = new LinearScaleState('y');
+		s.entered = true;
+		s.domain.set([0, 700], { instant: true });
+		const start = [0, 700, 1 / 700, 0];
+		s.folding(() => s.domain.set([0, 700 / k], { instant: true }));
+		const out = new Float32Array(1);
+		const rows: { f: number; height: number }[] = [];
+		for (let i = 0; i < 2000; i++) {
+			s.step();
+			s.updateRenderState(0.001);
+			const tween = s.tween;
+			if (!tween) break;
+			const p = tween.targetParams;
+			const now = s.gpuState;
+			scaledResolveReference(
+				'linear',
+				[from],
+				[to],
+				tween.f,
+				start,
+				[p.domainMin, p.domainMax, p.domainScale, p.p4],
+				[now.domainMin, now.domainMax, now.domainScale, now.p4],
+				out
+			);
+			rows.push({ f: tween.f, height: out[0] / (now.domainMax - now.domainMin) });
+		}
+		return rows;
+	}
+
+	it('holds a bar’s height through a pure change of unit, at every f', () => {
+		for (const k of [2, 7, 24]) {
+			const rows = heights(k, 630, 630 / k);
+			expect(rows.length).toBeGreaterThan(10);
+			for (const { height } of rows) expect(height).toBeCloseTo(0.9, 5);
+		}
+	});
+
+	it('moves a change of detail linearly in pixels', () => {
+		const rows = heights(7, 630, 50);
+		expect(rows.length).toBeGreaterThan(10);
+		for (const { f, height } of rows) expect(height).toBeCloseTo((1 - f) * 0.9 + f * 0.5, 5);
 	});
 });

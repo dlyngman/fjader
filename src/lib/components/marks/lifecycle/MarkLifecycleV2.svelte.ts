@@ -99,6 +99,7 @@ import {
 	withBaseline
 } from './fit-domain';
 import { binLayout } from './bin-layout';
+import { buildBinRemap, type BinRemapSide } from '$lib/gpu/bin-remap';
 import { binSpecKey, isRebin } from './rebin';
 import type { DataLayer } from '$lib/config/ChartConfig.svelte';
 import {
@@ -515,6 +516,12 @@ export class MarkLifecycleV2 {
 	// --- Rebin results ---
 	/** The bin spec the last result was computed from (#takeBinStep). */
 	#lastBinSpec: string | null = null;
+	/**
+	 * The rows the renderer last took (`takeRemap`), as a remap reads them.
+	 * Holds references to that result's columns, so the previous table stays in
+	 * memory until the next take: binned data, bounded by the dense row limit.
+	 */
+	#takenSide: (BinRemapSide & { binKey: string | null }) | null = null;
 
 	// --- Cleanup ---
 	#destroyed = false;
@@ -1585,11 +1592,12 @@ export class MarkLifecycleV2 {
 					this.#colorScaleState
 				);
 			};
-			// An instant registration, as before: not yet inside `folding()`. A
-			// tween of y while the bars snap to their new values would leave them
-			// at half or double height for its length; the rebin tweens once the
-			// bars resolve in pixel space, in the same change.
-			register();
+			// A change of unit: inside `folding()` the value axis tweens its
+			// render domain (every consumer glides linearly in pixels), and the
+			// rebinning bars resolve in pixel space from the remap, so they hold
+			// their height while it does.
+			if (lands && valueState) valueState.folding(register);
+			else register();
 			this.#dataDerivedDomainsSet = domainResult.dataDerivedDomainsSet;
 			this.#skipDomainUpdateForAxis = domainResult.skipDomainUpdateForAxis;
 
@@ -1602,8 +1610,11 @@ export class MarkLifecycleV2 {
 				if (fit !== undefined) {
 					this.#fittedVersion = dv;
 					if (fit) {
-						// Instant, not yet inside `folding()`: see the registration above.
-						this.#applyFit(valueAxis, fit, drivingTarget, lands || this.#instantFor(valueState));
+						// A change of unit, as the registration above.
+						const apply = () =>
+							this.#applyFit(valueAxis, fit, drivingTarget, lands || this.#instantFor(valueState));
+						if (lands) valueState.folding(apply);
+						else apply();
 					}
 				} else if (!this.#transformCompiler.hasJSTransforms()) {
 					// The result cannot answer (its rows are not the dense layout, as
@@ -2748,6 +2759,52 @@ export class MarkLifecycleV2 {
 		}
 		if (fitted.length === 0) return undefined;
 		return windowedFit(lower, upper, layout, fitted, drivingDomain);
+	}
+
+	/**
+	 * The map from the rows the renderer last took to the current result's,
+	 * when the current result is a rebin of them (`buildBinRemap`), or null.
+	 * The renderer calls it once per data version it writes, so the map is
+	 * always from what is on the GPU, even when versions in between were never
+	 * written. Null when the bins did not change, or the rows on either side
+	 * are not the dense layout, or do not correspond (the rebin then snaps).
+	 *
+	 * Reads the result's columns at stride (O(B + F·S)) and builds the map in
+	 * one pass over both sides' bins: binned data, bounded by the dense row
+	 * limit.
+	 */
+	takeRemap = (): Uint32Array | null => {
+		const side = this.#remapSide();
+		const last = this.#takenSide;
+		this.#takenSide = side;
+		if (!side || !last || side.binKey === null || side.binKey === last.binKey) return null;
+		return buildBinRemap(last, side);
+	};
+
+	/** The current result as one side of a remap, or null when it is not the dense layout. */
+	#remapSide(): (BinRemapSide & { binKey: string | null }) | null {
+		const axis = this.#binnedAxis();
+		const data = this.data;
+		const parts = this.#handle?.resultParts;
+		if (!axis || !data || data.length === 0 || !parts) return null;
+		const lower = data.getColumn(`${axis}1`) as ArrayLike<number> | null;
+		const upper = data.getColumn(`${axis}2`) as ArrayLike<number> | null;
+		if (!lower || !upper) return null;
+		const layout = binLayout(lower, data.length);
+		if (!layout) return null;
+		// The crossed keys, as dense() ordered the rows by them: the series and,
+		// faceted, the facet. Their ids are what must match slot for slot.
+		const aligned = this.#transformCompiler.alignment(Object.keys(parts.selectDef), {
+			groupKeys: parts.groupKeys,
+			bins: parts.bins ?? null
+		});
+		const ids: ArrayLike<number>[] = [];
+		for (const channel of aligned?.slice(1) ?? []) {
+			const column = data.getColumn(channel) as ArrayLike<number> | null;
+			if (!column) return null;
+			ids.push(column);
+		}
+		return { lower, upper, layout, ids, binKey: parts.binKey ?? null };
 	}
 
 	/**
