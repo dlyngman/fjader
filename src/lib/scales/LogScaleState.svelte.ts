@@ -89,9 +89,7 @@ export class LogScaleState extends LinearScaleState {
 		return this.#logScale;
 	}
 
-	override getTicks(count: number = 5): number[] {
-		this._version;
-		const [min, max] = this.domainForReactivity;
+	protected override ticksFor(min: number, max: number, count: number): number[] {
 		return scaleLog()
 			.domain([Math.max(min, LOG_MIN_CLAMP), Math.max(max, LOG_MIN_CLAMP)])
 			.ticks(count);

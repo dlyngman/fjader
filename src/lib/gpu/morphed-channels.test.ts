@@ -897,7 +897,7 @@ describe('the pixel-space resolve on a real tween (reference)', () => {
 		s.entered = true;
 		s.domain.set([0, 700], { instant: true });
 		const start = [0, 700, 1 / 700, 0];
-		s.folding(() => s.domain.set([0, 700 / k], { instant: true }));
+		s.discrete(() => s.domain.set([0, 700 / k], { instant: true }));
 		const out = new Float32Array(1);
 		const rows: { f: number; height: number }[] = [];
 		for (let i = 0; i < 2000; i++) {

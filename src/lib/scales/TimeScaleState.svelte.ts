@@ -262,13 +262,11 @@ export class TimeScaleState extends LinearScaleState {
 	/**
 	 * Generate calendar-nice tick values in offset space.
 	 */
-	getTicks(count: number = 5): number[] {
-		this._version; // Svelte reactivity dependency
+	protected override ticksFor(min: number, max: number, count: number): number[] {
 		if (!this.#t0) return [];
 
-		const [renderMin, renderMax] = this.domainForReactivity;
-		const minDate = new Date(this.#t0.getTime() + renderMin * this.#unit * 1000);
-		const maxDate = new Date(this.#t0.getTime() + renderMax * this.#unit * 1000);
+		const minDate = new Date(this.#t0.getTime() + min * this.#unit * 1000);
+		const maxDate = new Date(this.#t0.getTime() + max * this.#unit * 1000);
 
 		const timeScale = scaleUtc().domain([minDate, maxDate]);
 		const dateTicks = timeScale.ticks(count);
