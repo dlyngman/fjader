@@ -55,6 +55,13 @@ export class MarkHandle {
 	 * whole extent. Plain, like `resultParts`.
 	 */
 	resultWindow: BinWindow | null = null;
+	/**
+	 * The bin window the mark's last query went out with (or will, for an
+	 * inactive mark's catch-up, which reads the params when it is sent). Set by
+	 * the engine as it sends. A window in `params` that differs was never sent:
+	 * the mark re-queries (MarkLifecycleV2.#onViewport), whatever path set it.
+	 */
+	sentWindow: BinWindow | null = null;
 	error = $state<Error | null>(null);
 
 	#params = $state<QueryParams>({ sort: undefined, limit: undefined });

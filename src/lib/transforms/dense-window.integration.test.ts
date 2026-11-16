@@ -10,7 +10,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import duckdb from 'duckdb';
 import { Query, count, sql } from '@uwdata/mosaic-sql';
 import type { SelectQuery } from '@uwdata/mosaic-sql';
-import { dense } from './index';
+import { binWindowSourceFilter, dense } from './index';
 import type { BinPadding, BinWindow, MarkConfig } from '$lib/types';
 
 interface DB {
@@ -174,5 +174,56 @@ describe('dense() over a window', () => {
 		expect(dense().alignment!(ALIASES, config(many))).toBeNull();
 		expect(dense().alignment!(ALIASES, config(many, { binWindow: [1000, 1300] }))).toEqual(['x1']);
 		spy.mockRestore();
+	});
+});
+
+describe('the base read’s filter on the bin source', () => {
+	/** The window's rows with the source filtered first, as the base read sends them. */
+	const filtered = (bins: Record<string, BinPadding>, q: SelectQuery, window: BinWindow) => {
+		const range = binWindowSourceFilter(bins, window)!;
+		return padded(bins, q.where(range) as SelectQuery, window);
+	};
+
+	it('numeric: the same rows as aggregating every row, windows on and off the bin grid', async () => {
+		for (const window of [
+			[205, 431],
+			[200, 430],
+			[200, 440],
+			[0, 10],
+			[990, 1000],
+			[-50, 2000]
+		] as BinWindow[]) {
+			expect(await rows(filtered(NUM, numQuery(), window))).toEqual(
+				await rows(padded(NUM, numQuery(), window))
+			);
+		}
+	});
+
+	it('time: the same rows, the gap and the edges included', async () => {
+		const day = 86_400_000;
+		for (const window of [
+			[MIN_MS + 15.5 * day, MIN_MS + 33.2 * day],
+			[MIN_MS + 15 * day, MIN_MS + 33 * day],
+			[MIN_MS - 5 * day, MIN_MS + 2 * day],
+			[MAX_MS - 2 * day, MAX_MS + 9 * day]
+		] as BinWindow[]) {
+			expect(await rows(filtered(TIME, timeQuery(), window))).toEqual(
+				await rows(padded(TIME, timeQuery(), window))
+			);
+		}
+	});
+
+	it('aggregates only the rows the window can hold', async () => {
+		const range = binWindowSourceFilter(NUM, [205, 431])!;
+		const [{ n }] = (await db.all(`SELECT count(*)::INT AS n FROM num WHERE ${range}`)) as {
+			n: number;
+		}[];
+		// Bins 19..44 (one each side): x in [190, 450), half of it left out by the fixture.
+		expect(n).toBe(150);
+	});
+
+	it('none without a window or bins', () => {
+		expect(binWindowSourceFilter(NUM, null)).toBeNull();
+		expect(binWindowSourceFilter(null, [0, 1])).toBeNull();
 	});
 });

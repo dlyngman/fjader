@@ -1,4 +1,5 @@
 import type { BinPadding, BinWindow } from '$lib/types';
+import { intervalWidthMs } from '$lib/sql/bin';
 
 /**
  * A binned mark's window: the bins it pads and queries, around the viewport.
@@ -11,14 +12,15 @@ import type { BinPadding, BinWindow } from '$lib/types';
  *
  * The window moves rarely, so a pan inside it keeps the rows (and morphs on
  * filters), and the query cache sees few distinct windows: it is placed with a
- * margin of `MARGIN` viewports each side, and moved only when the viewport
- * comes within half a viewport of an edge the data extends past, or outgrows
- * it. Units are the bins' extent units (ms for time, values for numeric); the
+ * margin of `MARGIN` viewports each side, snapped outward to the bin grid, and
+ * moved only when the viewport comes within half a viewport of an edge the
+ * data extends past, or outgrows it. With 1.5 viewports of margin, a steady
+ * pan re-centres it about once per viewport travelled. Units are the bins' extent units (ms for time, values for numeric); the
  * SQL snaps the ends to the bin grid and clips them to the extent.
  */
 
 /** Viewports of margin on each side of the viewport. */
-export const MARGIN = 1;
+export const MARGIN = 1.5;
 
 /**
  * A viewport on the scale, in the bins' units. A time scale's domain is
@@ -27,16 +29,40 @@ export const MARGIN = 1;
  */
 export function viewInBinUnits(
 	view: readonly [number, number],
-	t0: number | null
+	t0: number | null,
+	/** Written and returned: a frame's check allocates nothing. */
+	out: [number, number] = [0, 0]
 ): [number, number] {
-	if (t0 === null) return [view[0], view[1]];
-	return [(view[0] + t0) * 1000, (view[1] + t0) * 1000];
+	if (t0 === null) {
+		out[0] = view[0];
+		out[1] = view[1];
+	} else {
+		out[0] = (view[0] + t0) * 1000;
+		out[1] = (view[1] + t0) * 1000;
+	}
+	return out;
 }
 
-/** The window for a viewport `[lo, hi]`, in the bins' units (viewInBinUnits). */
-export function binWindowFor(view: readonly [number, number]): BinWindow {
+/**
+ * The window for a viewport `[lo, hi]`, in the bins' units (viewInBinUnits),
+ * snapped outward to `bin`'s grid when given: two windows over the same bins
+ * are then the same window, so the SQL is the same (a query cache hit) and no
+ * move is seen where the rows did not change. Numeric by index; time by the
+ * step's nominal width from the extent's start, which the SQL snaps exactly
+ * (months and years are not a fixed width).
+ */
+export function binWindowFor(view: readonly [number, number], bin?: BinPadding | null): BinWindow {
 	const width = view[1] - view[0];
-	return [view[0] - MARGIN * width, view[1] + MARGIN * width];
+	const lo = view[0] - MARGIN * width;
+	const hi = view[1] + MARGIN * width;
+	if (!bin) return [lo, hi];
+	const [origin, step] =
+		bin.kind === 'number' ? [bin.min, bin.alpha] : [bin.minMs, intervalWidthMs(bin.interval)];
+	if (!step || !(step > 0)) return [lo, hi];
+	return [
+		origin + Math.floor((lo - origin) / step) * step,
+		origin + Math.ceil((hi - origin) / step) * step
+	];
 }
 
 /**

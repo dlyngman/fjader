@@ -95,4 +95,25 @@ describe('the bin window stamp', () => {
 		await settle();
 		expect(h.resultWindow).toBeNull();
 	});
+
+	it('records the window each query went out with: one set but never sent differs', () => {
+		const h = mark();
+		h.setBinWindow([0, 10], false);
+		expect(h.sentWindow).toBeNull();
+		expect(h.params.binWindow).not.toBe(h.sentWindow);
+		h.setBinWindow(h.params.binWindow!, true);
+		expect(h.sentWindow).toBe(h.params.binWindow);
+	});
+
+	it('an inactive mark’s catch-up carries the window: not a lost one', () => {
+		const h = mark();
+		h.updateParams({ sort: undefined, limit: undefined });
+		pending[0]({ numRows: 1 });
+		return settle().then(() => {
+			h.setActive(false);
+			h.setBinWindow([0, 10], true); // off screen: no query, marked stale
+			expect(sent).toBe(1);
+			expect(h.sentWindow).toBe(h.params.binWindow);
+		});
+	});
 });

@@ -425,6 +425,37 @@ function windowBinCount(bin: BinPadding, window: BinWindow | null): number {
 }
 
 /**
+ * A row filter on the bin source for a base read over a window: aggregate only
+ * the rows the window's bins can hold, rather than every row of the extent and
+ * then drop the rest at the padding's join. One bin WIDER than the window on
+ * each side, so no row of a window's bin is cut by rounding at an edge; the
+ * LEFT JOIN from the window's bins drops the extra bins anyway. Snapped with
+ * the padding's own arithmetic (index for numeric, `time_bucket` for time).
+ *
+ * Base reads only: a preagg table holds bins, not the source column (its reads
+ * keep the window's bins at the padding instead). Null without a window or
+ * bins.
+ */
+export function binWindowSourceFilter(
+	bins: Record<string, BinPadding> | null | undefined,
+	window: BinWindow | null | undefined
+): ExprNode | null {
+	if (!bins || !window) return null;
+	const bin = Object.values(bins)[0];
+	if (!bin) return null;
+	if (bin.kind === 'number') {
+		const [k0, k1] = numericWindowBins(bin, window);
+		const lo = numericBinEdgeSQL(bin.min, bin.alpha, 0, String(k0 - 1));
+		const hi = numericBinEdgeSQL(bin.min, bin.alpha, 0, String(k1 + 2));
+		return rawSql(`(${bin.source} >= ${lo} AND ${bin.source} < ${hi})`) as ExprNode;
+	}
+	const [lo, hi] = timeWindowMs(bin, window);
+	const first = `time_bucket(${bin.interval}, epoch_ms(${lo})) - ${bin.interval}`;
+	const last = `time_bucket(${bin.interval}, epoch_ms(${hi})) + (${bin.interval}) * 2`;
+	return rawSql(`(${bin.source} >= ${first} AND ${bin.source} < ${last})`) as ExprNode;
+}
+
+/**
  * Keep a padded table's rows to the window's bins: `edge` is the row's bin
  * edge as the table holds it. Numeric bins by index, recovered from the edge
  * as binMatch does; time bins by the edges of the window's first and last

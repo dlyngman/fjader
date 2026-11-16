@@ -524,6 +524,8 @@ export class MarkLifecycleV2 {
 	// --- Rebin results ---
 	/** The bin spec the last result was computed from (#takeBinStep). */
 	#lastBinSpec: string | null = null;
+	/** A view in the bins' units, reused: #onViewport runs every frame (no allocation). */
+	#viewScratch: [number, number] = [0, 0];
 	/**
 	 * The rows the renderer last took (`takeRemap`), as a remap reads them.
 	 * Holds references to that result's columns, so the previous table stays in
@@ -644,8 +646,14 @@ export class MarkLifecycleV2 {
 					// The window around the new view, set before the parts change: the
 					// re-registration's first query reads it as it is sent.
 					if (this.#windowedAxis() === axis) {
-						const view = viewInBinUnits([domain[0], domain[1]], this.#timeOrigin(axis));
-						this.#handle?.setBinWindow(binWindowFor(view), false);
+						const scratch = this.#viewScratch;
+						scratch[0] = domain[0];
+						scratch[1] = domain[1];
+						const view = viewInBinUnits(scratch, this.#timeOrigin(axis), scratch);
+						// The grid of the bins on screen: the new step's is not resolved
+						// yet. Still outward, so the view is covered; the SQL snaps exactly.
+						const band = this.#resolvedQueryParts?.bins?.[`${axis}1`];
+						this.#handle?.setBinWindow(binWindowFor(view, band), false);
 					}
 					this.#lastBinDomain[axis] = [domain[0], domain[1]];
 					// #lastBinDomain is $state — #resolvedQueryParts recomputes automatically.
@@ -2767,7 +2775,7 @@ export class MarkLifecycleV2 {
 			drivingDomain &&
 			!insideBinWindow(
 				this.#handle?.resultWindow,
-				viewInBinUnits(drivingDomain, this.#timeOrigin(drivingAxis))
+				viewInBinUnits(drivingDomain, this.#timeOrigin(drivingAxis), this.#viewScratch)
 			)
 		) {
 			return undefined;
@@ -2920,10 +2928,16 @@ export class MarkLifecycleV2 {
 			if (current) handle.setBinWindow(null, true);
 			return;
 		}
+		// A window set that no query went out with (set quietly for a query that
+		// then never came): send it, so the rows on screen are not left behind.
+		if (current !== handle.sentWindow) {
+			handle.setBinWindow(current, true);
+			return;
+		}
 		const band = this.#resolvedQueryParts?.bins?.[`${axis}1`];
-		const view = viewInBinUnits(domain, this.#timeOrigin(axis));
+		const view = viewInBinUnits(domain, this.#timeOrigin(axis), this.#viewScratch);
 		if (!binWindowNeedsMove(current, view, band ? binExtent(band) : null)) return;
-		handle.setBinWindow(binWindowFor(view), true);
+		handle.setBinWindow(binWindowFor(view, band), true);
 	}
 
 	#binnedAxis(): 'x' | 'y' | null {

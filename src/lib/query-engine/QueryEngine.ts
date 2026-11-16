@@ -42,6 +42,7 @@ import {
 import type { FilterGroup } from './FilterGroup.svelte';
 import { NO_ROUTE, type Clause, type MarkRoute } from './CrossfilterSelection.svelte';
 import type { TransformCompiler } from '$lib/transforms/TransformCompiler';
+import { binWindowSourceFilter } from '$lib/transforms';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1656,6 +1657,8 @@ export class QueryEngine {
 		// with new parts, where the handle still holds the old data.
 		if (!handle.active && handle.dataVersion > 0 && !reg.needsFirst) {
 			reg.stale = true;
+			// Its catch-up reads the params as it is sent: not a lost window.
+			handle.sentWindow = handle.params.binWindow ?? null;
 			return;
 		}
 		reg.stale = false;
@@ -1674,6 +1677,7 @@ export class QueryEngine {
 		const parts = reg.descriptor.parts;
 		// And the bin window, for the same reason: a pan moves it while this flies.
 		const window = handle.params.binWindow ?? null;
+		handle.sentWindow = window;
 		this.query(sqlStr, markReadOptions(markId, reg.descriptor, preagg?.table ?? null))
 			.catch((e) => {
 				if (!preagg || (e as Error)?.name === 'AbortError') throw e;
@@ -1694,10 +1698,15 @@ export class QueryEngine {
 	/** The query a mark runs on its base table, applying every clause. */
 	#baseSQL(markId: string, reg: MarkRegistration): string | null {
 		const { descriptor, handle } = reg;
+		const filter = reg.filterGroup.selection.predicate(reg.descriptor.route ?? NO_ROUTE);
+		// A windowed binned mark aggregates only the rows its window can hold:
+		// the padding's join keeps the window's bins either way, but filtering
+		// first saves the GROUP BY over the rest of the extent.
+		const range = binWindowSourceFilter(descriptor.parts.bins, handle.params.binWindow);
 		return this.#assembleSQL(
 			descriptor,
 			descriptor.table,
-			reg.filterGroup.selection.predicate(reg.descriptor.route ?? NO_ROUTE),
+			range ? [...filter, range] : filter,
 			handle.params
 		);
 	}
