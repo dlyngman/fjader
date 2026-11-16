@@ -791,8 +791,9 @@ export class LinearScaleState {
 	 * right against either. At the end the newest set is the live ticks at
 	 * rest, at their pixels: the handover is exact.
 	 *
-	 * A value in two sets at the same place is one tick (opacities summed,
-	 * clamped). A set leaves once faded out. Reactive: reads the render
+	 * A value in two sets at the same place is one tick: incoming if the newest
+	 * set has it, fading from its one starting opacity (so a value in both stays
+	 * fully drawn). A set leaves once faded out. Reactive: reads the render
 	 * version. During a crossfade a new array per version (the SVG axes need
 	 * one to re-render); at rest the ticks as `getTicks` gives them.
 	 */
@@ -826,18 +827,25 @@ export class LinearScaleState {
 		// opacity when the segment began, and whether the incoming set has it.
 		// Incoming ticks fade in from there, the rest fade out; a value in both
 		// at the same pixel was fully drawn and stays so.
+		// "The same tick" is one test, tickId, here and where opacities carry
+		// over (#freezeTicks): a distance test here and a bucket there could split
+		// one tick in two at a retarget, its α₀ lost.
 		const frame: TickEntry[] = [];
+		const byId = new Map<string, TickEntry>();
 		const sets = fade.sets;
 		for (let i = 0; i < sets.length; i++) {
 			const set = sets[i];
 			const newest = i === sets.length - 1;
 			for (const value of set.values) {
 				const position = this.#tickPosition(set, value);
-				const same = frame.find(
-					(e) => e.value === value && Math.abs(e.position - position) < SAME_TICK
-				);
+				const id = tickId(value, position);
+				const same = byId.get(id);
 				if (same) same.target ||= newest;
-				else frame.push({ value, position, alpha: 0, target: newest });
+				else {
+					const entry = { value, position, alpha: 0, target: newest };
+					byId.set(id, entry);
+					frame.push(entry);
+				}
 			}
 		}
 		let shown = 0;
