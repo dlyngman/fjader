@@ -56,9 +56,11 @@
 		if (!s || c.scaleTypes?.y === 'band' || !hasEntered(s) || !('tickFrame' in s)) return [];
 		return (s as ContinuousScaleState).tickFrame(ticksNumber);
 	});
-	/** Where a tick sits, in px: its place along the plot, under the domain drawn now. */
-	const tickPx = (t: TickEntry) =>
-		c.yScale!((c.yScaleState as ContinuousScaleState).valueAt(t.position));
+	/**
+	 * Where a tick sits, in px: its fraction of the plot, straight to pixels (0
+	 * at the bottom). No domain in between, so a crossfading set stays put.
+	 */
+	const tickPx = (t: TickEntry) => c.innerHeight * (1 - t.position);
 
 	/**
 	 * A tick's key: the incoming (or, at rest, the live) set by value, so a pan

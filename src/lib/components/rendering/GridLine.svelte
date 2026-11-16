@@ -29,7 +29,9 @@
 
 	const UNIFORM_OFFSETS = {
 		LINE_WIDTH: 0,
-		// 4-12: padding
+		/** u32: 1 when `positions` are fractions along the plot (`space: 'plot'`). */
+		PLOT_SPACE: 4,
+		// 8-12: padding
 		COLOR: 16
 	};
 
@@ -51,6 +53,15 @@
 		landsFor?: number;
 		/** The band axis these lines belong to, when `alpha` should morph. */
 		bandAxis?: 'x' | 'y' | null;
+		/**
+		 * What `positions` are: values on the axis's scale (default), placed
+		 * through it on the GPU, or fractions along the plot (`'plot'`: 0 at the
+		 * domain's min, 1 at its max), placed at fixed pixels whatever the domain
+		 * does. A crossfading axis's lines stay where their own set put them, so
+		 * they go as fractions: as values they would be converted under the domain
+		 * of one frame and drawn under the next, trailing a tween.
+		 */
+		space?: 'value' | 'plot';
 		color?: [number, number, number, number];
 		lineWidth?: number;
 		zIndex?: number;
@@ -62,6 +73,7 @@
 		alpha = null,
 		landsFor = 0,
 		bandAxis = null,
+		space = 'value',
 		color = [0.8, 0.8, 0.8, 0.3],
 		lineWidth = 1,
 		zIndex = -10
@@ -94,21 +106,27 @@
 				? `
       let x = positions[instanceIdx];
       {{X_AXIS_LOGIC}}
+      // In plot space x is a fraction along the plot, at fixed pixels.
+      let plotX = frameUniforms.rangeMin.x + x * (frameUniforms.rangeMax.x - frameUniforms.rangeMin.x);
+      let lineX = select(scaledX, plotX, ruleConstants.plotSpace != 0u);
       // Vertical: fixed x, spanning the full height.
       let screenY = mix(0.0, frameUniforms.resolution.y, lineVertex.y);
       let offsetX = (lineVertex.x - 0.5) * 2.0 * halfWidth;
-      let worldPos = vec2<f32>(scaledX + offsetX, screenY);`
+      let worldPos = vec2<f32>(lineX + offsetX, screenY);`
 				: `
       let y = positions[instanceIdx];
       {{Y_AXIS_LOGIC}}
+      // In plot space y is a fraction along the plot (0 at the bottom), at fixed pixels.
+      let plotY = frameUniforms.rangeMax.y - y * (frameUniforms.rangeMax.y - frameUniforms.rangeMin.y);
+      let lineY = select(scaledY, plotY, ruleConstants.plotSpace != 0u);
       // Horizontal: fixed y, spanning the full width.
       let screenX = mix(0.0, frameUniforms.resolution.x, lineVertex.x);
       let offsetY = (lineVertex.y - 0.5) * 2.0 * halfWidth;
-      let worldPos = vec2<f32>(screenX, scaledY + offsetY);`;
+      let worldPos = vec2<f32>(screenX, lineY + offsetY);`;
 		return `
     struct RuleConstants {
       lineWidth: f32,
-      _pad0: u32,
+      plotSpace: u32,
       _pad1: u32,
       _pad2: u32,
       color: vec4<f32>,
@@ -220,7 +238,8 @@ ${placement}
 			const LE = true;
 
 			view.setFloat32(UNIFORM_OFFSETS.LINE_WIDTH, lineWidth, LE);
-			// padding at 4-12
+			view.setUint32(UNIFORM_OFFSETS.PLOT_SPACE, space === 'plot' ? 1 : 0, LE);
+			// padding at 8-12
 			view.setFloat32(UNIFORM_OFFSETS.COLOR + 0, color[0], LE);
 			view.setFloat32(UNIFORM_OFFSETS.COLOR + 4, color[1], LE);
 			view.setFloat32(UNIFORM_OFFSETS.COLOR + 8, color[2], LE);

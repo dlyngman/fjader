@@ -6,7 +6,7 @@ import { noteTransition, transitionsObserved } from '$lib/animation/transition-l
 import { scaleLinear } from 'd3-scale';
 import type { ScaleLinear, ScaleContinuousNumeric } from 'd3-scale';
 import { extent as d3Extent } from 'd3-array';
-import { Spring, SpringPair, SPRING_PRESETS } from '$lib/animation';
+import { DT, Spring, SpringPair, SPRING_PRESETS } from '$lib/animation';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 
 // =============================================================================
@@ -77,21 +77,47 @@ interface TickSet {
 	lo: number;
 	hi: number;
 	values: number[];
-	/** Opacity when the current segment started, and now. */
-	alpha0: number;
-	alpha: number;
 }
 
-/** One count's crossfade: its sets, the segment they were frozen for, the last frame built. */
+/**
+ * One count's crossfade: its sets, the segment they were frozen for, each
+ * tick's opacity when that segment began (by tickId), and the last frame built.
+ */
 interface TickFade {
 	segment: number;
 	sets: TickSet[];
+	alpha0: Map<string, number>;
 	version: number;
 	frame: TickEntry[];
 }
 
 /** Two sets' ticks within this share of the plot are one tick (a value in both). */
 const SAME_TICK = 1e-3;
+
+/** A tick as drawn: its value at its place (to SAME_TICK), whichever sets it is in. */
+const tickId = (value: number, position: number) => `${value}@${Math.round(position / SAME_TICK)}`;
+
+/**
+ * How long the axis crossfade takes, in seconds: its own clock, not the
+ * tween's. The ticks do not move while they fade, so they need not keep the
+ * bars' pace; on the tween's spring the fade ran in about 110 ms and read as
+ * the values just appearing. Tuned on device.
+ */
+export const FADE_SECONDS = 0.4;
+
+/**
+ * How far a crossfade has gone at its clock's progress `p` (elapsed over
+ * FADE_SECONDS): smootherstep, 6p⁵ − 15p⁴ + 10p³. One curve for both sets,
+ * so their shares always add up and the axis never empties; flat at both
+ * ends, so a run of rebins, each restarting the clock, changes little in its
+ * first moments instead of flashing; steep in the middle, so the two sets are
+ * both strong only briefly (at p = 0.3 the incoming set is at 16%, where a
+ * linear fade shows 30%).
+ */
+export const fadeProgress = (f: number) => {
+	const t = Math.min(1, Math.max(0, f));
+	return t * t * t * (t * (6 * t - 15) + 10);
+};
 
 /**
  * A unit-change tween as morphing marks read it (`LinearScaleState.tween`).
@@ -200,6 +226,14 @@ export class LinearScaleState {
 	#crossfading = false;
 	/** Frozen tick sets, per tick count asked for (the axis and the grid may differ). */
 	#tickFades = new Map<number, TickFade>();
+	/**
+	 * The crossfade's own clock: seconds since the current segment began,
+	 * advanced by `step()` at the fixed rate, and the progress this frame was
+	 * drawn at (`updateRenderState`, extrapolated). The fade can outlast the
+	 * tween: the scale keeps animating until it ends.
+	 */
+	#fadeElapsed = 0;
+	#fadeRendered = 1;
 	#tickScratch = new Float64Array(2);
 
 	// --- Unit-change tween ---
@@ -507,6 +541,11 @@ export class LinearScaleState {
 	 * Called by AnimationLoop at fixed rate (360Hz).
 	 */
 	step(): void {
+		if (this.#crossfading) {
+			this.#fadeElapsed += DT;
+			// Done once the tween is too: the newest set is then the live ticks.
+			if (!this.#tween && this.#fadeElapsed >= FADE_SECONDS) this.#endCrossfade();
+		}
 		const tween = this.#tween;
 		if (tween) {
 			tween.step();
@@ -532,6 +571,9 @@ export class LinearScaleState {
 		this.#renderMin = this.fromSpringSpace(this.#springOutput[0]);
 		this.#renderMax = this.fromSpringSpace(this.#springOutput[1]);
 		this.#updateGpuState();
+		this.#fadeRendered = this.#crossfading
+			? Math.min(1, (this.#fadeElapsed + extrapolationDt) / FADE_SECONDS)
+			: 1;
 
 		// Trigger Svelte reactivity
 		this._version++;
@@ -542,7 +584,7 @@ export class LinearScaleState {
 	 * Used by AnimationLoop to determine when to stop.
 	 */
 	isAtRest(): boolean {
-		return !this.#tween && this.#springPair.isAtRest();
+		return !this.#tween && !this.#crossfading && this.#springPair.isAtRest();
 	}
 
 	/**
@@ -739,9 +781,10 @@ export class LinearScaleState {
 	 * positioned through the render domain. During a discrete change's tween
 	 * the axis CROSSFADES IN PLACE: each tick set stays at the pixels its own
 	 * domain gives it, the old set under the domain the change started from,
-	 * the new one under the target, and only opacities move, on the tween's
-	 * progress `f`: `α = α₀ + (target − α₀)·f`, target 1 for the newest set and
-	 * 0 for the rest, `α₀` each set's opacity when its segment began, so a
+	 * the new one under the target, and only opacities move, on the fade's
+	 * own clock (FADE_SECONDS from the segment's start, slower than the bars):
+	 * incoming `α = α₀ + (1 − α₀)·s(p)`, outgoing `α = α₀·(1 − s(p))`,
+	 * `s` = fadeProgress, `α₀` the opacity when the segment began, so a
 	 * retarget mid-way continues from what is on screen. Ticks that fly with
 	 * the mapping read as the data changing when only the unit did; in a pure
 	 * change of unit a bar sits on the same pixel under both sets, so it reads
@@ -755,8 +798,7 @@ export class LinearScaleState {
 	 */
 	tickFrame(count: number = this.defaultTickCount): readonly TickEntry[] {
 		this._version;
-		const tween = this.#tween;
-		if (!this.#crossfading || !tween) {
+		if (!this.#crossfading) {
 			if (this.#tickFades.size > 0) this.#tickFades.clear();
 			const lo = this.toSpringSpace(this.#renderMin);
 			const width = this.toSpringSpace(this.#renderMax) - lo;
@@ -769,7 +811,7 @@ export class LinearScaleState {
 		}
 		let fade = this.#tickFades.get(count);
 		if (!fade) {
-			fade = { segment: -1, sets: [], version: -1, frame: [] };
+			fade = { segment: -1, sets: [], alpha0: new Map(), version: -1, frame: [] };
 			this.#tickFades.set(count, fade);
 		}
 		const segment = this.#published.segment;
@@ -777,28 +819,35 @@ export class LinearScaleState {
 		if (fade.version === this._version) return fade.frame;
 
 		const f = this.#published.f;
-		const sets = fade.sets;
+		// On the fade's own clock (FADE_SECONDS), not the tween's f.
+		const into = fadeProgress(this.#fadeRendered);
+		const out = into;
+		// Each tick by where it is drawn, once whichever sets it is in: its
+		// opacity when the segment began, and whether the incoming set has it.
+		// Incoming ticks fade in from there, the rest fade out; a value in both
+		// at the same pixel was fully drawn and stays so.
 		const frame: TickEntry[] = [];
+		const sets = fade.sets;
 		for (let i = 0; i < sets.length; i++) {
 			const set = sets[i];
 			const newest = i === sets.length - 1;
-			const alpha = Math.min(1, Math.max(0, set.alpha0 + ((newest ? 1 : 0) - set.alpha0) * f));
-			set.alpha = alpha;
-			if (alpha <= 0) continue;
-			const width = set.hi - set.lo;
 			for (const value of set.values) {
-				const position = width > 0 ? (this.toSpringSpace(value) - set.lo) / width : 0;
+				const position = this.#tickPosition(set, value);
 				const same = frame.find(
 					(e) => e.value === value && Math.abs(e.position - position) < SAME_TICK
 				);
-				if (same) {
-					same.alpha = Math.min(1, same.alpha + alpha);
-					same.target ||= newest;
-				} else {
-					frame.push({ value, position, alpha, target: newest });
-				}
+				if (same) same.target ||= newest;
+				else frame.push({ value, position, alpha: 0, target: newest });
 			}
 		}
+		let shown = 0;
+		for (const e of frame) {
+			const a0 = fade.alpha0.get(tickId(e.value, e.position)) ?? 0;
+			e.alpha = e.target ? a0 + (1 - a0) * into : a0 * (1 - out);
+			// An outgoing tick that was not drawn when the segment began never is.
+			if (e.target || a0 > 0) frame[shown++] = e;
+		}
+		frame.length = shown;
 		fade.version = this._version;
 		fade.frame = frame;
 		return frame;
@@ -811,23 +860,50 @@ export class LinearScaleState {
 	 * from 0.
 	 */
 	#freezeTicks(fade: TickFade, count: number, segment: number): void {
-		const sets = fade.sets.filter((set) => set.alpha > 0);
-		for (const set of sets) set.alpha0 = set.alpha;
-		if (sets.length === 0) {
+		const alpha0 = new Map<string, number>();
+		let sets: TickSet[];
+		if (fade.sets.length === 0) {
+			// From rest: the ticks the change started from, fully drawn.
 			const start = this.#tickScratch;
 			this.#fromTween(0, start);
-			sets.push(this.#tickSet(start[0], start[1], count, 1));
+			const first = this.#tickSet(start[0], start[1], count);
+			for (const value of first.values)
+				alpha0.set(tickId(value, this.#tickPosition(first, value)), 1);
+			sets = [first];
+		} else {
+			// A retarget: every tick from where the last frame drew it; a set with
+			// none still visible leaves.
+			for (const e of fade.frame) if (e.alpha > 0) alpha0.set(tickId(e.value, e.position), e.alpha);
+			sets = fade.sets.filter((set) =>
+				set.values.some((value) => alpha0.has(tickId(value, this.#tickPosition(set, value))))
+			);
 		}
 		const lo = this.#tweenPivot;
-		sets.push(this.#tickSet(lo, lo + this.#tweenWidth, count, 0));
+		sets.push(this.#tickSet(lo, lo + this.#tweenWidth, count));
 		fade.sets = sets;
+		fade.alpha0 = alpha0;
 		fade.segment = segment;
 		fade.version = -1;
 	}
 
-	#tickSet(lo: number, hi: number, count: number, alpha: number): TickSet {
+	#tickSet(lo: number, hi: number, count: number): TickSet {
 		const values = this.ticksFor(this.fromSpringSpace(lo), this.fromSpringSpace(hi), count);
-		return { lo, hi, values, alpha0: alpha, alpha };
+		return { lo, hi, values };
+	}
+
+	/** Where a set puts a tick: its fraction of the plot under the set's own domain. */
+	#tickPosition(set: TickSet, value: number): number {
+		const width = set.hi - set.lo;
+		return width > 0 ? (this.toSpringSpace(value) - set.lo) / width : 0;
+	}
+
+	/**
+	 * Whether the axis is crossfading now: `tickFrame` gives frozen sets, whose
+	 * positions are fixed fractions of the plot rather than live values.
+	 */
+	get crossfading(): boolean {
+		this._version;
+		return this.#crossfading;
 	}
 
 	/** End a crossfade: live ticks from here (a gesture, or the tween's end). */
@@ -1061,6 +1137,8 @@ export class LinearScaleState {
 			this.#tweenTo(min, max);
 			return;
 		}
+		// An ordinary spring moves the domain: frozen tick sets would stand still.
+		this.#endCrossfade();
 		this.#springPair.setTarget(this.toSpringSpace(min), this.toSpringSpace(max));
 		this._targetVersion++; // Trigger reactivity for target watchers
 		this.#ensureAnimating();
@@ -1190,6 +1268,10 @@ export class LinearScaleState {
 		const published = this.#published;
 		published.segment++;
 		published.f = 0;
+		// The crossfade's clock restarts with every segment, from the opacities
+		// on screen (#freezeTicks).
+		this.#fadeElapsed = 0;
+		this.#fadeRendered = 0;
 		// From the spring-space endpoints the tween lands on (#endTween), not from
 		// [min, max]: on a log scale the round trip can differ in the last bit,
 		// and marks must mix toward exactly the domain they land in.
@@ -1223,7 +1305,7 @@ export class LinearScaleState {
 	#endTween(): void {
 		const c = this.#tweenPivot;
 		this.#tween = null;
-		this.#endCrossfade();
+		// The crossfade runs on its own clock and may outlast the tween (step).
 		this.#springPair.set(c, c + this.#tweenWidth);
 	}
 

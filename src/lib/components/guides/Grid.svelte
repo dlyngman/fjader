@@ -40,9 +40,11 @@
 	// A continuous axis's line opacities (its tick frame), reused like the positions.
 	let xAlphaBuffer: Float32Array<ArrayBuffer> = new Float32Array(64);
 	let yAlphaBuffer: Float32Array<ArrayBuffer> = new Float32Array(64);
-	/** A continuous axis's opacities, as ticksOf last wrote them. */
+	/** A continuous axis's opacities, and whether its positions are plot fractions, as ticksOf last wrote them. */
 	let xFrameAlpha: Float32Array<ArrayBuffer> | null = null;
 	let yFrameAlpha: Float32Array<ArrayBuffer> | null = null;
+	let xPlotSpace = false;
+	let yPlotSpace = false;
 
 	function grow(buffer: Float32Array<ArrayBuffer>, n: number): Float32Array<ArrayBuffer> {
 		return buffer.length >= n ? buffer : new Float32Array(Math.max(n, buffer.length * 2));
@@ -56,18 +58,22 @@
 		// None until the scale has entered: its domain is a placeholder before that.
 		if (!scale || !hasEntered(scale)) return null;
 		if (!band && 'tickFrame' in scale) {
-			// The axis's own tick frame: through a discrete change, each line where
-			// its set puts it (as a value under the domain drawn now) and faded as
-			// that set is; at rest the live ticks, fully drawn.
+			// The axis's own tick frame. Through a discrete change, each line at the
+			// fraction of the plot its set puts it at (fixed pixels: GridLine's plot
+			// space, so it cannot trail the moving domain by a frame) and faded as
+			// that set is; at rest the live tick values, fully drawn, as before.
 			const continuous = scale as ContinuousScaleState;
 			const frame = continuous.tickFrame();
 			if (frame.length === 0) return null;
+			const plot = continuous.crossfading;
 			const positions = grow(which === 'x' ? xBuffer : yBuffer, frame.length);
 			const alphas = grow(which === 'x' ? xAlphaBuffer : yAlphaBuffer, frame.length);
 			for (let i = 0; i < frame.length; i++) {
-				positions[i] = continuous.valueAt(frame[i].position);
+				positions[i] = plot ? frame[i].position : frame[i].value;
 				alphas[i] = frame[i].alpha;
 			}
+			if (which === 'x') xPlotSpace = plot;
+			else yPlotSpace = plot;
 			const alpha = alphas.subarray(0, frame.length);
 			if (which === 'x') {
 				xBuffer = positions;
@@ -80,6 +86,8 @@
 			}
 			return positions.subarray(0, frame.length);
 		}
+		if (which === 'x') xPlotSpace = false;
+		else yPlotSpace = false;
 		const ticks = scale.getTicks ? (scale.getTicks() as ArrayLike<number>) : null;
 		if (!ticks || ticks.length === 0) return null;
 		const buffer = grow(which === 'x' ? xBuffer : yBuffer, ticks.length);
@@ -98,6 +106,8 @@
 	// Read after the positions, which wrote a continuous axis's opacities.
 	const xAlpha = $derived(xTickValues && (xBand ? visibilityOf(xScale, true) : xFrameAlpha));
 	const yAlpha = $derived(yTickValues && (yBand ? visibilityOf(yScale, true) : yFrameAlpha));
+	const xSpace = $derived(xTickValues && xPlotSpace ? 'plot' : 'value');
+	const ySpace = $derived(yTickValues && yPlotSpace ? 'plot' : 'value');
 	// A band axis's line opacity follows its layout: when that landed at once
 	// (a catch-up result), the opacity lands with it.
 	const landedOf = (scale: ScaleStateInstance | null, band: boolean) =>
@@ -111,6 +121,7 @@
 		axis="x"
 		positions={xTickValues}
 		alpha={xAlpha}
+		space={xSpace}
 		landsFor={xLands}
 		bandAxis={xBand ? 'x' : null}
 		{color}
@@ -123,6 +134,7 @@
 		axis="y"
 		positions={yTickValues}
 		alpha={yAlpha}
+		space={ySpace}
 		landsFor={yLands}
 		bandAxis={yBand ? 'y' : null}
 		{color}
