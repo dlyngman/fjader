@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { AutoBinNode } from '$lib/sql/bin';
 import type { BinPadding } from '$lib/types';
-import { binSpecKey, isRebin } from './rebin';
+import { binRowsMoved, binSpecKey, isRebin } from './rebin';
 
 /** The spec a mark's parts carry for one bin channel, as the lifecycle builds it. */
 function spec(
@@ -54,5 +54,25 @@ describe('rebin detection by bin spec', () => {
 		expect(isRebin(null, a)).toBe(false);
 		expect(isRebin(a, null)).toBe(false);
 		expect(binSpecKey(null)).toBeNull();
+	});
+});
+
+describe('rows moved: a rebin, or a window moved over the same bins', () => {
+	it('a rebin moves the rows; nothing to compare with does not', () => {
+		expect(binRowsMoved('a', null, 'b', null)).toBe(true);
+		expect(binRowsMoved(null, null, 'b', null)).toBe(false);
+		expect(binRowsMoved('a', null, null, null)).toBe(false);
+	});
+
+	it('the same bins over a moved window move the rows, though it is no rebin', () => {
+		expect(binRowsMoved('a', [0, 10], 'a', [5, 15])).toBe(true);
+		expect(isRebin('a', 'a')).toBe(false);
+	});
+
+	it('the same window, by value, does not; none is the whole extent', () => {
+		expect(binRowsMoved('a', [0, 10], 'a', [0, 10])).toBe(false);
+		expect(binRowsMoved('a', null, 'a', null)).toBe(false);
+		expect(binRowsMoved('a', null, 'a', [0, 10])).toBe(true);
+		expect(binRowsMoved('a', [0, 10], 'a', null)).toBe(true);
 	});
 });

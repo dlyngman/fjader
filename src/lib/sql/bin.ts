@@ -76,6 +76,18 @@ const UNIT_MS: Record<string, number> = {
 	microsecond: 0.001
 };
 
+/**
+ * A time bin's nominal width in ms, from its SQL interval (`INTERVAL 6 hour`):
+ * a month as 30 days, a year as 365. For snapping a window near the grid, which
+ * the SQL then snaps exactly. Null for a form it does not read.
+ */
+export function intervalWidthMs(sqlInterval: string): number | null {
+	const m = /INTERVAL\s+(\d+(?:\.\d+)?)\s+(\w+?)s?\b/i.exec(sqlInterval);
+	if (!m) return null;
+	const unit = UNIT_MS[m[2].toLowerCase()];
+	return unit ? Number(m[1]) * unit : null;
+}
+
 export function bin(field: string | ExprNode, options: BinOptions = {}): AutoBinNode {
 	return new AutoBinNode(field, options);
 }

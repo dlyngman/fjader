@@ -184,6 +184,9 @@ export interface ChannelIdentity {
  */
 export type BinPadding = NumericBinPadding | TimeBinPadding;
 
+/** A binned axis's window, `[lo, hi]`, in the bins' extent units (see MarkConfig.binWindow). */
+export type BinWindow = readonly [number, number];
+
 /** Numeric bins: edge k is `min + alpha * (k + offset)` for k in [0, count). */
 export interface NumericBinPadding {
 	kind: 'number';
@@ -228,6 +231,13 @@ export interface MarkConfig {
 	bins?: Record<string, BinPadding> | null;
 	/** The query reads a table that already holds its padding rows. Per query. */
 	padded?: boolean;
+	/**
+	 * The binned axis's window, `[lo, hi]` in the bins' own extent units (ms for
+	 * time, values for numeric): `dense()` pads and returns only the bins it
+	 * touches. A query parameter, not part of the parts or the bin spec: a pan
+	 * that moves it re-queries without counting as a rebin. Per query.
+	 */
+	binWindow?: BinWindow | null;
 	[key: string]: unknown;
 }
 

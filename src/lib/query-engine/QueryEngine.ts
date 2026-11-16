@@ -42,6 +42,7 @@ import {
 import type { FilterGroup } from './FilterGroup.svelte';
 import { NO_ROUTE, type Clause, type MarkRoute } from './CrossfilterSelection.svelte';
 import type { TransformCompiler } from '$lib/transforms/TransformCompiler';
+import { binWindowSourceFilter } from '$lib/transforms';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1656,6 +1657,8 @@ export class QueryEngine {
 		// with new parts, where the handle still holds the old data.
 		if (!handle.active && handle.dataVersion > 0 && !reg.needsFirst) {
 			reg.stale = true;
+			// Its catch-up reads the params as it is sent: not a lost window.
+			handle.sentWindow = handle.params.binWindow ?? null;
 			return;
 		}
 		reg.stale = false;
@@ -1672,6 +1675,9 @@ export class QueryEngine {
 		// The parts this query is built from, taken as it is sent: the result
 		// reports them, whatever the registration holds when it lands.
 		const parts = reg.descriptor.parts;
+		// And the bin window, for the same reason: a pan moves it while this flies.
+		const window = handle.params.binWindow ?? null;
+		handle.sentWindow = window;
 		this.query(sqlStr, markReadOptions(markId, reg.descriptor, preagg?.table ?? null))
 			.catch((e) => {
 				if (!preagg || (e as Error)?.name === 'AbortError') throw e;
@@ -1682,7 +1688,7 @@ export class QueryEngine {
 			})
 			// With its parts, as `cause`: a re-registration lets a query in
 			// flight land after the mark has new parts.
-			.then((table) => handle._setResult(table, cause, parts))
+			.then((table) => handle._setResult(table, cause, parts, window))
 			.catch((e) => {
 				if ((e as Error)?.name === 'AbortError') return;
 				handle._setError(e as Error);
@@ -1692,10 +1698,25 @@ export class QueryEngine {
 	/** The query a mark runs on its base table, applying every clause. */
 	#baseSQL(markId: string, reg: MarkRegistration): string | null {
 		const { descriptor, handle } = reg;
+		const filter = reg.filterGroup.selection.predicate(reg.descriptor.route ?? NO_ROUTE);
+		// A windowed binned mark aggregates only the rows its window can hold:
+		// the padding's join keeps the window's bins either way, but filtering
+		// first saves the GROUP BY over the rest of the extent. Not when a
+		// transform reads the whole extent: the filter is a row filter, so it
+		// precedes every transform. A topN would rank series over the window
+		// (its top and its Other changing as the view pans, and differing from
+		// a preagg read, which ranks the whole extent), and a window aggregate
+		// would lose the rows before the window's edge. Those keep the windowed
+		// padding over the full aggregate: correct, without the speed-up.
+		const range =
+			descriptor.transformCompiler.hasCategoryReducingTransforms() ||
+			descriptor.parts.hasWindowAggregates
+				? null
+				: binWindowSourceFilter(descriptor.parts.bins, handle.params.binWindow);
 		return this.#assembleSQL(
 			descriptor,
 			descriptor.table,
-			reg.filterGroup.selection.predicate(reg.descriptor.route ?? NO_ROUTE),
+			range ? [...filter, range] : filter,
 			handle.params
 		);
 	}
@@ -1729,6 +1750,7 @@ export class QueryEngine {
 				filter,
 				transformCompiler,
 				limit: params.limit,
+				binWindow: params.binWindow ?? null,
 				window: { channels: split.windowChannels, cteName: '__window_cte' }
 			}).toString();
 		}
@@ -1744,7 +1766,8 @@ export class QueryEngine {
 			parts: { ...parts, selectDef: castSelectDef },
 			filter,
 			transformCompiler,
-			limit: params.limit
+			limit: params.limit,
+			binWindow: params.binWindow ?? null
 		}).toString();
 	}
 

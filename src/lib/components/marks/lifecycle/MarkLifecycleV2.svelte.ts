@@ -46,6 +46,7 @@ import type {
 	NormalizedSortConfig,
 	Transform,
 	BinPadding,
+	BinWindow,
 	ChannelIdentity,
 	MarkConfig,
 	ChartContext,
@@ -100,7 +101,14 @@ import {
 } from './fit-domain';
 import { binLayout } from './bin-layout';
 import { buildBinRemap, type BinRemapSide } from '$lib/gpu/bin-remap';
-import { binSpecKey, isRebin } from './rebin';
+import {
+	binExtent,
+	binWindowFor,
+	binWindowNeedsMove,
+	insideBinWindow,
+	viewInBinUnits
+} from './bin-window';
+import { binRowsMoved, binSpecKey, isRebin } from './rebin';
 import type { DataLayer } from '$lib/config/ChartConfig.svelte';
 import {
 	buildQueryParts,
@@ -516,12 +524,14 @@ export class MarkLifecycleV2 {
 	// --- Rebin results ---
 	/** The bin spec the last result was computed from (#takeBinStep). */
 	#lastBinSpec: string | null = null;
+	/** A view in the bins' units, reused: #onViewport runs every frame (no allocation). */
+	#viewScratch: [number, number] = [0, 0];
 	/**
 	 * The rows the renderer last took (`takeRemap`), as a remap reads them.
 	 * Holds references to that result's columns, so the previous table stays in
 	 * memory until the next take: binned data, bounded by the dense row limit.
 	 */
-	#takenSide: (BinRemapSide & { binKey: string | null }) | null = null;
+	#takenSide: (BinRemapSide & { binKey: string | null; window: BinWindow | null }) | null = null;
 
 	// --- Cleanup ---
 	#destroyed = false;
@@ -631,7 +641,20 @@ export class MarkLifecycleV2 {
 					chartContext.config.setMarkProp(markId, 'lod', { ...cfg, multiplier: value });
 				},
 				getData: () => this.data,
+				onViewport: (axis, domain) => this.#onViewport(axis, domain),
 				triggerReBin: (axis, domain) => {
+					// The window around the new view, set before the parts change: the
+					// re-registration's first query reads it as it is sent.
+					if (this.#windowedAxis() === axis) {
+						const scratch = this.#viewScratch;
+						scratch[0] = domain[0];
+						scratch[1] = domain[1];
+						const view = viewInBinUnits(scratch, this.#timeOrigin(axis), scratch);
+						// The grid of the bins on screen: the new step's is not resolved
+						// yet. Still outward, so the view is covered; the SQL snaps exactly.
+						const band = this.#resolvedQueryParts?.bins?.[`${axis}1`];
+						this.#handle?.setBinWindow(binWindowFor(view, band), false);
+					}
 					this.#lastBinDomain[axis] = [domain[0], domain[1]];
 					// #lastBinDomain is $state — #resolvedQueryParts recomputes automatically.
 					// A mark binned on one axis takes the rebin from the result itself
@@ -2051,7 +2074,10 @@ export class MarkLifecycleV2 {
 		// the rows cannot disagree about which channel they are aligned on.
 		const aligned = this.#transformCompiler.alignment(Object.keys(parts.selectDef), {
 			groupKeys: parts.groupKeys,
-			bins: parts.bins ?? null
+			bins: parts.bins ?? null,
+			// The window the queries are sent with: past the whole extent's row
+			// limit, only a window pads.
+			binWindow: this.#handle?.params.binWindow ?? null
 		})?.[0];
 		// A band is `x` or `y`; a binned axis aligns on its lower edge, `x1`.
 		const axis = aligned?.[0];
@@ -2742,6 +2768,18 @@ export class MarkLifecycleV2 {
 		if (this.#transformCompiler.hasJSTransforms()) return undefined;
 		const data = this.data;
 		if (!data || data.length === 0) return undefined;
+		// A result over a window answers inside it only, the window it was
+		// computed over (not the mark's current one: a pan moves that while a
+		// query flies). Past it, the fit would see part of the visible bins.
+		if (
+			drivingDomain &&
+			!insideBinWindow(
+				this.#handle?.resultWindow,
+				viewInBinUnits(drivingDomain, this.#timeOrigin(drivingAxis), this.#viewScratch)
+			)
+		) {
+			return undefined;
+		}
 
 		const includeTransform = this.#fitIncludesTransformChannels();
 		const edges = windowEdges(this.#getFitDomainChannels(drivingAxis, includeTransform));
@@ -2777,12 +2815,15 @@ export class MarkLifecycleV2 {
 		const side = this.#remapSide();
 		const last = this.#takenSide;
 		this.#takenSide = side;
-		if (!side || !last || side.binKey === null || side.binKey === last.binKey) return null;
+		if (!side || !last) return null;
+		// Other bins, or the same bins over a moved window: both stamped on the
+		// results, so a pan's window moving while a query flies cannot mislead.
+		if (!binRowsMoved(last.binKey, last.window, side.binKey, side.window)) return null;
 		return buildBinRemap(last, side);
 	};
 
 	/** The current result as one side of a remap, or null when it is not the dense layout. */
-	#remapSide(): (BinRemapSide & { binKey: string | null }) | null {
+	#remapSide(): (BinRemapSide & { binKey: string | null; window: BinWindow | null }) | null {
 		const axis = this.#binnedAxis();
 		const data = this.data;
 		const parts = this.#handle?.resultParts;
@@ -2796,7 +2837,9 @@ export class MarkLifecycleV2 {
 		// faceted, the facet. Their ids are what must match slot for slot.
 		const aligned = this.#transformCompiler.alignment(Object.keys(parts.selectDef), {
 			groupKeys: parts.groupKeys,
-			bins: parts.bins ?? null
+			bins: parts.bins ?? null,
+			// The window this result was computed over, as with its parts.
+			binWindow: this.#handle?.resultWindow ?? null
 		});
 		const ids: ArrayLike<number>[] = [];
 		for (const channel of aligned?.slice(1) ?? []) {
@@ -2804,7 +2847,14 @@ export class MarkLifecycleV2 {
 			if (!column) return null;
 			ids.push(column);
 		}
-		return { lower, upper, layout, ids, binKey: parts.binKey ?? null };
+		return {
+			lower,
+			upper,
+			layout,
+			ids,
+			binKey: parts.binKey ?? null,
+			window: this.#handle?.resultWindow ?? null
+		};
 	}
 
 	/**
@@ -2849,6 +2899,45 @@ export class MarkLifecycleV2 {
 	readonly #dataLayer: DataLayer = {
 		followsTicks: () => REBIN_SNAPS_WITH.has(this.#config.markType) && this.#autoBinNodes.size === 0
 	};
+
+	/**
+	 * The binned axis, when this mark pads and queries a window around the
+	 * viewport there (bin-window.ts): a mark that fits its value axis from the
+	 * visible bins (`fitDomain`), so the whole extent is not needed for y. A
+	 * mark without one keeps whole-extent padding for now: its y is the whole
+	 * extent's. JS transforms are not padded at all.
+	 */
+	#windowedAxis(): 'x' | 'y' | null {
+		const axis = this.#binnedAxis();
+		if (!axis || this.#transformCompiler.hasJSTransforms()) return null;
+		const fit = this.#reactiveConfig.fitDomain;
+		return fit === true || fit === (axis === 'x' ? 'y' : 'x') ? axis : null;
+	}
+
+	/**
+	 * Each frame's viewport on a binned axis (AdaptiveBinRung): moves the
+	 * window when it no longer serves the view, and re-queries. A mark that
+	 * stops windowing (fitDomain off) goes back to the whole extent.
+	 */
+	#onViewport(axis: 'x' | 'y', domain: [number, number]): void {
+		const handle = this.#handle;
+		if (!handle) return;
+		const current = handle.params.binWindow ?? null;
+		if (this.#windowedAxis() !== axis) {
+			if (current) handle.setBinWindow(null, true);
+			return;
+		}
+		// A window set that no query went out with (set quietly for a query that
+		// then never came): send it, so the rows on screen are not left behind.
+		if (current !== handle.sentWindow) {
+			handle.setBinWindow(current, true);
+			return;
+		}
+		const band = this.#resolvedQueryParts?.bins?.[`${axis}1`];
+		const view = viewInBinUnits(domain, this.#timeOrigin(axis), this.#viewScratch);
+		if (!binWindowNeedsMove(current, view, band ? binExtent(band) : null)) return;
+		handle.setBinWindow(binWindowFor(view, band), true);
+	}
 
 	/** The axis a bin() channel is on, when exactly one is; null without bins or with both. */
 	#binnedAxis(): 'x' | 'y' | null {

@@ -63,6 +63,38 @@ describe('the bins remap', () => {
 		expect(half[0]).toBeCloseTo(0.5 * 6 + 0.5 * 8, 5);
 	});
 
+	it('maps a shifted window (same step) one-to-one; bins entering at the edge land', () => {
+		// A pan past a padded window: bins 0..50 → 20..70, step 10.
+		const prev = side([0, 10, 20, 30, 40, 50]);
+		const next = side([20, 30, 40, 50, 60, 70]);
+		const map = buildBinRemap(prev, next)!;
+		expect(map).not.toBeNull();
+		const from = remap(prev, next, [1, 2, 3, 4, 5], [9, 9, 9, 7, 8]);
+		expect(from).toEqual([3, 4, 5, 7, 8]);
+		// And the other way, entering at the left.
+		expect(remap(next, prev, [3, 4, 5, 7, 8], [6, 6, 1, 2, 3])).toEqual([6, 6, 3, 4, 5]);
+	});
+
+	it('maps a shifted window across series and facets, on a time-like grid', () => {
+		// Hours as seconds from t0, 3 series, 2 facets: rows stay with their own.
+		const h = (k: number) => k * 3600;
+		const edges = (a: number, b: number) => Array.from({ length: b - a + 1 }, (_, i) => h(a + i));
+		const prev = side(edges(100, 104), 3, 2);
+		const next = side(edges(102, 106), 3, 2);
+		const old = Array.from({ length: 4 * 3 * 2 }, (_, j) => j);
+		const to = Array.from({ length: 4 * 3 * 2 }, () => -1);
+		const from = remap(prev, next, old, to);
+		// Per facet, new bins 0..1 are old bins 2..3 (same series); 2..3 enter (own value).
+		for (let f = 0; f < 2; f++) {
+			for (let b = 0; b < 4; b++) {
+				for (let s = 0; s < 3; s++) {
+					const j = f * 12 + b * 3 + s;
+					expect(from[j]).toBe(b < 2 ? f * 12 + (b + 2) * 3 + s : -1);
+				}
+			}
+		}
+	});
+
 	it('keeps each row to its own series and facet', () => {
 		// Two series, two facets; old values encode facet, bin and series.
 		const prev = side([0, 10, 20], 2, 2);

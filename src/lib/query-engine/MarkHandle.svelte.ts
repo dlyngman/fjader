@@ -7,7 +7,7 @@
  */
 
 import type { Table } from '@uwdata/flechette';
-import type { NormalizedSortConfig } from '$lib/types';
+import type { BinWindow, NormalizedSortConfig } from '$lib/types';
 import type { QueryParts } from '$lib/components/marks/lifecycle/query-builder';
 
 export interface QueryParams {
@@ -17,6 +17,12 @@ export interface QueryParams {
 	 */
 	sort?: NormalizedSortConfig;
 	limit?: number;
+	/**
+	 * A binned mark's window (MarkConfig.binWindow): `dense()` pads and returns
+	 * only its bins. A parameter, not part of the parts: moving it re-queries
+	 * without re-registering, and leaves preagg tables and the bin spec alone.
+	 */
+	binWindow?: BinWindow | null;
 }
 
 /**
@@ -42,6 +48,20 @@ export class MarkHandle {
 	 * a result of other bins).
 	 */
 	resultParts: QueryParts | null = null;
+	/**
+	 * The bin window the result `dataVersion` counts was computed over, set
+	 * with it, as `resultParts`: a pan moves the window while a query is in
+	 * flight, and the old result lands with the old window's rows. Null: the
+	 * whole extent. Plain, like `resultParts`.
+	 */
+	resultWindow: BinWindow | null = null;
+	/**
+	 * The bin window the mark's last query went out with (or will, for an
+	 * inactive mark's catch-up, which reads the params when it is sent). Set by
+	 * the engine as it sends. A window in `params` that differs was never sent:
+	 * the mark re-queries (MarkLifecycleV2.#onViewport), whatever path set it.
+	 */
+	sentWindow: BinWindow | null = null;
 	error = $state<Error | null>(null);
 
 	#params = $state<QueryParams>({ sort: undefined, limit: undefined });
@@ -50,10 +70,24 @@ export class MarkHandle {
 		return this.#params;
 	}
 
-	/** Called by mark lifecycle when sort/limit change. */
+	/**
+	 * Called by mark lifecycle when sort/limit change. Merges: a field left out
+	 * keeps its value, so the sort and limit do not wipe the bin window.
+	 */
 	updateParams(params: QueryParams): void {
-		this.#params = params;
+		this.#params = { ...this.#params, ...params };
 		this._onParamsChange?.();
+	}
+
+	/**
+	 * Move the bin window (QueryParams.binWindow). `requery`: query now, for a
+	 * pan; false when a query is about to go out anyway and should carry it (a
+	 * rebin re-registers the mark, and its first query reads the params as it
+	 * is sent).
+	 */
+	setBinWindow(window: BinWindow | null, requery: boolean): void {
+		this.#params = { ...this.#params, binWindow: window };
+		if (requery) this._onParamsChange?.();
 	}
 
 	// Engine sets this callback during registration.
@@ -98,11 +132,17 @@ export class MarkHandle {
 	 * The error is cleared either way, so a success after a failure still
 	 * clears it.
 	 */
-	_setResult(table: Table, cause: ResultCause = 'update', parts: QueryParts | null = null): void {
+	_setResult(
+		table: Table,
+		cause: ResultCause = 'update',
+		parts: QueryParts | null = null,
+		window: BinWindow | null = null
+	): void {
 		this.error = null;
 		if (table === this.arrowTable) return;
 		this.resultCause = cause;
 		this.resultParts = parts;
+		this.resultWindow = window;
 		this.arrowTable = table;
 		this.dataVersion++;
 	}
