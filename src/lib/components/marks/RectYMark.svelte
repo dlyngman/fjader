@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { histogramFitAxis } from './utils/histogram-fit';
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import type { MarkLODSurface } from '$lib/lod/rung-types';
@@ -169,11 +170,8 @@
 	);
 	const resolvedTip = $derived(resolveTip(entry.tip, channelSelect));
 
-	const resolvedFitAxis = $derived.by(() => {
-		const fd = entry.fitDomain;
-		if (!fd) return null;
-		return fd === 'x' ? 'x' : fd === 'y' ? 'y' : 'y';
-	});
+	// See histogramFitAxis: a histogram fits its count axis (y) by default.
+	const resolvedFitAxis = $derived(histogramFitAxis(entry.fitDomain, isHistogram, 'y'));
 
 	const config = $derived({
 		markType: 'recty',

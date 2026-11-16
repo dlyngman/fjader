@@ -266,6 +266,7 @@
 											/>
 										{:else if chart.kind === 'hist'}
 											<RectYMark
+												fitDomain={false}
 												table={chart.table ?? 'flights'}
 												x={bin(chart.x, chart.steps ? { steps: chart.steps } : {})}
 												y={count()}
