@@ -173,7 +173,12 @@
 							{#snippet canvas()}
 								<WebGPUCanvas>
 									{#snippet canvasComponents()}
-										<RectYMark table="penguins" x={bin('body_mass')} y={count()} />
+										<RectYMark
+											fitDomain={false}
+											table="penguins"
+											x={bin('body_mass')}
+											y={count()}
+										/>
 									{/snippet}
 								</WebGPUCanvas>
 							{/snippet}
@@ -285,7 +290,13 @@
 							{#snippet canvas()}
 								<WebGPUCanvas>
 									{#snippet canvasComponents()}
-										<RectYMark table="penguins" x={bin('flipper_length')} y={count()} fill="sex" />
+										<RectYMark
+											fitDomain={false}
+											table="penguins"
+											x={bin('flipper_length')}
+											y={count()}
+											fill="sex"
+										/>
 									{/snippet}
 								</WebGPUCanvas>
 							{/snippet}

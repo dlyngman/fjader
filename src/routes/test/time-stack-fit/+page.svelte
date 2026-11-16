@@ -635,7 +635,7 @@
 								fill="grp"
 								inset={0.5}
 								transforms={[stackY()]}
-								fitDomain={fit ? 'y' : undefined}
+								fitDomain={fit ? 'y' : false}
 							/>
 							{#if overlay === 'rule'}
 								<RuleMarkY table="rule_level" y="v" stroke="#c00" strokeWidth={2} />

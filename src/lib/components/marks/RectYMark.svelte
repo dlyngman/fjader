@@ -169,10 +169,13 @@
 	);
 	const resolvedTip = $derived(resolveTip(entry.tip, channelSelect));
 
+	// A histogram fits its count axis to the bins in view unless told not to
+	// (`fitDomain={false}`): zoomed or panned away from the tallest bin, a y
+	// sized by the whole extent leaves the bars in view a sliver of the plot.
 	const resolvedFitAxis = $derived.by(() => {
-		const fd = entry.fitDomain;
+		const fd = entry.fitDomain ?? (isHistogram ? 'y' : undefined);
 		if (!fd) return null;
-		return fd === 'x' ? 'x' : fd === 'y' ? 'y' : 'y';
+		return fd === 'x' ? 'x' : 'y';
 	});
 
 	const config = $derived({

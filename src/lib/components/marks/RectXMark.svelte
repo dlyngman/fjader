@@ -163,9 +163,10 @@
 	);
 	const resolvedTip = $derived(resolveTip(entry.tip, channelSelect));
 
-	// `true` means the count axis: x here, where the bins are on y.
+	// A histogram fits its count axis (x here: the bins are on y) to the bins
+	// in view unless told not to (`fitDomain={false}`). `true` means that axis.
 	const resolvedFitAxis = $derived.by(() => {
-		const fd = entry.fitDomain;
+		const fd = entry.fitDomain ?? (isHistogram ? 'x' : undefined);
 		if (!fd) return null;
 		if (fd === true) return isHistogram ? 'x' : 'y';
 		return fd;

@@ -380,6 +380,7 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<RectYMark
+									fitDomain={false}
 									table="preagg_flights"
 									x={bin('delay', { steps: 50 })}
 									y={count()}
@@ -424,6 +425,7 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<RectYMark
+									fitDomain={false}
 									table="preagg_flights"
 									x={bin('delay', { steps: 50 })}
 									y={count()}
@@ -446,6 +448,7 @@
 						<WebGPUCanvas>
 							{#snippet canvasComponents()}
 								<RectYMark
+									fitDomain={false}
 									table="preagg_flights"
 									x={bin('distance', { steps: 50 })}
 									y={count()}
