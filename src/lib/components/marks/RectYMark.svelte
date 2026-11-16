@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { histogramFitAxis } from './utils/histogram-fit';
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import type { MarkLODSurface } from '$lib/lod/rung-types';
@@ -169,14 +170,8 @@
 	);
 	const resolvedTip = $derived(resolveTip(entry.tip, channelSelect));
 
-	// A histogram fits its count axis to the bins in view unless told not to
-	// (`fitDomain={false}`): zoomed or panned away from the tallest bin, a y
-	// sized by the whole extent leaves the bars in view a sliver of the plot.
-	const resolvedFitAxis = $derived.by(() => {
-		const fd = entry.fitDomain ?? (isHistogram ? 'y' : undefined);
-		if (!fd) return null;
-		return fd === 'x' ? 'x' : 'y';
-	});
+	// See histogramFitAxis: a histogram fits its count axis (y) by default.
+	const resolvedFitAxis = $derived(histogramFitAxis(entry.fitDomain, isHistogram, 'y'));
 
 	const config = $derived({
 		markType: 'recty',
