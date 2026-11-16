@@ -143,4 +143,62 @@ describe('a unit-change tween', () => {
 		expect(s.domain.current[1]).toBe(100);
 		expect(s.isAtRest()).toBe(true);
 	});
+
+	it('takes a pan mid-way without a jump, and ends where the pan left it', () => {
+		const s = onScreen(new LinearScaleState('y'), 0, 700);
+		s.folding(() => s.domain.set([0, 100], { instant: true }));
+		const before = frames(s, 15);
+		const [lo, hi] = before[before.length - 1];
+		// A 500 px plot, dragged 100 px: a fifth of the drawn domain.
+		s.setPanContext({ screenToDataRatio: (hi - lo) / 500, axis: 'y', initialScreenPos: 0 });
+		s.updatePanPosition(0, 100);
+		const target = s.domain.target;
+		s.updateRenderState(0);
+		// The pan retargets; it moves nothing in its own frame.
+		expect(s.domain.current[0]).toBeCloseTo(lo, 6);
+		expect(s.domain.current[1]).toBeCloseTo(hi, 6);
+		s.endPan();
+		const run = frames(s);
+		const end = run[run.length - 1];
+		expect(end[0]).toBeCloseTo(target[0], 4);
+		expect(end[1]).toBeCloseTo(target[1], 4);
+		let biggest = 0;
+		for (let i = 1; i < run.length; i++) {
+			biggest = Math.max(biggest, Math.abs(run[i][1] - run[i - 1][1]));
+		}
+		expect(biggest).toBeLessThan(30);
+	});
+
+	it('carries a moving spring’s velocity into the tween: no jump, no stall', () => {
+		const s = onScreen(new LinearScaleState('y'), 0, 700);
+		s.domain.set([0, 300]); // an ordinary spring, under way
+		const moving = frames(s, 12);
+		const at50 = (d: [number, number]) => at(50, d);
+		const last = moving[moving.length - 1];
+		const vBefore = at50(last) - at50(moving[moving.length - 2]);
+		s.folding(() => s.domain.set([0, 250], { instant: true }));
+		s.updateRenderState(0);
+		// Same position in the takeover frame...
+		const [lo, hi] = s.domain.current;
+		expect(at50([lo, hi])).toBeCloseTo(at50(last), 6);
+		// ...and the next frame keeps going the same way at about the same speed.
+		const next = frames(s, 1)[0];
+		const vAfter = at50(next) - at50(last);
+		expect(Math.sign(vAfter)).toBe(Math.sign(vBefore));
+		expect(vAfter / vBefore).toBeGreaterThan(0.5);
+		expect(vAfter / vBefore).toBeLessThan(1.5);
+	});
+
+	it('stays finite against a fast-widening spring: a large zoom-out keeps a positive width', () => {
+		const s = onScreen(new LinearScaleState('y'), 0, 700);
+		s.domain.set([0, 1e5]); // widening fast
+		frames(s, 3);
+		s.folding(() => s.domain.set([0, 1e6], { instant: true }));
+		const run = frames(s);
+		for (const [lo, hi] of run) {
+			expect(Number.isFinite(lo) && Number.isFinite(hi)).toBe(true);
+			expect(hi - lo).toBeGreaterThan(0);
+		}
+		expect(run[run.length - 1][1]).toBeCloseTo(1e6, 0);
+	});
 });

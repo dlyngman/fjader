@@ -1585,10 +1585,11 @@ export class MarkLifecycleV2 {
 					this.#colorScaleState
 				);
 			};
-			// A rebin's snap folds: the morphing marks on the value axis hold
-			// their pixels through the change of unit, then glide.
-			if (lands && valueState) valueState.folding(register);
-			else register();
+			// An instant registration, as before: not yet inside `folding()`. A
+			// tween of y while the bars snap to their new values would leave them
+			// at half or double height for its length; the rebin tweens once the
+			// bars resolve in pixel space, in the same change.
+			register();
 			this.#dataDerivedDomainsSet = domainResult.dataDerivedDomainsSet;
 			this.#skipDomainUpdateForAxis = domainResult.skipDomainUpdateForAxis;
 
@@ -1601,10 +1602,8 @@ export class MarkLifecycleV2 {
 				if (fit !== undefined) {
 					this.#fittedVersion = dv;
 					if (fit) {
-						const apply = () =>
-							this.#applyFit(valueAxis, fit, drivingTarget, lands || this.#instantFor(valueState));
-						if (lands) valueState.folding(apply);
-						else apply();
+						// Instant, not yet inside `folding()`: see the registration above.
+						this.#applyFit(valueAxis, fit, drivingTarget, lands || this.#instantFor(valueState));
 					}
 				} else if (!this.#transformCompiler.hasJSTransforms()) {
 					// The result cannot answer (its rows are not the dense layout, as

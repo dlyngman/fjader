@@ -18,6 +18,13 @@ import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
  */
 const TWEEN_PRECISION = 1e-4;
 
+/**
+ * The floor of a tween's `a` (target width over drawn width): the drawn
+ * domain at most 1e4 times the target's width, which is far past anything a
+ * rebin produces, and keeps the width finite and positive.
+ */
+const TWEEN_MIN_A = 1e-4;
+
 const SCALE_SPRING_PRESETS = {
 	default: SPRING_PRESETS.default.stiffness, // 400 - general animations
 	pan: SPRING_PRESETS.pan.stiffness, // 600 - responsive dragging
@@ -154,6 +161,13 @@ export class LinearScaleState {
 	 * and two identical springs share their time profile: so it moves in a
 	 * straight line. Both are in units of the plot's height, so one precision
 	 * fits any domain (time offsets around 3e7 included).
+	 *
+	 * Exactly straight for a tween that starts at rest. One that takes over a
+	 * moving spring's velocity (or is retargeted mid-way) curves in (a, b): it
+	 * stays continuous and every value still moves in step, but not on a line.
+	 *
+	 * Runs at the reset stiffness: a pan or zoom on this axis during a tween
+	 * retargets it (#setTarget) and so feels like a reset spring until it ends.
 	 */
 	#tween: SpringPair | null = null;
 	#tweenPivot = 0;
@@ -930,9 +944,15 @@ export class LinearScaleState {
 		this.#ensureAnimating();
 	}
 
-	/** Spring-space endpoints [A, B] of tween coordinates (a, b). */
+	/**
+	 * Spring-space endpoints [A, B] of tween coordinates (a, b). `a` is kept
+	 * above a small positive floor: from rest a critically damped spring never
+	 * crosses its target, but a tween that takes over a fast-widening
+	 * endpoint spring's velocity can overshoot `a` through zero, and the width
+	 * would turn infinite or negative for every consumer of the scale.
+	 */
 	#fromTween(a: number, b: number, out: Float64Array): void {
-		const width = this.#tweenWidth / a;
+		const width = this.#tweenWidth / Math.max(a, TWEEN_MIN_A);
 		const A = this.#tweenPivot + b * width;
 		out[0] = A;
 		out[1] = A + width;
