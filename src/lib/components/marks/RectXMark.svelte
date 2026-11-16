@@ -163,10 +163,12 @@
 	);
 	const resolvedTip = $derived(resolveTip(entry.tip, channelSelect));
 
+	// `true` means the count axis: x here, where the bins are on y.
 	const resolvedFitAxis = $derived.by(() => {
 		const fd = entry.fitDomain;
 		if (!fd) return null;
-		return fd === 'x' ? 'x' : fd === 'y' ? 'y' : 'y';
+		if (fd === true) return isHistogram ? 'x' : 'y';
+		return fd;
 	});
 
 	const config = $derived({
