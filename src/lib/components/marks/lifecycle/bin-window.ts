@@ -20,7 +20,20 @@ import type { BinPadding, BinWindow } from '$lib/types';
 /** Viewports of margin on each side of the viewport. */
 export const MARGIN = 1;
 
-/** The window for a viewport `[lo, hi]`. */
+/**
+ * A viewport on the scale, in the bins' units. A time scale's domain is
+ * seconds from its origin `t0` (epoch seconds), the form its channels take in
+ * the query; time bins count in epoch ms. Numeric: the same units.
+ */
+export function viewInBinUnits(
+	view: readonly [number, number],
+	t0: number | null
+): [number, number] {
+	if (t0 === null) return [view[0], view[1]];
+	return [(view[0] + t0) * 1000, (view[1] + t0) * 1000];
+}
+
+/** The window for a viewport `[lo, hi]`, in the bins' units (viewInBinUnits). */
 export function binWindowFor(view: readonly [number, number]): BinWindow {
 	const width = view[1] - view[0];
 	return [view[0] - MARGIN * width, view[1] + MARGIN * width];

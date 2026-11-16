@@ -747,7 +747,10 @@ export function dense(options: { enabled?: boolean } = {}): SqlTransform {
 		 * holds exactly what padding its reads would have added.
 		 */
 		padRows(aliases: string[], config?: MarkConfig) {
-			const plan = densePlan(aliases, config, enabled, reported);
+			// Silent: a table that cannot hold the whole extent's padding is not a
+			// snap. Its reads pad themselves (over their window), and say so if
+			// they cannot.
+			const plan = densePlan(aliases, config, enabled);
 			if (!plan) return null;
 			const empty = Query.select(
 				Object.fromEntries(aliases.map((alias) => [alias, rawSql('NULL')]))

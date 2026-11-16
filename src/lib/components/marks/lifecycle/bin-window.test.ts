@@ -1,5 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import { binExtent, binWindowFor, binWindowNeedsMove, insideBinWindow } from './bin-window';
+import {
+	binExtent,
+	binWindowFor,
+	binWindowNeedsMove,
+	insideBinWindow,
+	viewInBinUnits
+} from './bin-window';
+
+describe('a viewport in the bins’ units', () => {
+	it('time: seconds from the scale’s origin become epoch ms; numeric stays', () => {
+		const t0 = Date.UTC(2024, 0, 1) / 1000;
+		expect(viewInBinUnits([0, 86_400], t0)).toEqual([Date.UTC(2024, 0, 1), Date.UTC(2024, 0, 2)]);
+		expect(viewInBinUnits([5, 9], null)).toEqual([5, 9]);
+	});
+});
 
 describe('a binned mark’s window', () => {
 	it('is the viewport with a viewport of margin each side', () => {

@@ -101,7 +101,13 @@ import {
 } from './fit-domain';
 import { binLayout } from './bin-layout';
 import { buildBinRemap, type BinRemapSide } from '$lib/gpu/bin-remap';
-import { binExtent, binWindowFor, binWindowNeedsMove, insideBinWindow } from './bin-window';
+import {
+	binExtent,
+	binWindowFor,
+	binWindowNeedsMove,
+	insideBinWindow,
+	viewInBinUnits
+} from './bin-window';
 import { binRowsMoved, binSpecKey, isRebin } from './rebin';
 import type { DataLayer } from '$lib/config/ChartConfig.svelte';
 import {
@@ -638,7 +644,8 @@ export class MarkLifecycleV2 {
 					// The window around the new view, set before the parts change: the
 					// re-registration's first query reads it as it is sent.
 					if (this.#windowedAxis() === axis) {
-						this.#handle?.setBinWindow(binWindowFor([domain[0], domain[1]]), false);
+						const view = viewInBinUnits([domain[0], domain[1]], this.#timeOrigin(axis));
+						this.#handle?.setBinWindow(binWindowFor(view), false);
 					}
 					this.#lastBinDomain[axis] = [domain[0], domain[1]];
 					// #lastBinDomain is $state — #resolvedQueryParts recomputes automatically.
@@ -2059,7 +2066,10 @@ export class MarkLifecycleV2 {
 		// the rows cannot disagree about which channel they are aligned on.
 		const aligned = this.#transformCompiler.alignment(Object.keys(parts.selectDef), {
 			groupKeys: parts.groupKeys,
-			bins: parts.bins ?? null
+			bins: parts.bins ?? null,
+			// The window the queries are sent with: past the whole extent's row
+			// limit, only a window pads.
+			binWindow: this.#handle?.params.binWindow ?? null
 		})?.[0];
 		// A band is `x` or `y`; a binned axis aligns on its lower edge, `x1`.
 		const axis = aligned?.[0];
@@ -2753,7 +2763,13 @@ export class MarkLifecycleV2 {
 		// A result over a window answers inside it only, the window it was
 		// computed over (not the mark's current one: a pan moves that while a
 		// query flies). Past it, the fit would see part of the visible bins.
-		if (drivingDomain && !insideBinWindow(this.#handle?.resultWindow, drivingDomain)) {
+		if (
+			drivingDomain &&
+			!insideBinWindow(
+				this.#handle?.resultWindow,
+				viewInBinUnits(drivingDomain, this.#timeOrigin(drivingAxis))
+			)
+		) {
 			return undefined;
 		}
 
@@ -2813,7 +2829,9 @@ export class MarkLifecycleV2 {
 		// faceted, the facet. Their ids are what must match slot for slot.
 		const aligned = this.#transformCompiler.alignment(Object.keys(parts.selectDef), {
 			groupKeys: parts.groupKeys,
-			bins: parts.bins ?? null
+			bins: parts.bins ?? null,
+			// The window this result was computed over, as with its parts.
+			binWindow: this.#handle?.resultWindow ?? null
 		});
 		const ids: ArrayLike<number>[] = [];
 		for (const channel of aligned?.slice(1) ?? []) {
@@ -2903,8 +2921,9 @@ export class MarkLifecycleV2 {
 			return;
 		}
 		const band = this.#resolvedQueryParts?.bins?.[`${axis}1`];
-		if (!binWindowNeedsMove(current, domain, band ? binExtent(band) : null)) return;
-		handle.setBinWindow(binWindowFor(domain), true);
+		const view = viewInBinUnits(domain, this.#timeOrigin(axis));
+		if (!binWindowNeedsMove(current, view, band ? binExtent(band) : null)) return;
+		handle.setBinWindow(binWindowFor(view), true);
 	}
 
 	#binnedAxis(): 'x' | 'y' | null {
