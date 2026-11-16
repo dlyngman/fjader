@@ -46,6 +46,7 @@ import type {
 	NormalizedSortConfig,
 	Transform,
 	BinPadding,
+	BinWindow,
 	ChannelIdentity,
 	MarkConfig,
 	ChartContext,
@@ -101,7 +102,7 @@ import {
 import { binLayout } from './bin-layout';
 import { buildBinRemap, type BinRemapSide } from '$lib/gpu/bin-remap';
 import { binExtent, binWindowFor, binWindowNeedsMove, insideBinWindow } from './bin-window';
-import { binSpecKey, isRebin } from './rebin';
+import { binRowsMoved, binSpecKey, isRebin } from './rebin';
 import type { DataLayer } from '$lib/config/ChartConfig.svelte';
 import {
 	buildQueryParts,
@@ -522,7 +523,7 @@ export class MarkLifecycleV2 {
 	 * Holds references to that result's columns, so the previous table stays in
 	 * memory until the next take: binned data, bounded by the dense row limit.
 	 */
-	#takenSide: (BinRemapSide & { binKey: string | null }) | null = null;
+	#takenSide: (BinRemapSide & { binKey: string | null; window: BinWindow | null }) | null = null;
 
 	// --- Cleanup ---
 	#destroyed = false;
@@ -2790,12 +2791,15 @@ export class MarkLifecycleV2 {
 		const side = this.#remapSide();
 		const last = this.#takenSide;
 		this.#takenSide = side;
-		if (!side || !last || side.binKey === null || side.binKey === last.binKey) return null;
+		if (!side || !last) return null;
+		// Other bins, or the same bins over a moved window: both stamped on the
+		// results, so a pan's window moving while a query flies cannot mislead.
+		if (!binRowsMoved(last.binKey, last.window, side.binKey, side.window)) return null;
 		return buildBinRemap(last, side);
 	};
 
 	/** The current result as one side of a remap, or null when it is not the dense layout. */
-	#remapSide(): (BinRemapSide & { binKey: string | null }) | null {
+	#remapSide(): (BinRemapSide & { binKey: string | null; window: BinWindow | null }) | null {
 		const axis = this.#binnedAxis();
 		const data = this.data;
 		const parts = this.#handle?.resultParts;
@@ -2817,7 +2821,14 @@ export class MarkLifecycleV2 {
 			if (!column) return null;
 			ids.push(column);
 		}
-		return { lower, upper, layout, ids, binKey: parts.binKey ?? null };
+		return {
+			lower,
+			upper,
+			layout,
+			ids,
+			binKey: parts.binKey ?? null,
+			window: this.#handle?.resultWindow ?? null
+		};
 	}
 
 	/**

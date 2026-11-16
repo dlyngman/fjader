@@ -15,7 +15,7 @@
  * after either, the old domain describes nothing current.
  */
 
-import type { BinPadding } from '$lib/types';
+import type { BinPadding, BinWindow } from '$lib/types';
 
 /** `bins` as one comparable string; null without any (no bin channel, or none resolved yet). */
 export function binSpecKey(bins: Record<string, BinPadding> | null | undefined): string | null {
@@ -29,4 +29,24 @@ export function binSpecKey(bins: Record<string, BinPadding> | null | undefined):
  */
 export function isRebin(last: string | null, key: string | null): boolean {
 	return last !== null && key !== null && key !== last;
+}
+
+/**
+ * Whether a result's rows are other bins than the last one's: a rebin, or the
+ * same bins over a moved window (a pan past it, MarkConfig.binWindow). For the
+ * renderer's map (`takeRemap`), which follows the rows: a window move is no
+ * rebin for the value axis (isRebin), but its rows changed. Windows by value,
+ * as stamped on each result; null is the whole extent.
+ */
+export function binRowsMoved(
+	lastKey: string | null,
+	lastWindow: BinWindow | null,
+	key: string | null,
+	window: BinWindow | null
+): boolean {
+	if (lastKey === null || key === null) return false;
+	if (key !== lastKey) return true;
+	if (lastWindow === window) return false;
+	if (!lastWindow || !window) return true;
+	return lastWindow[0] !== window[0] || lastWindow[1] !== window[1];
 }
