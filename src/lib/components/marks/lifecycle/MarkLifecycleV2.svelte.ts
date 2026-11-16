@@ -108,8 +108,7 @@ import {
 	insideBinWindow,
 	viewInBinUnits
 } from './bin-window';
-import { binRowsMoved, binSpecKey, isRebin } from './rebin';
-import type { DataLayer } from '$lib/config/ChartConfig.svelte';
+import { binRowsMoved, binSpecKey, isRebin, rebinTweens } from './rebin';
 import {
 	buildQueryParts,
 	assembleQuery,
@@ -126,22 +125,6 @@ import {
 import { fetchCategoricalDomains, fetchGlobalAggregates } from './domain-queries';
 import { transformScaleKey } from './transform-scale-key';
 import { OtherRows, type SplitPlan } from './other-rows.svelte';
-
-/**
- * Mark types a rebin's instant y may move with it (#rebinLands), when they
- * have no bin() channel: a rule from a scalar query is a reference line, and
- * under a snap it stays on its tick, whose SVG label changes in the same
- * frame. A rule built from bins (one per bin) is data, as is every other mark
- * (bars, rects, lines, areas, dots, text labels): a reader tracks their
- * pixels, and they keep the spring. A mean line drawn from the same bins
- * changes unit with them. A rule without a table draws constants, has no
- * lifecycle and never holds the gate.
- *
- * 'rulex' matters only where the value axis is x (RectXMark, bins on y): for
- * a histogram binned on x, a vertical rule never reads the y scale, and the
- * snap cannot move it. Not dead: keep it.
- */
-const REBIN_SNAPS_WITH: ReadonlySet<string> = new Set(['ruley', 'rulex']);
 
 // ---------------------------------------------------------------------------
 // Config (same shape as MarkLifecycleConfig — shared during transition)
@@ -563,10 +546,6 @@ export class MarkLifecycleV2 {
 		if (config.table && untrack(() => reactiveConfig.holdsEntrance) !== false) {
 			this.#entranceGate?.hold(markId);
 		}
-
-		// This chart's data layers, which a rebin's instant y asks about
-		// (#rebinLands). Removed on destroy, only if still this lifecycle's.
-		chartContext.config?.dataLayers.set(markId, this.#dataLayer);
 
 		// Tooltip table name
 		this.#tooltipTableName = `_tt_${this.#markId.replace(/-/g, '_')}`;
@@ -1567,7 +1546,7 @@ export class MarkLifecycleV2 {
 			let fitted = false;
 			let fit: [number, number] | null | undefined = undefined;
 			let drivingTarget: [number, number] | null = null;
-			let lands = false;
+			let tweens = false;
 			if (binnedAxis && valueAxis && valueState) {
 				skipAxis = binnedAxis;
 				const fitDomain = this.#reactiveConfig.fitDomain;
@@ -1588,11 +1567,14 @@ export class MarkLifecycleV2 {
 					if (valueAxis === 'x') xState = null;
 					else yState = null;
 				}
-				// At once only with the fit in hand: a fit that must be queried
-				// lands later, and springs like any other.
-				lands = (!fitted || fit !== undefined) && this.#rebinLands(valueState);
+				// Tweened only with the fit in hand: a fit that must be queried
+				// lands later, and springs like any other. A catch-up does not
+				// tween: its bars land at once, and the axis lands with them.
+				tweens =
+					(!fitted || fit !== undefined) &&
+					rebinTweens(valueState.userDriven, this.#handle?.resultCause === 'catchUp');
 				const catchUp = this.#instantFor;
-				if (lands) instantFor = (scale) => scale === valueState || catchUp(scale);
+				if (tweens) instantFor = (scale) => scale === valueState || catchUp(scale);
 			}
 
 			let domainResult!: ReturnType<typeof registerDataDerivedDomains>;
@@ -1619,7 +1601,7 @@ export class MarkLifecycleV2 {
 			// render domain (every consumer glides linearly in pixels), and the
 			// rebinning bars resolve in pixel space from the remap, so they hold
 			// their height while it does.
-			if (lands && valueState) valueState.folding(register);
+			if (tweens && valueState) valueState.folding(register);
 			else register();
 			this.#dataDerivedDomainsSet = domainResult.dataDerivedDomainsSet;
 			this.#skipDomainUpdateForAxis = domainResult.skipDomainUpdateForAxis;
@@ -1635,8 +1617,8 @@ export class MarkLifecycleV2 {
 					if (fit) {
 						// A change of unit, as the registration above.
 						const apply = () =>
-							this.#applyFit(valueAxis, fit, drivingTarget, lands || this.#instantFor(valueState));
-						if (lands) valueState.folding(apply);
+							this.#applyFit(valueAxis, fit, drivingTarget, tweens || this.#instantFor(valueState));
+						if (tweens) valueState.folding(apply);
 						else apply();
 					}
 				} else if (!this.#transformCompiler.hasJSTransforms()) {
@@ -2874,33 +2856,6 @@ export class MarkLifecycleV2 {
 	}
 
 	/**
-	 * Whether a rebin result's value axis lands at once rather than springing.
-	 * Only where nothing would jump wrongly: no other visible chart draws the
-	 * scale, every other data layer on this chart follows the ticks (a
-	 * reference rule: REBIN_SNAPS_WITH), and the user has not zoomed the axis.
-	 * Elsewhere it springs, as before. Folding the other marks through the
-	 * snap is what would lift the rest.
-	 */
-	#rebinLands(scale: ContinuousScaleState): boolean {
-		if (scale.userDriven) return false;
-		if (this.#chartContext.shownElsewhere(scale)) return false;
-		// The chart's mark lifecycles, text included (it has no config entry).
-		// Guides (grid, axes, frame) have none: they follow the scale as it
-		// lands, and the snap is right for them.
-		const layers = this.#chartContext.config?.dataLayers;
-		if (!layers) return false;
-		for (const [id, layer] of layers) {
-			if (id !== this.#markId && !layer.followsTicks()) return false;
-		}
-		return true;
-	}
-
-	/** This mark as one of its chart's data layers (ChartConfig.dataLayers). */
-	readonly #dataLayer: DataLayer = {
-		followsTicks: () => REBIN_SNAPS_WITH.has(this.#config.markType) && this.#autoBinNodes.size === 0
-	};
-
-	/**
 	 * The binned axis, when this mark pads and queries a window around the
 	 * viewport there (bin-window.ts): a mark that fits its value axis from the
 	 * visible bins (`fitDomain`), so the whole extent is not needed for y. A
@@ -3054,8 +3009,6 @@ export class MarkLifecycleV2 {
 
 	destroy(): void {
 		this.#destroyed = true;
-		const layers = this.#chartContext.config?.dataLayers;
-		if (layers?.get(this.#markId) === this.#dataLayer) layers.delete(this.#markId);
 		// Not releasing the entrance here: a mark rebuilds its lifecycle when
 		// its scales resolve, and the rebuilt one re-holds the same id. The
 		// mark's unmount releases it (ChartConfig.unregisterMark).

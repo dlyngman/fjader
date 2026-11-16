@@ -104,16 +104,6 @@ interface UndoEntry {
 	chartSnapshot?: ChartPropsSnapshot;
 }
 
-/** A mark drawing data on a chart, as `ChartConfig.dataLayers` lists it. */
-export interface DataLayer {
-	/**
-	 * Whether the mark sits at values that belong with the axis (a reference
-	 * rule), so an instant change of the value axis may move it with its tick.
-	 * False for a data layer whose position a reader tracks.
-	 */
-	followsTicks(): boolean;
-}
-
 // ---- ChartConfig ----
 
 export class ChartConfig {
@@ -122,15 +112,6 @@ export class ChartConfig {
 	 * container, shared by its facet cells, as this config is.
 	 */
 	readonly entrance = new EntranceGate();
-
-	/**
-	 * Every mark drawing data on this chart, by id: each mark lifecycle
-	 * registers itself while it lives. Unlike `entries`, which TextMark and
-	 * table-less rules do not join, this is every data layer, which is what a
-	 * rebin's instant y asks about (MarkLifecycleV2.#rebinLands): may it move
-	 * the others with the ticks? Plain, not reactive: asked at one moment.
-	 */
-	readonly dataLayers = new Map<string, DataLayer>();
 
 	/** Overridable channels per mark, for reset support. */
 	#channels = new Map<string, Map<string, Overridable<unknown>>>();
