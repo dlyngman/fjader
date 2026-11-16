@@ -991,10 +991,14 @@ function topNSQL(count: number | (() => number), options: TopNOptions): SqlTrans
 					[RANK_COLUMN]: sqlTag`DENSE_RANK() OVER (ORDER BY "__dplot_topn_total" DESC, ${column(band)})`
 				});
 			} else {
-				// Simple: rank rows by value.
+				// Simple: rank rows by value, ties broken on the band, as the grouped
+				// path above and rank() do. Without it the top n among equal values is
+				// whichever rows the window sees first, so two reads of the same data
+				// (base and preagg, before and after a window move) could disagree and
+				// a category swap in and out of the top and Other on an update.
 				ranked = Query.from({ __topn_base: query }).select({
 					...passthroughSelect(aliases),
-					[RANK_COLUMN]: sqlTag`ROW_NUMBER() OVER (ORDER BY ${column(by)} DESC)`
+					[RANK_COLUMN]: sqlTag`ROW_NUMBER() OVER (ORDER BY ${column(by)} DESC, ${column(band)})`
 				});
 			}
 
