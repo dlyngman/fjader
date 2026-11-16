@@ -1672,6 +1672,8 @@ export class QueryEngine {
 		// The parts this query is built from, taken as it is sent: the result
 		// reports them, whatever the registration holds when it lands.
 		const parts = reg.descriptor.parts;
+		// And the bin window, for the same reason: a pan moves it while this flies.
+		const window = handle.params.binWindow ?? null;
 		this.query(sqlStr, markReadOptions(markId, reg.descriptor, preagg?.table ?? null))
 			.catch((e) => {
 				if (!preagg || (e as Error)?.name === 'AbortError') throw e;
@@ -1682,7 +1684,7 @@ export class QueryEngine {
 			})
 			// With its parts, as `cause`: a re-registration lets a query in
 			// flight land after the mark has new parts.
-			.then((table) => handle._setResult(table, cause, parts))
+			.then((table) => handle._setResult(table, cause, parts, window))
 			.catch((e) => {
 				if ((e as Error)?.name === 'AbortError') return;
 				handle._setError(e as Error);
@@ -1729,6 +1731,7 @@ export class QueryEngine {
 				filter,
 				transformCompiler,
 				limit: params.limit,
+				binWindow: params.binWindow ?? null,
 				window: { channels: split.windowChannels, cteName: '__window_cte' }
 			}).toString();
 		}
@@ -1744,7 +1747,8 @@ export class QueryEngine {
 			parts: { ...parts, selectDef: castSelectDef },
 			filter,
 			transformCompiler,
-			limit: params.limit
+			limit: params.limit,
+			binWindow: params.binWindow ?? null
 		}).toString();
 	}
 

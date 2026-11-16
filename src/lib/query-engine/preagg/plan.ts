@@ -662,6 +662,8 @@ export function preaggQuerySQL(
 		// The table was built with them.
 		skipRowFilters: true,
 		limit: params.limit,
+		// Read-time, like the base read: the table holds the whole extent.
+		binWindow: params.binWindow ?? null,
 		window: windowChannels ? { channels: windowChannels, cteName: '__preagg_cte' } : null
 	}).toString();
 }

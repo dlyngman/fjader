@@ -303,6 +303,34 @@ describe('a histogram padded to every bin', () => {
 		}
 	});
 
+	it('reads a window from a padded table, read-time: the base read’s window, in order', async () => {
+		// The table holds every bin of the extent (built from the parts, which
+		// carry no window); the read keeps the window's bins only, as the base
+		// read pads only them. [120, 380] touches bins 2..7 (100..400).
+		await engine.ensureColumns('t', { categorical: ['g'] });
+		const viaPreagg = await mark('hist-window', select, { transforms, bins });
+		const reference = new FilterGroup();
+		reference.setEngine(engine);
+		const viaBase = await mark('hist-window-ref', select, { transforms, bins, into: reference });
+		viaPreagg.setBinWindow([120, 380], false);
+		viaBase.setBinWindow([120, 380], false);
+
+		await activateToggle(['g']);
+		const toggle = group.registerToggle('g');
+		const referenceToggle = reference.registerToggle('g');
+		await settle([viaPreagg], () => toggle.set([[0]]));
+		const preaggRead = nonDDL().at(-1)!;
+		expectStoredPadding(preaggRead);
+		await settle([viaBase], () => referenceToggle.set([[0]]));
+		expect(nonDDL().at(-1)).not.toContain('__dplot_preagg_');
+
+		const rows = ordered(viaPreagg);
+		expect(rows).toEqual(ordered(viaBase));
+		expect(rows.map((r) => r[0])).toEqual([100, 150, 200, 250, 300, 350]);
+		expect(rows.map((r) => r[2])).toEqual([50, 50, 50, 0, 0, 0]);
+		expect(viaPreagg.resultWindow).toEqual([120, 380]);
+	});
+
 	it('leaves NULL values out of the stored padding, as padding a base read drops them', async () => {
 		// Every tenth x is NULL: a NULL bin, never drawn. The base read drops it
 		// when padding; the table must not hold it either, or the preagg read

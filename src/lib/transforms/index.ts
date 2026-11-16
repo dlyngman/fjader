@@ -10,6 +10,9 @@ import { Query, column, sql as sqlTag } from '@uwdata/mosaic-sql';
 import type { ExprNode, SelectQuery } from '@uwdata/mosaic-sql';
 import type {
 	BinPadding,
+	BinWindow,
+	NumericBinPadding,
+	TimeBinPadding,
 	ChannelIdentity,
 	SqlTransform,
 	JsTransform,
@@ -270,7 +273,12 @@ const BAND_SOURCE_COLUMN = '__dplot_band_src';
  * subquery's ORDER BY does not bind the outer query. It publishes `alignment`
  * instead, and the query assembler orders the outermost query by it.
  */
-function densify(inner: SelectQuery, aliases: string[], plan: DensePlan): SelectQuery {
+function densify(
+	inner: SelectQuery,
+	aliases: string[],
+	plan: DensePlan,
+	window: BinWindow | null = null
+): SelectQuery {
 	const { band, dim, cross, bins } = plan;
 	const crossAlias = new Map(cross.map(([key], i) => [key, `k${i}`]));
 	const binOf = new Map(bins);
@@ -352,7 +360,9 @@ function densify(inner: SelectQuery, aliases: string[], plan: DensePlan): Select
 	const bandBin = binOf.get(band);
 	const bandOn = bandBin ? binMatch(bandBin, `a.${column(band)}`) : `a.${column(band)} = d."id"`;
 	const on = [bandOn, ...cross.map(([key], i) => `a.${column(key)} = k${i}."id"`)].join(' AND ');
-	const source = bandBin ? binSource(bandBin) : `${padIds(plan.identity[band], dim)} AS d`;
+	// A binned axis with a window pads only the window's bins, and the LEFT JOIN
+	// from them returns only those: the result is the window.
+	const source = bandBin ? binSource(bandBin, window) : `${padIds(plan.identity[band], dim)} AS d`;
 	return Query.from(rawSql(`${source}${joins} LEFT JOIN (${inner}) AS a ON ${on}`)).select(select);
 }
 
@@ -362,11 +372,75 @@ function densify(inner: SelectQuery, aliases: string[], plan: DensePlan): Select
  * extent, so they are exactly the buckets the query's own expression makes,
  * months and years included, which are not a fixed width.
  */
-function binSource(bin: BinPadding): string {
-	if (bin.kind === 'number') return `range(0, ${bin.count}) AS d(k)`;
-	const first = `time_bucket(${bin.interval}, epoch_ms(${Math.round(bin.minMs)}))`;
-	const last = `time_bucket(${bin.interval}, epoch_ms(${Math.round(bin.maxMs)}))`;
+function binSource(bin: BinPadding, window: BinWindow | null = null): string {
+	if (bin.kind === 'number') {
+		const [k0, k1] = numericWindowBins(bin, window);
+		return `range(${k0}, ${k1 + 1}) AS d(k)`;
+	}
+	const [lo, hi] = timeWindowMs(bin, window);
+	const first = `time_bucket(${bin.interval}, epoch_ms(${lo}))`;
+	const last = `time_bucket(${bin.interval}, epoch_ms(${hi}))`;
 	return `range(${first}, ${last} + ${bin.interval}, ${bin.interval}) AS d(k)`;
+}
+
+/**
+ * The first and last numeric bin index a window touches, clipped to the bins
+ * that exist. Bin k spans [min + alpha·k, min + alpha·(k + 1)); no window: all.
+ */
+function numericWindowBins(bin: NumericBinPadding, window: BinWindow | null): [number, number] {
+	const last = bin.count - 1;
+	if (!window) return [0, last];
+	const clamp = (k: number) => Math.min(last, Math.max(0, k));
+	const k0 = clamp(Math.floor((window[0] - bin.min) / bin.alpha));
+	const k1 = clamp(Math.ceil((window[1] - bin.min) / bin.alpha) - 1);
+	return [k0, Math.max(k0, k1)];
+}
+
+/**
+ * A time window clipped to the field's extent, in whole ms: the bucket of each
+ * end is taken in SQL (`time_bucket`), so months and years stay exact.
+ */
+function timeWindowMs(bin: TimeBinPadding, window: BinWindow | null): [number, number] {
+	if (!window) return [Math.round(bin.minMs), Math.round(bin.maxMs)];
+	const lo = Math.max(bin.minMs, Math.min(bin.maxMs, window[0]));
+	const hi = Math.max(lo, Math.min(bin.maxMs, window[1]));
+	return [Math.round(lo), Math.round(hi)];
+}
+
+/**
+ * About how many bins a window holds: exact for numeric bins; for time, the
+ * extent's estimate scaled to the window (months and years are not a fixed
+ * width), plus the two buckets an end can straddle.
+ */
+function windowBinCount(bin: BinPadding, window: BinWindow | null): number {
+	if (!window) return bin.count;
+	if (bin.kind === 'number') {
+		const [k0, k1] = numericWindowBins(bin, window);
+		return k1 - k0 + 1;
+	}
+	const span = bin.maxMs - bin.minMs;
+	if (!(span > 0)) return bin.count;
+	const [lo, hi] = timeWindowMs(bin, window);
+	return Math.min(bin.count, Math.ceil((bin.count * (hi - lo)) / span) + 2);
+}
+
+/**
+ * Keep a padded table's rows to the window's bins: `edge` is the row's bin
+ * edge as the table holds it. Numeric bins by index, recovered from the edge
+ * as binMatch does; time bins by the edges of the window's first and last
+ * buckets, computed by the same expression as the rows', so the REALs compare
+ * exactly.
+ */
+function binWindowFilter(bin: BinPadding, edge: string, window: BinWindow): string {
+	if (bin.kind === 'number') {
+		const [k0, k1] = numericWindowBins(bin, window);
+		const k = `round((CAST(${edge} AS DOUBLE) - ${sqlNumber(bin.min)}) / ${sqlNumber(bin.alpha)}) - ${bin.offset}`;
+		return `${k} BETWEEN ${k0} AND ${k1}`;
+	}
+	const [lo, hi] = timeWindowMs(bin, window);
+	const first = binEdge(bin, `time_bucket(${bin.interval}, epoch_ms(${lo}))`);
+	const last = binEdge(bin, `time_bucket(${bin.interval}, epoch_ms(${hi}))`);
+	return `${edge} BETWEEN ${first} AND ${last}`;
 }
 
 /**
@@ -586,7 +660,9 @@ function binPlan(
 
 	const binned = new Set(bins.map(([ch]) => ch));
 	const cross: [string, string][] = [];
-	let rows = bins[0][1].count;
+	const window = config?.binWindow ?? null;
+	const binCount = windowBinCount(bins[0][1], window);
+	let rows = binCount;
 	for (const key of groupKeys) {
 		if (binned.has(key) || !aliases.includes(key)) continue;
 		const keyIdentity = identity?.[key];
@@ -602,7 +678,7 @@ function binPlan(
 	if (rows > DENSE_ROW_LIMIT) {
 		say(
 			`padding would produce about ${rows} rows, over the ${DENSE_ROW_LIMIT} limit ` +
-				`(${bins[0][1].count} bins${cross.length > 0 ? ` across ${cross.length + 1} group keys` : ''}).`
+				`(${binCount} bins${window ? ' in the window' : ''}${cross.length > 0 ? ` across ${cross.length + 1} group keys` : ''}).`
 		);
 		return null;
 	}
@@ -650,10 +726,20 @@ export function dense(options: { enabled?: boolean } = {}): SqlTransform {
 			// A preagg table built with padRows() below: its rows are already one
 			// per category or bin, and only the order is left, which the query's
 			// ORDER BY takes from alignment() as for any other read.
-			if (config?.padded) return query;
 			const aliases = getSelectAliases(query);
+			const window = config?.binWindow ?? null;
+			if (config?.padded) {
+				// Holding every bin of the extent: a window keeps its bins only.
+				const plan = window ? densePlan(aliases, config, enabled, reported) : null;
+				const bandBin = plan?.bins?.[0];
+				if (!bandBin) return query;
+				const [alias, bin] = bandBin;
+				return Query.from({ __window: query })
+					.select(aliases)
+					.where(rawSql(binWindowFilter(bin, column(alias).toString(), window!))) as SelectQuery;
+			}
 			const plan = densePlan(aliases, config, enabled, reported);
-			return plan ? densify(query, aliases, plan) : query;
+			return plan ? densify(query, aliases, plan, window) : query;
 		},
 		/**
 		 * The rows apply() would add, as the padding of an empty result: the same

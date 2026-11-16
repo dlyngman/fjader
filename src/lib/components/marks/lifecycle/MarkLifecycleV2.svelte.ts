@@ -100,6 +100,7 @@ import {
 } from './fit-domain';
 import { binLayout } from './bin-layout';
 import { buildBinRemap, type BinRemapSide } from '$lib/gpu/bin-remap';
+import { binExtent, binWindowFor, binWindowNeedsMove, insideBinWindow } from './bin-window';
 import { binSpecKey, isRebin } from './rebin';
 import type { DataLayer } from '$lib/config/ChartConfig.svelte';
 import {
@@ -631,7 +632,13 @@ export class MarkLifecycleV2 {
 					chartContext.config.setMarkProp(markId, 'lod', { ...cfg, multiplier: value });
 				},
 				getData: () => this.data,
+				onViewport: (axis, domain) => this.#onViewport(axis, domain),
 				triggerReBin: (axis, domain) => {
+					// The window around the new view, set before the parts change: the
+					// re-registration's first query reads it as it is sent.
+					if (this.#windowedAxis() === axis) {
+						this.#handle?.setBinWindow(binWindowFor([domain[0], domain[1]]), false);
+					}
 					this.#lastBinDomain[axis] = [domain[0], domain[1]];
 					// #lastBinDomain is $state — #resolvedQueryParts recomputes automatically.
 					// A mark binned on one axis takes the rebin from the result itself
@@ -2742,6 +2749,12 @@ export class MarkLifecycleV2 {
 		if (this.#transformCompiler.hasJSTransforms()) return undefined;
 		const data = this.data;
 		if (!data || data.length === 0) return undefined;
+		// A result over a window answers inside it only, the window it was
+		// computed over (not the mark's current one: a pan moves that while a
+		// query flies). Past it, the fit would see part of the visible bins.
+		if (drivingDomain && !insideBinWindow(this.#handle?.resultWindow, drivingDomain)) {
+			return undefined;
+		}
 
 		const includeTransform = this.#fitIncludesTransformChannels();
 		const edges = windowEdges(this.#getFitDomainChannels(drivingAxis, includeTransform));
@@ -2851,6 +2864,38 @@ export class MarkLifecycleV2 {
 	};
 
 	/** The axis a bin() channel is on, when exactly one is; null without bins or with both. */
+	/**
+	 * The binned axis, when this mark pads and queries a window around the
+	 * viewport there (bin-window.ts): a mark that fits its value axis from the
+	 * visible bins (`fitDomain`), so the whole extent is not needed for y. A
+	 * mark without one keeps whole-extent padding for now: its y is the whole
+	 * extent's. JS transforms are not padded at all.
+	 */
+	#windowedAxis(): 'x' | 'y' | null {
+		const axis = this.#binnedAxis();
+		if (!axis || this.#transformCompiler.hasJSTransforms()) return null;
+		const fit = this.#reactiveConfig.fitDomain;
+		return fit === true || fit === (axis === 'x' ? 'y' : 'x') ? axis : null;
+	}
+
+	/**
+	 * Each frame's viewport on a binned axis (AdaptiveBinRung): moves the
+	 * window when it no longer serves the view, and re-queries. A mark that
+	 * stops windowing (fitDomain off) goes back to the whole extent.
+	 */
+	#onViewport(axis: 'x' | 'y', domain: [number, number]): void {
+		const handle = this.#handle;
+		if (!handle) return;
+		const current = handle.params.binWindow ?? null;
+		if (this.#windowedAxis() !== axis) {
+			if (current) handle.setBinWindow(null, true);
+			return;
+		}
+		const band = this.#resolvedQueryParts?.bins?.[`${axis}1`];
+		if (!binWindowNeedsMove(current, domain, band ? binExtent(band) : null)) return;
+		handle.setBinWindow(binWindowFor(domain), true);
+	}
+
 	#binnedAxis(): 'x' | 'y' | null {
 		const x = this.#autoBinNodes.has('x1') || this.#autoBinNodes.has('x2');
 		const y = this.#autoBinNodes.has('y1') || this.#autoBinNodes.has('y2');

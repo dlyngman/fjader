@@ -24,6 +24,12 @@ export interface AdaptiveBinRungConfig {
 	getData: () => { getColumn(ch: string): ArrayLike<unknown> | null; length: number } | null;
 	/** Trigger re-bin on MarkLifecycle. */
 	triggerReBin: (axis: string, domain: number[]) => void;
+	/**
+	 * Each frame's viewport on a binned axis while no rebin is due, for the
+	 * mark's bin window (bin-window.ts). Not called while a rebin is due: the
+	 * rebin carries the window, and moving it first would query the old step.
+	 */
+	onViewport?: (axis: 'x' | 'y', domain: [number, number]) => void;
 }
 
 export class AdaptiveBinRung implements LODRung {
@@ -42,6 +48,7 @@ export class AdaptiveBinRung implements LODRung {
 	#setParam: (key: string, value: number) => void;
 	#getData: () => { getColumn(ch: string): ArrayLike<unknown> | null; length: number } | null;
 	#triggerReBin: (axis: string, domain: number[]) => void;
+	#onViewport: ((axis: 'x' | 'y', domain: [number, number]) => void) | null;
 
 	// --- Internal state ---
 	#frameCallback: ((isAnimating: boolean) => void) | null;
@@ -79,6 +86,7 @@ export class AdaptiveBinRung implements LODRung {
 		this.#setParam = config.setParam;
 		this.#getData = config.getData;
 		this.#triggerReBin = config.triggerReBin;
+		this.#onViewport = config.onViewport ?? null;
 		this.#prevMultiplier = chartContext.binStepMultiplier ?? 1.0;
 
 		// Frame callback for domain watching + metric derivation
@@ -135,8 +143,11 @@ export class AdaptiveBinRung implements LODRung {
 		// 3. Check domain threshold for each binned axis independently
 		for (const axis of this.#binAxes) {
 			const domain = this.#readDomain(axis);
-			if (domain && this.#shouldReBin(axis, domain)) {
+			if (!domain) continue;
+			if (this.#shouldReBin(axis, domain)) {
 				this.#debouncedReBin(axis);
+			} else {
+				this.#onViewport?.(axis, domain);
 			}
 		}
 	}

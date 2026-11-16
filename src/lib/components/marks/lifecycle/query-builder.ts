@@ -25,7 +25,7 @@ import {
 import { isWindowExpression, isVerbatimWindowExpression } from '$lib/sql/expression-utils';
 import type { TransformCompiler } from '$lib/transforms/TransformCompiler';
 import type { ColumnSchema } from '$lib/query-engine/QueryEngine';
-import type { BinPadding } from '$lib/types';
+import type { BinPadding, BinWindow } from '$lib/types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -134,6 +134,8 @@ export interface AssembleOptions {
 	 *  functions are applied in the outer SELECT. ORDER BY / LIMIT move to
 	 *  the outer query. */
 	window?: WindowWrap | null;
+	/** A binned mark's window (QueryParams.binWindow): `dense()` pads only its bins. */
+	binWindow?: BinWindow | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -445,7 +447,16 @@ export function outerOrder(
  * castNumeric(); assembly never inspects expression types.
  */
 export function assembleQuery(opts: AssembleOptions): Query {
-	const { table, parts, filter = [], transformCompiler, limit, window, skipRowFilters } = opts;
+	const {
+		table,
+		parts,
+		filter = [],
+		transformCompiler,
+		limit,
+		window,
+		skipRowFilters,
+		binWindow = null
+	} = opts;
 	const { selectDef, nonAggregateGroupBy, hasAggregates, hasSQLTransforms, orderChannels } = parts;
 
 	const q = Query.from(table).select(selectDef as Record<string, ExprNode>);
@@ -466,7 +477,12 @@ export function assembleQuery(opts: AssembleOptions): Query {
 	if (hasSQLTransforms) {
 		result = transformCompiler.applyToQuery(
 			q,
-			{ groupKeys: parts.groupKeys, bins: parts.bins ?? null, padded: parts.padded ?? false },
+			{
+				groupKeys: parts.groupKeys,
+				bins: parts.bins ?? null,
+				padded: parts.padded ?? false,
+				binWindow
+			},
 			{ skipRowFilters }
 		);
 	}
@@ -498,7 +514,10 @@ export function assembleQuery(opts: AssembleOptions): Query {
 	const alignment = hasSQLTransforms
 		? transformCompiler.alignment(Object.keys(selectDef), {
 				groupKeys: parts.groupKeys,
-				bins: parts.bins ?? null
+				bins: parts.bins ?? null,
+				// The window too: past the whole extent's row limit, only the window
+				// pads, and without it the rows would go unordered.
+				binWindow
 			})
 		: null;
 	const order = outerOrder(orderChannels, alignment);
