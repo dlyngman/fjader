@@ -516,7 +516,11 @@ export class MarkLifecycleV2 {
 	// --- Rebin results ---
 	/** The bin spec the last result was computed from (#takeBinStep). */
 	#lastBinSpec: string | null = null;
-	/** The rows the renderer last took (`takeRemap`), as a remap reads them. */
+	/**
+	 * The rows the renderer last took (`takeRemap`), as a remap reads them.
+	 * Holds references to that result's columns, so the previous table stays in
+	 * memory until the next take: binned data, bounded by the dense row limit.
+	 */
 	#takenSide: (BinRemapSide & { binKey: string | null }) | null = null;
 
 	// --- Cleanup ---
