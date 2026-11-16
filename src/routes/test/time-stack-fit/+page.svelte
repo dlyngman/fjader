@@ -3,8 +3,9 @@
 	 * Rebin session: what a binned, stacked time histogram's y axis does when
 	 * zooming re-buckets it (LOD), scripted so every run is the same.
 	 *
-	 *   ?fit=0       no fitDomain: y from the whole result, not the window
-	 *   ?overlay=1   a rule at a fixed y on the same scale (it snaps with its tick)
+	 *   ?fit=0       fitDomain={false}: y fixed to the tallest bin anywhere, not the
+	 *                bins in view
+	 *   ?overlay=1   a rule at a fixed y on the same scale (it moves with the axis)
 	 *   ?overlay=line  a line of data at that level instead: a data layer, which
 	 *                keeps the spring
 	 *   ?overlay=labels  count labels on the bars (TextMark, the same bins; use with
@@ -12,8 +13,8 @@
 	 *                would hold a fitted y up): a
 	 *                data layer too, which rebins on its own query; the table
 	 *                adds how long the labels lag the bars' rebin
-	 *   ?sparse=1    group c only in the burst week: past the dense row limit
-	 *                the rows are not the dense layout, and the fit is queried
+	 *   ?sparse=1    group c only in the burst week (with windowed padding the rows
+	 *                stay the dense layout at any depth: no SQL fit expected)
 	 *
 	 * Run session, wait for the table, then Save log (rebin-<variant>.json in
 	 * Downloads). One run per page load: reload between runs.
@@ -31,22 +32,22 @@
 	 * - every read of the histogram, cached or not (a wrapper on
 	 *   queryEngine.query: a zoom back to a step queried before is answered from
 	 *   the query cache and sends no statement), with its first bin's width;
-	 * - every domain transition (snap or spring);
+	 * - every domain transition: one that moves (a tween or a spring) or a snap;
 	 * - every rendered frame: the drawn x and y domains and the tallest stack in
-	 *   view, as a fraction of the plot's height.
+	 *   view, as a fraction of the plot's height, from the data.
 	 *
 	 * A rebin is a read whose bin width changed (as the mark decides it). Per
-	 * rebin the table shows the y transitions it caused and the tallest bar's
-	 * height: before, lowest in the next 600 ms, and settled. Expected:
-	 * - fitDomain or plain, alone or with the rule: one y snap, no spring;
-	 *   lowest ≈ settled (no duck). The rule moves with its tick.
-	 * - with the line: one y spring, no snap; the bars may dip and recover while
-	 *   y springs (the gate keeps the line, a data layer, from jumping).
+	 * rebin the table shows the y transitions it caused, whether the bars
+	 * morphed, and the tallest bar in view before the rebin and once settled.
+	 * Expected, every variant:
+	 * - one y move, no snap: a rebin tweens y (the bars ride the tween), or with
+	 *   the line the gate keeps it a spring;
+	 * - bars "morph": the new bars start where the old ones were drawn and
+	 *   travel. "snap" where they did not (a layout that does not correspond);
 	 * - no SQL fit queries: a binned mark fits from its result.
-	 * - bars: "morph" where the rebin was remapped (the new bars start where the
-	 *   old ones were drawn and travel), "snap" where it was not (past the dense
-	 *   row limit, or a layout that does not correspond). The tallest-bar
-	 *   columns read the data, not the morph in flight: watch the morph itself.
+	 * The tallest-bar columns read the data, so they hold at rest only; mid-way
+	 * the bars are what the GPU resolves, so watch the morph itself (the line
+	 * variant still dips: the off-tween limit, until the gate goes).
 	 */
 	import { page } from '$app/state';
 	import { count } from '@uwdata/mosaic-sql';
@@ -87,8 +88,6 @@
 		[f ? '' : 'fit=0', o === 'rule' ? 'overlay=1' : o ? `overlay=${o}` : '', s ? 'sparse=1' : '']
 			.filter(Boolean)
 			.join('&');
-	/** A rule follows its tick, so it snaps with the axis; data layers (a line, labels) keep the spring. */
-	const expectSnap = overlay !== 'line' && overlay !== 'labels';
 
 	/**
 	 * The page's own rebin test: a first-bin width change past this ratio. The
@@ -101,7 +100,7 @@
 	const QUIET_MS = 700;
 	/** ...or after this. */
 	const SETTLE_CAP_MS = 5000;
-	/** How long after a rebin its y transitions and its lowest bar are looked for. */
+	/** How long after a rebin its y transitions are looked for. */
 	const AFTER_MS = 600;
 	/** Same-step zoom probes: a zoom just past the threshold, then a pan off and back. */
 	const PROBE_ROUNDS = 3;
@@ -416,8 +415,6 @@
 			const end = Math.min(r.t + AFTER_MS, next);
 			const ys = transitions.filter((tr) => yTransition(tr) && tr.t >= r.t - 5 && tr.t < end);
 			const before = [...frames].reverse().find((f) => f.t < r.t && f.frac != null);
-			const after = frames.filter((f) => f.t >= r.t && f.t < end && f.frac != null);
-			const lowest = after.length ? Math.min(...after.map((f) => f.frac)) : null;
 			// Settled: the last frame before the next gesture (or rebin), which
 			// a fixed delay could land inside of, before that gesture's fit.
 			const nextGesture = events.find((e) => e.kind === 'gesture' && e.t > r.t)?.t ?? Infinity;
@@ -429,8 +426,8 @@
 			out.push({
 				t: r.t,
 				step: `${human(prev.width)} → ${human(r.width)}`,
+				moves: ys.filter((tr) => !tr.snap).length,
 				snaps: ys.filter((tr) => tr.snap).length,
-				springs: ys.filter((tr) => !tr.snap).length,
 				// The bars' own transition at the rebin's write: travels if remapped.
 				bars: (() => {
 					const ms = transitions.filter(
@@ -440,27 +437,16 @@
 					return ms.some((tr) => !tr.snap) ? 'morph' : 'snap';
 				})(),
 				before: before?.frac ?? null,
-				lowest,
 				settled: settled?.frac ?? null,
 				labelLag: labelsAt == null ? null : Math.round(labelsAt - r.t)
 			});
 		}
 		rows = out;
-		const one = out.filter((r) =>
-			expectSnap ? r.snaps === 1 && r.springs === 0 : r.springs === 1 && r.snaps === 0
-		).length;
-		const ducks = out.filter(
-			(r) =>
-				r.before != null &&
-				r.lowest != null &&
-				r.settled != null &&
-				r.lowest < 0.8 * Math.min(r.before, r.settled)
-		).length;
+		const one = out.filter((r) => r.moves === 1 && r.snaps === 0 && r.bars === 'morph').length;
 		summary = {
 			rebins: out.length,
-			expected: expectSnap ? 'one y snap, no spring' : 'one y spring, no snap',
+			expected: 'one y move, no snap, bars morph',
 			asExpected: one,
-			ducks,
 			fits: fits.length,
 			reads: reads.length
 		};
@@ -598,16 +584,14 @@
 		</p>
 		{#if sparse}
 			<p class="lede">
-				Sparse: group c only in the burst week. Once the bins pass the dense row limit (shift+scroll
-				finer, to 6 h), the rows are not the dense layout, the fit is queried (SQL fit queries &gt;
-				0), and that rebin springs once without the bars collapsing first.
+				Sparse: group c only in the burst week. With windowed padding the rows stay the dense layout
+				at any zoom depth, so the fit comes from the result as elsewhere (SQL fit queries: 0).
 			</p>
 		{/if}
 		<p class="lede">
 			Run session drives zooms, pans and shift+scroll through the chart. Hands off until the table
-			appears. Expected per rebin: {expectSnap
-				? `one y snap, no spring, and no dip in bar height${overlay === 'rule' ? '; the rule moves with its tick' : ''}.`
-				: `one y spring, no snap (the ${overlay === 'labels' ? 'labels are' : 'line is'} a data layer).`}
+			appears. Expected per rebin: one y move (a tween; a spring with the line), no snap, and bars
+			that morph.
 		</p>
 		<div class="controls">
 			<button disabled={running || done} onclick={runSession}>
@@ -660,8 +644,7 @@
 		{#if summary}
 			<p class="summary">
 				{summary.rebins} rebins in {summary.reads} reads. Expected per rebin: {summary.expected}. As
-				expected: <strong>{summary.asExpected} / {summary.rebins}</strong>. Dips below 80% of the
-				bar height: <strong>{summary.ducks}</strong>. SQL fit queries:
+				expected: <strong>{summary.asExpected} / {summary.rebins}</strong>. SQL fit queries:
 				<strong>{summary.fits}</strong>.
 			</p>
 			<table>
@@ -669,11 +652,10 @@
 					<tr>
 						<th>t (ms)</th>
 						<th>bin step</th>
+						<th>y moves</th>
 						<th>y snaps</th>
-						<th>y springs</th>
 						<th>bars</th>
-						<th>tallest bar: before</th>
-						<th>lowest</th>
+						<th>tallest in view: before</th>
 						<th>settled</th>
 						{#if overlay === 'labels'}<th>labels lag (ms)</th>{/if}
 					</tr>
@@ -683,11 +665,10 @@
 						<tr>
 							<td>{Math.round(r.t)}</td>
 							<td>{r.step}</td>
+							<td>{r.moves}</td>
 							<td>{r.snaps}</td>
-							<td>{r.springs}</td>
 							<td>{r.bars}</td>
 							<td>{pct(r.before)}</td>
-							<td>{pct(r.lowest)}</td>
 							<td>{pct(r.settled)}</td>
 							{#if overlay === 'labels'}<td>{r.labelLag ?? '–'}</td>{/if}
 						</tr>
@@ -699,7 +680,7 @@
 			<p class="lede">
 				{fit
 					? 'After each pan y must fit the window: the tallest bar settled between 50% and 100%, also after a zoom that kept its step. (A pan between two quiet stretches has nothing to refit, so it may show no transition.)'
-					: 'Without fitDomain, y is the whole result’s: pans move nothing on y (0 expected).'}
+					: 'With fitDomain={false}, y is the tallest bin anywhere: pans move nothing on y (0 expected).'}
 			</p>
 			<table>
 				<thead>
