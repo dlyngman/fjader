@@ -2900,7 +2900,6 @@ export class MarkLifecycleV2 {
 		followsTicks: () => REBIN_SNAPS_WITH.has(this.#config.markType) && this.#autoBinNodes.size === 0
 	};
 
-	/** The axis a bin() channel is on, when exactly one is; null without bins or with both. */
 	/**
 	 * The binned axis, when this mark pads and queries a window around the
 	 * viewport there (bin-window.ts): a mark that fits its value axis from the
@@ -2940,6 +2939,7 @@ export class MarkLifecycleV2 {
 		handle.setBinWindow(binWindowFor(view, band), true);
 	}
 
+	/** The axis a bin() channel is on, when exactly one is; null without bins or with both. */
 	#binnedAxis(): 'x' | 'y' | null {
 		const x = this.#autoBinNodes.has('x1') || this.#autoBinNodes.has('x2');
 		const y = this.#autoBinNodes.has('y1') || this.#autoBinNodes.has('y2');
