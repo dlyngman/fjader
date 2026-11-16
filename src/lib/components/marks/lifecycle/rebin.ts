@@ -19,7 +19,7 @@ import type { BinPadding, BinWindow } from '$lib/types';
 
 /**
  * Whether a rebin result's value axis TWEENS to its new unit (inside the
- * scale's `folding()`), the usual case: every consumer of the scale follows
+ * scale's `discrete()`), the usual case: every consumer of the scale follows
  * the render domain, static marks glide and morphing ones ride the tween.
  *
  * Not for a catch-up result (a chart back in view after the shared axis was

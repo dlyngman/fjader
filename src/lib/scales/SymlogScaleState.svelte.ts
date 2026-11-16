@@ -138,9 +138,15 @@ export class SymlogScaleState extends LinearScaleState {
 		};
 	}
 
+	protected override get defaultTickCount(): number {
+		return 10;
+	}
+
 	override getTicks(count: number = 10): number[] {
-		this._version;
-		const [min, max] = this.domainForReactivity;
+		return super.getTicks(count);
+	}
+
+	protected override ticksFor(min: number, max: number, count: number): number[] {
 		if (!isFinite(min) || !isFinite(max) || min >= max) return [];
 
 		// D3 symlog .ticks() uses linear spacing — useless for a log-like scale.

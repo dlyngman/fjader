@@ -60,6 +60,40 @@ export interface GpuScaleState {
 }
 
 /**
+ * One tick as the axis and the grid draw it (`tickFrame`): its value, where it
+ * sits along the plot (0 at the domain's min, 1 at its max: the scale's own
+ * linear space, so log and time are exact), its opacity, and whether it
+ * belongs to the set being faded in (the one at rest once the change ends).
+ */
+export interface TickEntry {
+	value: number;
+	position: number;
+	alpha: number;
+	target: boolean;
+}
+
+/** A frozen tick set of a crossfade: its domain in spring space, its values, its opacity. */
+interface TickSet {
+	lo: number;
+	hi: number;
+	values: number[];
+	/** Opacity when the current segment started, and now. */
+	alpha0: number;
+	alpha: number;
+}
+
+/** One count's crossfade: its sets, the segment they were frozen for, the last frame built. */
+interface TickFade {
+	segment: number;
+	sets: TickSet[];
+	version: number;
+	frame: TickEntry[];
+}
+
+/** Two sets' ticks within this share of the plot are one tick (a value in both). */
+const SAME_TICK = 1e-3;
+
+/**
  * A unit-change tween as morphing marks read it (`LinearScaleState.tween`).
  * A new `segment` means the domain retargeted: re-anchor from what is on
  * screen. `f` is the progress this frame was rendered at; `targetParams` the
@@ -152,8 +186,21 @@ export class LinearScaleState {
 		p4: 0
 	};
 
-	/** Nesting of `folding()` calls; an instant change while above 0 tweens (`#tweenTo`). */
+	/** Nesting of `discrete()` calls; an instant change while above 0 tweens (`#tweenTo`). */
 	#foldDepth = 0;
+
+	// --- Discrete change: the axis crossfade ---
+	/**
+	 * Whether the running tween is a discrete change, whose axis crossfades in
+	 * place (`tickFrame`) instead of re-ticking live. Set by a segment a
+	 * discrete change starts; a retarget mid-way (a fit, another rebin) keeps
+	 * it; a gesture ends it (direct manipulation re-ticks live), and so does
+	 * the tween's end.
+	 */
+	#crossfading = false;
+	/** Frozen tick sets, per tick count asked for (the axis and the grid may differ). */
+	#tickFades = new Map<number, TickFade>();
+	#tickScratch = new Float64Array(2);
 
 	// --- Unit-change tween ---
 	/**
@@ -519,6 +566,7 @@ export class LinearScaleState {
 	}): void {
 		if (this.disableZoom) return; // Ignore pan for auto-scaling axes
 		this.#userDriven = true;
+		this.#endCrossfade(); // direct manipulation re-ticks live
 
 		this.#currentSpring(this.#springOutputScratch);
 		const panMin = this.fromSpringSpace(this.#springOutputScratch[0]);
@@ -578,6 +626,7 @@ export class LinearScaleState {
 	accumulateZoom(visualCenter: number, scaleFactor: number): void {
 		if (this.disableZoom) return; // Ignore zoom for auto-scaling axes
 		this.#userDriven = true;
+		this.#endCrossfade(); // direct manipulation re-ticks live
 
 		this.#zoomAccumulator.logScale += Math.log(scaleFactor);
 		this.#zoomAccumulator.center = visualCenter;
@@ -614,7 +663,7 @@ export class LinearScaleState {
 		}
 
 		if (transitionsObserved()) {
-			// A unit change inside `folding()` tweens (#setInstant): it travels.
+			// A unit change inside `discrete()` tweens (#setInstant): it travels.
 			const tweens = instant && this.#foldDepth > 0 && this.entered;
 			noteTransition(
 				'domain',
@@ -659,14 +708,142 @@ export class LinearScaleState {
 		return this.#sharedScale;
 	}
 
+	/** The tick count asked for when none is given: `getTicks()`, `tickFrame()`. */
+	protected get defaultTickCount(): number {
+		return 5;
+	}
+
 	/**
 	 * Generate tick values for grid lines and axes.
 	 * Uses current animated domain (renderMin/renderMax) for smooth updates.
 	 */
 	getTicks(count: number = 5): number[] {
 		this._version; // Register Svelte dependency for reactivity
-		this.#sharedScale.domain([this.#renderMin, this.#renderMax]);
+		return this.ticksFor(this.#renderMin, this.#renderMax, count);
+	}
+
+	/**
+	 * The scale's ticks for any domain, by its own tick logic (each subclass
+	 * overrides it): what the axis shows at rest, and the frozen sets of a
+	 * crossfade.
+	 */
+	protected ticksFor(min: number, max: number, count: number): number[] {
+		this.#sharedScale.domain([min, max]);
 		return this.#sharedScale.ticks(count);
+	}
+
+	/**
+	 * The ticks to draw, each with its position along the plot and opacity.
+	 *
+	 * At rest (and during a gesture): `getTicks(count)` at opacity 1,
+	 * positioned through the render domain. During a discrete change's tween
+	 * the axis CROSSFADES IN PLACE: each tick set stays at the pixels its own
+	 * domain gives it, the old set under the domain the change started from,
+	 * the new one under the target, and only opacities move, on the tween's
+	 * progress `f`: `α = α₀ + (target − α₀)·f`, target 1 for the newest set and
+	 * 0 for the rest, `α₀` each set's opacity when its segment began, so a
+	 * retarget mid-way continues from what is on screen. Ticks that fly with
+	 * the mapping read as the data changing when only the unit did; in a pure
+	 * change of unit a bar sits on the same pixel under both sets, so it reads
+	 * right against either. At the end the newest set is the live ticks at
+	 * rest, at their pixels: the handover is exact.
+	 *
+	 * A value in two sets at the same place is one tick (opacities summed,
+	 * clamped). A set leaves once faded out. Reactive: reads the render
+	 * version. During a crossfade a new array per version (the SVG axes need
+	 * one to re-render); at rest the ticks as `getTicks` gives them.
+	 */
+	tickFrame(count: number = this.defaultTickCount): readonly TickEntry[] {
+		this._version;
+		const tween = this.#tween;
+		if (!this.#crossfading || !tween) {
+			if (this.#tickFades.size > 0) this.#tickFades.clear();
+			const lo = this.toSpringSpace(this.#renderMin);
+			const width = this.toSpringSpace(this.#renderMax) - lo;
+			return this.getTicks(count).map((value) => ({
+				value,
+				position: width > 0 ? (this.toSpringSpace(value) - lo) / width : 0,
+				alpha: 1,
+				target: true
+			}));
+		}
+		let fade = this.#tickFades.get(count);
+		if (!fade) {
+			fade = { segment: -1, sets: [], version: -1, frame: [] };
+			this.#tickFades.set(count, fade);
+		}
+		const segment = this.#published.segment;
+		if (fade.segment !== segment) this.#freezeTicks(fade, count, segment);
+		if (fade.version === this._version) return fade.frame;
+
+		const f = this.#published.f;
+		const sets = fade.sets;
+		const frame: TickEntry[] = [];
+		for (let i = 0; i < sets.length; i++) {
+			const set = sets[i];
+			const newest = i === sets.length - 1;
+			const alpha = Math.min(1, Math.max(0, set.alpha0 + ((newest ? 1 : 0) - set.alpha0) * f));
+			set.alpha = alpha;
+			if (alpha <= 0) continue;
+			const width = set.hi - set.lo;
+			for (const value of set.values) {
+				const position = width > 0 ? (this.toSpringSpace(value) - set.lo) / width : 0;
+				const same = frame.find(
+					(e) => e.value === value && Math.abs(e.position - position) < SAME_TICK
+				);
+				if (same) {
+					same.alpha = Math.min(1, same.alpha + alpha);
+					same.target ||= newest;
+				} else {
+					frame.push({ value, position, alpha, target: newest });
+				}
+			}
+		}
+		fade.version = this._version;
+		fade.frame = frame;
+		return frame;
+	}
+
+	/**
+	 * A segment began: every set on screen keeps its pixels and starts from its
+	 * opacity now (a faded one leaves); with none, the ticks the change
+	 * started from, at full opacity. The target's ticks join as the newest set,
+	 * from 0.
+	 */
+	#freezeTicks(fade: TickFade, count: number, segment: number): void {
+		const sets = fade.sets.filter((set) => set.alpha > 0);
+		for (const set of sets) set.alpha0 = set.alpha;
+		if (sets.length === 0) {
+			const start = this.#tickScratch;
+			this.#fromTween(0, start);
+			sets.push(this.#tickSet(start[0], start[1], count, 1));
+		}
+		const lo = this.#tweenPivot;
+		sets.push(this.#tickSet(lo, lo + this.#tweenWidth, count, 0));
+		fade.sets = sets;
+		fade.segment = segment;
+		fade.version = -1;
+	}
+
+	#tickSet(lo: number, hi: number, count: number, alpha: number): TickSet {
+		const values = this.ticksFor(this.fromSpringSpace(lo), this.fromSpringSpace(hi), count);
+		return { lo, hi, values, alpha0: alpha, alpha };
+	}
+
+	/** End a crossfade: live ticks from here (a gesture, or the tween's end). */
+	#endCrossfade(): void {
+		this.#crossfading = false;
+		if (this.#tickFades.size > 0) this.#tickFades.clear();
+	}
+
+	/**
+	 * The value at `position` along the plot (as `tickFrame` places a tick)
+	 * under the domain drawn now: where the grid draws a crossfading tick.
+	 */
+	valueAt(position: number): number {
+		const lo = this.toSpringSpace(this.#renderMin);
+		const hi = this.toSpringSpace(this.#renderMax);
+		return this.fromSpringSpace(lo + position * (hi - lo));
 	}
 
 	/**
@@ -890,13 +1067,15 @@ export class LinearScaleState {
 	}
 
 	#setInstant(min: number, max: number): void {
-		// A change of unit (a rebin, inside `folding()`): tween, so every value
+		// A change of unit (a rebin, inside `discrete()`): tween, so every value
 		// on this scale moves linearly in pixels from where it is drawn.
 		if (this.#foldDepth > 0 && this.entered) {
 			this.#tweenTo(min, max);
+			if (this.#tween) this.#crossfading = true;
 			return;
 		}
 		this.#tween = null;
+		this.#endCrossfade();
 		this.#springPair.set(this.toSpringSpace(min), this.toSpringSpace(max));
 		this.#renderMin = min;
 		this.#renderMax = max;
@@ -1044,6 +1223,7 @@ export class LinearScaleState {
 	#endTween(): void {
 		const c = this.#tweenPivot;
 		this.#tween = null;
+		this.#endCrossfade();
 		this.#springPair.set(c, c + this.#tweenWidth);
 	}
 
@@ -1069,6 +1249,7 @@ export class LinearScaleState {
 
 	/** An instant set that never tweens (a degenerate tween target). */
 	#setInstantSpring(min: number, max: number): void {
+		this.#endCrossfade();
 		this.#springPair.set(this.toSpringSpace(min), this.toSpringSpace(max));
 		this.#renderMin = min;
 		this.#renderMax = max;
@@ -1078,14 +1259,15 @@ export class LinearScaleState {
 	}
 
 	/**
-	 * Run `update` as a change of unit (a rebin): an instant domain change it
-	 * makes tweens instead (#tweenTo), so every value on the scale moves
-	 * linearly in pixels from where it is drawn, and every consumer (GPU marks,
-	 * SVG, axes, a chart sharing the scale) follows by reading the render
-	 * domain. Not for a change nobody watched (an entrance, a catch-up). An
-	 * update that changes nothing, or springs, is unaffected.
+	 * Run `update` as a DISCRETE change (today: a rebin's change of unit): an
+	 * instant domain change it makes runs as a tween segment (#tweenTo) that
+	 * morphing marks ride, static marks follow through the render domain, and
+	 * the axis crossfades in place (`tickFrame`). The caller decides what is
+	 * discrete; the scale does not know why. Not for a change nobody watched
+	 * (an entrance, a catch-up). An update that changes nothing, or springs,
+	 * is unaffected.
 	 */
-	folding(update: () => void): void {
+	discrete(update: () => void): void {
 		this.#foldDepth++;
 		try {
 			update();

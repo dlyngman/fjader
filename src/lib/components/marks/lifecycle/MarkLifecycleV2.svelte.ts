@@ -1597,11 +1597,11 @@ export class MarkLifecycleV2 {
 					this.#colorScaleState
 				);
 			};
-			// A change of unit: inside `folding()` the value axis tweens its
+			// A change of unit: inside `discrete()` the value axis tweens its
 			// render domain (every consumer glides linearly in pixels), and the
 			// rebinning bars resolve in pixel space from the remap, so they hold
 			// their height while it does.
-			if (tweens && valueState) valueState.folding(register);
+			if (tweens && valueState) valueState.discrete(register);
 			else register();
 			this.#dataDerivedDomainsSet = domainResult.dataDerivedDomainsSet;
 			this.#skipDomainUpdateForAxis = domainResult.skipDomainUpdateForAxis;
@@ -1618,7 +1618,7 @@ export class MarkLifecycleV2 {
 						// A change of unit, as the registration above.
 						const apply = () =>
 							this.#applyFit(valueAxis, fit, drivingTarget, tweens || this.#instantFor(valueState));
-						if (tweens) valueState.folding(apply);
+						if (tweens) valueState.discrete(apply);
 						else apply();
 					}
 				} else if (!this.#transformCompiler.hasJSTransforms()) {

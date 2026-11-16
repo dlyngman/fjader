@@ -60,7 +60,7 @@ function springProgress(n: number): number[] {
 describe('a unit-change tween', () => {
 	it('moves every value linearly in pixels, on the spring’s progress', () => {
 		const s = onScreen(new LinearScaleState('y'), 0, 700);
-		s.folding(() => s.domain.set([0, 100], { instant: true }));
+		s.discrete(() => s.domain.set([0, 100], { instant: true }));
 		const run = frames(s);
 		const p = springProgress(run.length);
 		// To the tween's rest precision: on its last frame it lands exactly on the
@@ -79,7 +79,7 @@ describe('a unit-change tween', () => {
 
 	it('ends exactly on the target, at rest, and reports the target throughout', () => {
 		const s = onScreen(new LinearScaleState('y'), 0, 700);
-		s.folding(() => s.domain.set([0, 100], { instant: true }));
+		s.discrete(() => s.domain.set([0, 100], { instant: true }));
 		expect(s.domain.target).toEqual([0, 100]);
 		expect(s.isAtRest()).toBe(false);
 		const run = frames(s);
@@ -91,7 +91,7 @@ describe('a unit-change tween', () => {
 
 	it('does not move on its first frame: it starts from what is drawn', () => {
 		const s = onScreen(new LinearScaleState('y'), 0, 700);
-		s.folding(() => s.domain.set([0, 100], { instant: true }));
+		s.discrete(() => s.domain.set([0, 100], { instant: true }));
 		s.updateRenderState(0);
 		expect(s.domain.current[0]).toBeCloseTo(0, 9);
 		expect(s.domain.current[1]).toBeCloseTo(700, 9);
@@ -99,10 +99,10 @@ describe('a unit-change tween', () => {
 
 	it('retargets mid-way without a jump: back-to-back changes continue from where they are', () => {
 		const s = onScreen(new LinearScaleState('y'), 0, 700);
-		s.folding(() => s.domain.set([0, 100], { instant: true }));
+		s.discrete(() => s.domain.set([0, 100], { instant: true }));
 		const first = frames(s, 20);
 		const before = first[first.length - 1];
-		s.folding(() => s.domain.set([0, 20], { instant: true }));
+		s.discrete(() => s.domain.set([0, 20], { instant: true }));
 		s.updateRenderState(0);
 		const after = s.domain.current;
 		// Same frame time: the retarget itself moves nothing.
@@ -120,7 +120,7 @@ describe('a unit-change tween', () => {
 
 	it('takes an ordinary retarget mid-way (a fit) in slope and offset too', () => {
 		const s = onScreen(new LinearScaleState('y'), 0, 700);
-		s.folding(() => s.domain.set([0, 100], { instant: true }));
+		s.discrete(() => s.domain.set([0, 100], { instant: true }));
 		frames(s, 20);
 		s.domain.set([0, 150]); // not a unit change
 		expect(s.domain.target).toEqual([0, 150]);
@@ -130,7 +130,7 @@ describe('a unit-change tween', () => {
 
 	it('on a log scale, moves linearly in log space', () => {
 		const s = onScreen(new LogScaleState('y', [1, 1000]), 1, 1000);
-		s.folding(() => s.domain.set([1, 10], { instant: true }));
+		s.discrete(() => s.domain.set([1, 10], { instant: true }));
 		const run = frames(s);
 		const p = springProgress(run.length);
 		expect(stray(run, p, [1, 1000], [1, 10], [2, 5, 8], Math.log)).toBeLessThan(1e-4);
@@ -146,7 +146,7 @@ describe('a unit-change tween', () => {
 
 	it('takes a pan mid-way without a jump, and ends where the pan left it', () => {
 		const s = onScreen(new LinearScaleState('y'), 0, 700);
-		s.folding(() => s.domain.set([0, 100], { instant: true }));
+		s.discrete(() => s.domain.set([0, 100], { instant: true }));
 		const before = frames(s, 15);
 		const [lo, hi] = before[before.length - 1];
 		// A 500 px plot, dragged 100 px: a fifth of the drawn domain.
@@ -176,7 +176,7 @@ describe('a unit-change tween', () => {
 		const at50 = (d: [number, number]) => at(50, d);
 		const last = moving[moving.length - 1];
 		const vBefore = at50(last) - at50(moving[moving.length - 2]);
-		s.folding(() => s.domain.set([0, 250], { instant: true }));
+		s.discrete(() => s.domain.set([0, 250], { instant: true }));
 		s.updateRenderState(0);
 		// Same position in the takeover frame...
 		const [lo, hi] = s.domain.current;
@@ -193,7 +193,7 @@ describe('a unit-change tween', () => {
 		const s = onScreen(new LinearScaleState('y'), 0, 700);
 		s.domain.set([0, 1e5]); // widening fast
 		frames(s, 3);
-		s.folding(() => s.domain.set([0, 1e6], { instant: true }));
+		s.discrete(() => s.domain.set([0, 1e6], { instant: true }));
 		const run = frames(s);
 		for (const [lo, hi] of run) {
 			expect(Number.isFinite(lo) && Number.isFinite(hi)).toBe(true);
@@ -205,7 +205,7 @@ describe('a unit-change tween', () => {
 	it('publishes the f it rendered, extrapolated, with the target’s params', () => {
 		const s = onScreen(new LinearScaleState('y'), 0, 700);
 		expect(s.tween).toBeNull();
-		s.folding(() => s.domain.set([0, 100], { instant: true }));
+		s.discrete(() => s.domain.set([0, 100], { instant: true }));
 		expect(s.tween?.targetParams).toEqual({
 			domainMin: 0,
 			domainMax: 100,
@@ -227,10 +227,10 @@ describe('a unit-change tween', () => {
 
 	it('numbers its segments: each retarget starts one; none at rest', () => {
 		const s = onScreen(new LinearScaleState('y'), 0, 700);
-		s.folding(() => s.domain.set([0, 100], { instant: true }));
+		s.discrete(() => s.domain.set([0, 100], { instant: true }));
 		const first = s.tween!.segment;
 		frames(s, 10);
-		s.folding(() => s.domain.set([0, 20], { instant: true }));
+		s.discrete(() => s.domain.set([0, 20], { instant: true }));
 		expect(s.tween!.segment).toBe(first + 1);
 		expect(s.tween!.f).toBe(0);
 		expect(s.tween!.targetParams.domainMax).toBe(20);
@@ -251,12 +251,12 @@ describe('a unit-change tween', () => {
 function hitch(first: [number, number], second: [number, number]): number {
 	const eps = 1e-5;
 	const s = onScreen(new LinearScaleState('y'), 0, 700);
-	s.folding(() => s.domain.set(first, { instant: true }));
+	s.discrete(() => s.domain.set(first, { instant: true }));
 	frames(s, 36); // 100 ms at 360 Hz
 	const now = [...s.domain.current] as [number, number];
 	s.updateRenderState(eps);
 	const old = [...s.domain.current] as [number, number];
-	s.folding(() => s.domain.set(second, { instant: true }));
+	s.discrete(() => s.domain.set(second, { instant: true }));
 	s.updateRenderState(eps);
 	const next = [...s.domain.current] as [number, number];
 	let worst = 0;

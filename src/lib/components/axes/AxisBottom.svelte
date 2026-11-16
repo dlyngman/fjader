@@ -5,6 +5,7 @@
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 	import BandAxisTicks from './BandAxisTicks.svelte';
 	import type { ContinuousScaleState } from '$lib/types';
+	import type { TickEntry } from '$lib/scales/LinearScaleState.svelte';
 
 	interface Props {
 		ticksNumber?: number;
@@ -36,11 +37,25 @@
 			(s as ContinuousScaleState).setCustomFormat(tickFormat);
 	});
 
-	// Continuous scales (linear, time): use scaleState.getTicks(). None until the
-	// scale has entered: before that its domain is a placeholder.
-	const continuousTicks = $derived(
-		c.xScaleState?.getTicks && hasEntered(c.xScaleState) ? c.xScaleState.getTicks(ticksNumber) : []
-	);
+	// Continuous scales: the scale's tick frame, each tick with its place along
+	// the plot and its opacity (at rest the live ticks, fully drawn; through a
+	// discrete change, the old and new sets crossfading in place). None until
+	// the scale has entered: before that its domain is a placeholder.
+	const continuousTicks: readonly TickEntry[] = $derived.by(() => {
+		const s = c.xScaleState;
+		if (!s || c.scaleTypes?.x === 'band' || !hasEntered(s) || !('tickFrame' in s)) return [];
+		return (s as ContinuousScaleState).tickFrame(ticksNumber);
+	});
+	/** Where a tick sits, in px: its place along the plot, under the domain drawn now. */
+	const tickPx = (t: TickEntry) =>
+		c.xScale!((c.xScaleState as ContinuousScaleState).valueAt(t.position));
+
+	/**
+	 * A tick's key: the incoming (or, at rest, the live) set by value, so a pan
+	 * keeps each label's element; an outgoing set's by value and its frozen
+	 * position, which does not move, and tells apart one value in two sets.
+	 */
+	const tickKey = (t: TickEntry) => (t.target ? `${t.value}` : `${t.value}@${t.position}`);
 
 	// Band scales: the categories on screen NOW, at their current fractional slots,
 	// rather than the domain. Mid-transition a label travels with its bar, and a
@@ -57,12 +72,14 @@
 	<g class="axis" transform="translate(0 , {c.innerHeight})">
 		{#if c.scaleTypes.x !== 'band' && c.xScale}
 			<!-- Continuous scales: direct positioning -->
-			{#each continuousTicks as tick, i (i)}
-				<line x1={c.xScale(tick)} x2={c.xScale(tick)} y1={0} y2={5} />
-
-				<text text-anchor="middle" x={c.xScale(tick)} y={16}>
-					{tickFormatter(tick)}
-				</text>
+			{#each continuousTicks as tick (tickKey(tick))}
+				{@const x = tickPx(tick)}
+				<g opacity={tick.alpha}>
+					<line x1={x} x2={x} y1={0} y2={5} />
+					<text text-anchor="middle" {x} y={16}>
+						{tickFormatter(tick.value)}
+					</text>
+				</g>
 			{/each}
 		{:else if c.scaleTypes.x === 'band' && c.xScale}
 			<BandAxisTicks

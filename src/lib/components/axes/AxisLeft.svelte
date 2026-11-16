@@ -5,6 +5,7 @@
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 	import BandAxisTicks from './BandAxisTicks.svelte';
 	import type { ContinuousScaleState } from '$lib/types';
+	import type { TickEntry } from '$lib/scales/LinearScaleState.svelte';
 	import { categoryLabel } from '$lib/query-engine/categorical-identity';
 	import { clearTitleOffset, sameTicks, textWidth } from './axis-title';
 
@@ -46,11 +47,25 @@
 			(s as ContinuousScaleState).setCustomFormat(tickFormat);
 	});
 
-	// Continuous scales (linear, time): use scaleState.getTicks(). None until the
-	// scale has entered: before that its domain is a placeholder.
-	const continuousTicks = $derived(
-		c.yScaleState?.getTicks && hasEntered(c.yScaleState) ? c.yScaleState.getTicks(ticksNumber) : []
-	);
+	// Continuous scales: the scale's tick frame, each tick with its place along
+	// the plot and its opacity (at rest the live ticks, fully drawn; through a
+	// discrete change, the old and new sets crossfading in place). None until
+	// the scale has entered: before that its domain is a placeholder.
+	const continuousTicks: readonly TickEntry[] = $derived.by(() => {
+		const s = c.yScaleState;
+		if (!s || c.scaleTypes?.y === 'band' || !hasEntered(s) || !('tickFrame' in s)) return [];
+		return (s as ContinuousScaleState).tickFrame(ticksNumber);
+	});
+	/** Where a tick sits, in px: its place along the plot, under the domain drawn now. */
+	const tickPx = (t: TickEntry) =>
+		c.yScale!((c.yScaleState as ContinuousScaleState).valueAt(t.position));
+
+	/**
+	 * A tick's key: the incoming (or, at rest, the live) set by value, so a pan
+	 * keeps each label's element; an outgoing set's by value and its frozen
+	 * position, which does not move, and tells apart one value in two sets.
+	 */
+	const tickKey = (t: TickEntry) => (t.target ? `${t.value}` : `${t.value}@${t.position}`);
 
 	// Band scales: the categories on screen NOW, at their current fractional slots,
 	// rather than the domain. Mid-transition a label travels with its bar, and a
@@ -82,15 +97,19 @@
 			measuredTicks = null;
 		}
 		const band = c.scaleTypes?.y === 'band';
-		const ticks: ArrayLike<unknown> = band ? bandTicks : continuousTicks;
+		// The incoming set's values: numbers compare by value, so a pan that keeps
+		// the same ticks measures nothing, and a label on its way out never counts.
+		const ticks: ArrayLike<unknown> = band
+			? bandTicks
+			: continuousTicks.filter((t) => t.target).map((t) => t.value);
 		if (!sameTicks(measuredTicks, ticks) || (!band && measuredFormatter !== tickFormatter)) {
 			if (band) {
 				for (const tick of bandTicks) {
 					widestSeen = Math.max(widestSeen, textWidth(String(categoryLabel(tick.value))));
 				}
 			} else {
-				for (const tick of continuousTicks) {
-					widestSeen = Math.max(widestSeen, textWidth(String(tickFormatter(tick))));
+				for (const value of ticks as number[]) {
+					widestSeen = Math.max(widestSeen, textWidth(String(tickFormatter(value))));
 				}
 			}
 			measuredTicks = ticks;
@@ -104,12 +123,14 @@
 	<g class="axis">
 		{#if c.scaleTypes.y !== 'band' && c.yScale}
 			<!-- Continuous scales: direct positioning -->
-			{#each continuousTicks as tick, i (i)}
-				<line x1={0} x2={-6} y1={c.yScale(tick)} y2={c.yScale(tick)} />
-
-				<text text-anchor="end" dominant-baseline="middle" x={-9} y={c.yScale(tick)}>
-					{tickFormatter(tick)}
-				</text>
+			{#each continuousTicks as tick (tickKey(tick))}
+				{@const y = tickPx(tick)}
+				<g opacity={tick.alpha}>
+					<line x1={0} x2={-6} y1={y} y2={y} />
+					<text text-anchor="end" dominant-baseline="middle" x={-9} {y}>
+						{tickFormatter(tick.value)}
+					</text>
+				</g>
 			{/each}
 		{:else if c.scaleTypes.y === 'band' && c.yScale}
 			<BandAxisTicks

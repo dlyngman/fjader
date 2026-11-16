@@ -192,13 +192,21 @@ ${placement}
 		renderer.writeMorphed(bandAxis!, positions, [[BINDINGS.ALPHA, alpha!]], land);
 	});
 
+	// A continuous axis with opacities (its tick frame crossfading through a
+	// discrete change): written as given, one per line.
+	const fades = $derived(!bandAxis && !!alpha && alpha.length === positions?.length);
+	$effect(() => {
+		if (!renderer?.resourcesCreated || !fades) return;
+		renderer.writeAttribute(BINDINGS.ALPHA, alpha!);
+	});
+
 	// Otherwise every line is fully drawn. Keyed on the line COUNT alone, because
 	// a continuous axis's positions change on every pan frame and its opacity
 	// does not; the ones are reused until the count outgrows them.
 	const lineCount = $derived(positions?.length ?? 0);
 	let ones = new Float32Array(0);
 	$effect(() => {
-		if (!renderer?.resourcesCreated || morphs) return;
+		if (!renderer?.resourcesCreated || morphs || fades) return;
 		if (ones.length < lineCount)
 			ones = new Float32Array(Math.max(lineCount, ones.length * 2)).fill(1);
 		renderer.writeAttribute(BINDINGS.ALPHA, ones.subarray(0, lineCount));
