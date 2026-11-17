@@ -105,6 +105,7 @@ import {
 	isNested,
 	NEST_EPSILON,
 	type BinRemapSide,
+	type ForwardWhy,
 	type RebinDecision,
 	type RebinSource
 } from '$lib/gpu/bin-remap';
@@ -135,6 +136,17 @@ import { OtherRows, type SplitPlan } from './other-rows.svelte';
 
 /** One result's rows as a remap reads them, with the bins and window they were computed over. */
 type TakenSide = BinRemapSide & { binKey: string | null; window: BinWindow | null };
+
+/**
+ * A side's bin width, read at its middle bin: the end bins can be clipped to
+ * the extent, and months differ by a few days, which is still far from a
+ * rebin's factor.
+ */
+function middleBinWidth(side: TakenSide): number {
+	const { bins, series } = side.layout;
+	const at = Math.floor(bins / 2) * series;
+	return Number(side.upper[at]) - Number(side.lower[at]);
+}
 
 // ---------------------------------------------------------------------------
 // Config (same shape as MarkLifecycleConfig — shared during transition)
@@ -2834,10 +2846,10 @@ export class MarkLifecycleV2 {
 		// Other bins, or the same bins over a moved window: both stamped on the
 		// results, so a pan's window moving while a query flies cannot mislead.
 		if (!binRowsMoved(last.binKey, last.window, side.binKey, side.window)) return null;
-		const held = canHold ? this.#holdMap(last, side) : null;
-		if (held) return { kind: 'hold', map: held };
+		const held = this.#holdMap(last, side, canHold);
+		if (typeof held !== 'string') return { kind: 'hold', map: held };
 		const map = buildBinRemap(last, side);
-		return map ? { kind: 'forward', map } : null;
+		return map ? { kind: 'forward', map, why: held } : null;
 	}
 
 	/**
@@ -2849,13 +2861,17 @@ export class MarkLifecycleV2 {
 	 * - the bins do not nest (weeks into months straddle);
 	 * - the held rows do not cover the view: a zoom out past the window's
 	 *   margin would show blank strips until the swap.
+	 * Why not, as a string, for the transition log.
 	 */
-	#holdMap(held: TakenSide, next: TakenSide): Uint32Array | null {
-		if (held.binKey === next.binKey) return null;
-		if (this.#handle?.resultCause === 'catchUp') return null;
-		if (!this.#heldCoversView(held)) return null;
+	#holdMap(held: TakenSide, next: TakenSide, canHold: boolean): Uint32Array | ForwardWhy {
+		if (held.binKey === next.binKey) return 'window';
+		// Finer bins: a split, which goes forward by design.
+		if (middleBinWidth(next) < middleBinWidth(held)) return 'split';
+		if (!canHold) return 'renderer cannot hold';
+		if (this.#handle?.resultCause === 'catchUp') return 'catch-up';
+		if (!this.#heldCoversView(held)) return 'not covered';
 		const map = buildBinRemap(next, held, NEST_EPSILON);
-		return map && isNested(map) ? map : null;
+		return map && isNested(map) ? map : 'not nested';
 	}
 
 	/**

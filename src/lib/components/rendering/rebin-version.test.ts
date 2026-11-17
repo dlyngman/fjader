@@ -103,7 +103,7 @@ describe('the rebin decision, per data version', () => {
 		renderer.setBinning(source, 'interval');
 
 		const map = new Uint32Array([1, 2, 3]);
-		setNext({ kind: 'forward', map });
+		setNext({ kind: 'forward', map, why: 'split' });
 		// The static edges first, then the heights: the map still reaches the heights.
 		renderer.writeAttribute(0, EDGES);
 		renderer.writeMorphed('x', EDGES, [[2, HEIGHTS]]);
@@ -130,7 +130,7 @@ describe('the rebin decision, per data version', () => {
 		await initialized(renderer);
 		renderer.setBinning(source, 'interval');
 
-		setNext({ kind: 'forward', map: new Uint32Array([9]) });
+		setNext({ kind: 'forward', map: new Uint32Array([9]), why: 'split' });
 		renderer.writeAttribute(0, EDGES);
 		setVersion(2);
 		setNext(null);
@@ -217,7 +217,7 @@ describe('a merge that holds the drawn layout', () => {
 		t.setNext({ kind: 'hold', map: HOLD });
 		writeAll(t.renderer, MERGED, MERGED_HEIGHTS);
 
-		t.setNext({ kind: 'forward', map: FORWARD });
+		t.setNext({ kind: 'forward', map: FORWARD, why: 'not nested' });
 		await t.land();
 		expect(t.log).toEqual(['take 2 canHold', 'take 2', 'commit 2']);
 		expect(t.uploads).toContain('rects-binding-0');
@@ -249,7 +249,7 @@ describe('a merge that holds the drawn layout', () => {
 		t.renderer.writeAttribute(5, new Float32Array([1, 1]));
 
 		t.setVersion(3);
-		t.setNext({ kind: 'forward', map: FORWARD });
+		t.setNext({ kind: 'forward', map: FORWARD, why: 'not nested' });
 		t.renderer.writeMorphed('x', MERGED, [[2, MERGED_HEIGHTS]]);
 		expect(t.log).toEqual(['take 2 canHold', 'take 3 canHold', 'commit 3']);
 		expect(t.uploads).toEqual(['rects-binding-0', 'rects-binding-5']);

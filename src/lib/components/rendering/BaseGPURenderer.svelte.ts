@@ -2,7 +2,8 @@ import { UNIFORM_STAND_IN_BYTES } from './uniform-sizes';
 import type { GPUCoordinator, DataBindingEntry, LayerRegistrationResult } from '$lib/gpu';
 import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
 import { MorphedChannels, type ClockHost, type ChannelScale } from '$lib/gpu/MorphedChannels';
-import type { BinGeometry, RebinSource } from '$lib/gpu/bin-remap';
+import type { BinGeometry, RebinDecision, RebinSource } from '$lib/gpu/bin-remap';
+import { noteTransition, transitionsObserved } from '$lib/animation/transition-log';
 
 export interface RendererOptions {
 	zIndex?: number;
@@ -571,6 +572,7 @@ export class BaseGPURenderer {
 		const canHold =
 			binning.geometry === 'interval' && this.#morphed !== null && MorphedChannels.supported;
 		const decision = binning.source.takeRebin(canHold);
+		this.#noteRebin(decision);
 		if (decision?.kind === 'hold') {
 			// Nothing is committed: the GPU keeps the held layout.
 			this.#pendingRemap = null;
@@ -619,6 +621,9 @@ export class BaseGPURenderer {
 	#swap(generation: number): void {
 		const hold = this.#hold;
 		if (!hold || hold.generation !== generation || this.#isDestroyed) return;
+		if (transitionsObserved()) {
+			noteTransition('rebin', false, () => this.#chartsToRedraw(), this.#rendererId, 'swap');
+		}
 		const morph = hold.morph;
 		this.#endHoldNow();
 		if (morph) this.writeMorphed(...morph);
@@ -636,6 +641,18 @@ export class BaseGPURenderer {
 		const decision = binning.source.takeRebin(false);
 		this.#pendingRemap = decision?.map ?? null;
 		binning.source.commitLayout();
+	}
+
+	/** A rebin decision, for the transition log: hold (again, during a hold), or forward and why. */
+	#noteRebin(decision: RebinDecision): void {
+		if (!decision || !transitionsObserved()) return;
+		const detail =
+			decision.kind === 'hold'
+				? this.#hold
+					? 'hold again'
+					: 'hold'
+				: `forward: ${decision.why}${this.#hold ? ' (ends hold)' : ''}`;
+		noteTransition('rebin', false, () => this.#chartsToRedraw(), this.#rendererId, detail);
 	}
 
 	/** Stop holding and write every deferred static write and the instance count. */

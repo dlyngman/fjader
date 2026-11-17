@@ -9,6 +9,8 @@
  * - `domain`: a continuous scale's domain (data extents and fitDomain alike)
  * - `morph`: a mark's morphed values (bars, dots on a band axis)
  * - `slots`: a band axis's categories moving to new slots
+ * - `rebin`: a binned mark's decision for a rebin result (`detail`: hold,
+ *   forward and why, swap), as its renderer takes it
  *
  * The cause is not recorded: the emitters do not know it, and the page does
  * (it knows what it just did).
@@ -23,7 +25,7 @@
 
 import { untrack } from 'svelte';
 
-export type TransitionPart = 'domain' | 'morph' | 'slots';
+export type TransitionPart = 'domain' | 'morph' | 'slots' | 'rebin';
 
 export interface TransitionRecord {
 	part: TransitionPart;
@@ -35,6 +37,8 @@ export interface TransitionRecord {
 	label: string;
 	/** performance.now() */
 	time: number;
+	/** More on what it was, where the part has more to say (`rebin`: the decision). */
+	detail?: string;
 }
 
 const observers = new Set<(record: TransitionRecord) => void>();
@@ -57,11 +61,12 @@ export function noteTransition(
 	snap: boolean,
 	/** Read untracked, now: the emitter is usually inside an effect. */
 	charts: () => readonly string[],
-	label: string
+	label: string,
+	detail?: string
 ): void {
 	if (observers.size === 0) return;
 	const list = untrack(() => [...charts()]);
-	queued.push({ part, snap, charts: list, label, time: performance.now() });
+	queued.push({ part, snap, charts: list, label, time: performance.now(), detail });
 	// Delivered in a microtask, never in the emitter's own call: transitions
 	// start inside effects (a renderer's write, a scale update), and a
 	// listener run there that reads state makes that effect depend on it. A

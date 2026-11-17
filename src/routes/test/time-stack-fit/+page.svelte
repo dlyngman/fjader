@@ -436,6 +436,16 @@
 					if (ms.length === 0) return '–';
 					return ms.some((tr) => !tr.snap) ? 'morph' : 'snap';
 				})(),
+				// The renderers' rebin decisions in this rebin's window (hold, or
+				// forward and why), each once.
+				decision:
+					[
+						...new Set(
+							transitions
+								.filter((tr) => tr.part === 'rebin' && tr.t >= r.t - 5 && tr.t < end)
+								.map((tr) => tr.detail)
+						)
+					].join(', ') || '–',
 				before: before?.frac ?? null,
 				settled: settled?.frac ?? null,
 				labelLag: labelsAt == null ? null : Math.round(labelsAt - r.t)
@@ -513,7 +523,13 @@
 
 	onMount(() => {
 		const offTransitions = gpuCoordinator.observeTransitions((rec) => {
-			transitions.push({ t: now(), part: rec.part, label: rec.label, snap: rec.snap });
+			transitions.push({
+				t: now(),
+				part: rec.part,
+				label: rec.label,
+				snap: rec.snap,
+				detail: rec.detail
+			});
 			lastActivity = performance.now();
 		});
 		gpuCoordinator.addFrameCallback(onFrame);
@@ -655,6 +671,7 @@
 						<th>y moves</th>
 						<th>y snaps</th>
 						<th>bars</th>
+						<th>rebin decision</th>
 						<th>tallest in view: before</th>
 						<th>settled</th>
 						{#if overlay === 'labels'}<th>labels lag (ms)</th>{/if}
@@ -668,6 +685,7 @@
 							<td>{r.moves}</td>
 							<td>{r.snaps}</td>
 							<td>{r.bars}</td>
+							<td>{r.decision}</td>
 							<td>{pct(r.before)}</td>
 							<td>{pct(r.settled)}</td>
 							{#if overlay === 'labels'}<td>{r.labelLag ?? '–'}</td>{/if}

@@ -38,9 +38,22 @@ export const REMAP_HEADER_WORDS = 8;
  *   correspond, which snap (MorphedChannels tells those apart by row ids).
  */
 export type RebinDecision =
-	| { kind: 'forward'; map: Uint32Array }
+	| { kind: 'forward'; map: Uint32Array; why: ForwardWhy }
 	| { kind: 'hold'; map: Uint32Array }
 	| null;
+
+/**
+ * Why a rebin goes forward rather than holding, for the transition log: a
+ * split or a moved window (forward is the design), or a merge that could not
+ * hold and why.
+ */
+export type ForwardWhy =
+	| 'split'
+	| 'window'
+	| 'renderer cannot hold'
+	| 'catch-up'
+	| 'not covered'
+	| 'not nested';
 
 /**
  * How a renderer draws its rows over bins, which decides how a rebin can
