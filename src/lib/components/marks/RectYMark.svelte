@@ -367,7 +367,7 @@
 		facetData={setup?.facetData}
 		dataVersion={setup?.dataVersion || 0}
 		landsFor={setup?.landsFor ?? 0}
-		takeRemap={setup?.takeRemap ?? null}
+		rebinSource={setup?.rebinSource ?? null}
 		bandAxis={setup?.alignedBand ?? null}
 		grow={hasExplicitBounds ? null : 'y'}
 		inset={entry.inset ?? 0.5}

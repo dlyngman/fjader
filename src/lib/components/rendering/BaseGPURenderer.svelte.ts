@@ -2,6 +2,7 @@ import { UNIFORM_STAND_IN_BYTES } from './uniform-sizes';
 import type { GPUCoordinator, DataBindingEntry, LayerRegistrationResult } from '$lib/gpu';
 import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
 import { MorphedChannels, type ClockHost, type ChannelScale } from '$lib/gpu/MorphedChannels';
+import type { BinGeometry, RebinSource } from '$lib/gpu/bin-remap';
 
 export interface RendererOptions {
 	zIndex?: number;
@@ -54,6 +55,13 @@ export class BaseGPURenderer {
 	#morphAxis: 'x' | 'y' | null = null;
 	/** The morphed bindings measured on the value axis (writeMorphed's `scaled`). */
 	#scaledBindings: readonly number[] = NO_SCALED;
+
+	/** A binned mark's rebin source and this renderer's geometry over bins (setBinning). */
+	#binning: { source: RebinSource; geometry: BinGeometry } | null = null;
+	/** The data version the rebin decision was taken for: one per version. */
+	#rebinVersion = -1;
+	/** The decision's forward map, for this version's first morphed write. */
+	#pendingRemap: Uint32Array | null = null;
 
 	// State management
 	#resourcesCreated = $state(false);
@@ -252,6 +260,7 @@ export class BaseGPURenderer {
 	 */
 	writeAttribute(binding: number, data: AllowSharedBufferSource): void {
 		if (!this.#device || !data) return;
+		this.#beginWrite();
 
 		// A channel that morphed and does not any more gives its buffers back, and
 		// the binding needs rebinding to the static buffer allocated below.
@@ -325,11 +334,14 @@ export class BaseGPURenderer {
 		 * glide linearly on screen even while the scale moves. Not a band id or
 		 * an Other share.
 		 */
-		scaled: readonly number[] = NO_SCALED,
-		/** A rebin's map from the rows on screen to these (MorphedChannels.write). */
-		remap: Uint32Array | null = null
+		scaled: readonly number[] = NO_SCALED
 	): void {
 		if (!this.#device) return;
+		this.#beginWrite();
+		// A rebin's map from the rows on screen to these (MorphedChannels.write):
+		// the first morphed write of the version takes it, later ones are aligned.
+		const remap = this.#pendingRemap;
+		this.#pendingRemap = null;
 
 		if (!MorphedChannels.supported) {
 			if (!warnedMorphUnsupported) {
@@ -430,6 +442,7 @@ export class BaseGPURenderer {
 	 */
 	writeVertexBuffer(slot: number, data: AllowSharedBufferSource): void {
 		if (!this.#device || !data) return;
+		this.#beginWrite();
 
 		let buffer = this.#vertexBuffers.get(slot);
 		const requiredSize = data.byteLength;
@@ -468,6 +481,40 @@ export class BaseGPURenderer {
 	 */
 	getBuffer(binding: number): GPUBuffer | undefined {
 		return this.#morphed?.resolved(binding) ?? this.#ownedResources.buffers.get(binding);
+	}
+
+	// ===== REBINS =====
+
+	/**
+	 * Make this renderer's rows follow a binned mark's rebins: `source` says
+	 * what each result is relative to the rows on the GPU, `geometry` how
+	 * this renderer draws rows over bins. null for a mark that is not binned.
+	 * A new source (a rebuilt lifecycle) starts over: its first result has
+	 * nothing committed to map from.
+	 */
+	setBinning(source: RebinSource | null, geometry: BinGeometry): void {
+		if (this.#binning?.source === source && this.#binning?.geometry === geometry) return;
+		this.#binning = source ? { source, geometry } : null;
+		this.#rebinVersion = -1;
+		this.#pendingRemap = null;
+	}
+
+	/**
+	 * Before any data write: on the first write of a new data version, ask the
+	 * source what the result is and commit its layout. Keyed by version, not
+	 * by which write comes first: a mark writes each channel from its own
+	 * effect, in no order this could rely on, and every write of a version
+	 * must see the same decision.
+	 */
+	#beginWrite(): void {
+		const binning = this.#binning;
+		if (!binning) return;
+		const version = binning.source.dataVersion();
+		if (version === this.#rebinVersion) return;
+		this.#rebinVersion = version;
+		const decision = binning.source.takeRebin();
+		this.#pendingRemap = decision?.map ?? null;
+		binning.source.commitLayout();
 	}
 
 	// ===== INTERNAL HELPERS =====
@@ -518,6 +565,7 @@ export class BaseGPURenderer {
 	}
 
 	updateInstanceCount(count: number): void {
+		this.#beginWrite();
 		this.#instanceCount = count;
 		this.invalidateLayer();
 	}

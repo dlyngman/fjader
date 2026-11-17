@@ -25,6 +25,38 @@ import type { BinLayout } from '$lib/components/marks/lifecycle/bin-layout';
  */
 export const REMAP_HEADER_WORDS = 8;
 
+/**
+ * What a result is, relative to the rows the GPU holds: a rebin to travel
+ * from through `map` (forward: each new bin starts where the old ones it
+ * covers were drawn), or null for anything else (the same rows, which fold,
+ * or rows that do not correspond, which snap: MorphedChannels tells those
+ * apart by the row ids).
+ */
+export type RebinDecision = { kind: 'forward'; map: Uint32Array } | null;
+
+/**
+ * How a renderer draws its rows over bins, which decides how a rebin can
+ * animate. `interval`: each row spans its bin (rects, step areas, heatmap
+ * cells), so siblings tile their parent and only the measure travels.
+ * `point`: each row sits at one position in its bin (dots, line vertices,
+ * text); declared for those renderers, not drawn by any yet.
+ */
+export type BinGeometry = 'interval' | 'point';
+
+/**
+ * A binned mark's side of a rebin (MarkLifecycleV2), for its renderer
+ * (BaseGPURenderer.setBinning). The mark knows the bins and the layouts; the
+ * renderer knows what it has written to the GPU.
+ */
+export interface RebinSource {
+	/** The current result's version: one decision per version, on its first write. */
+	dataVersion(): number;
+	/** The current result against the layout last committed. Does not commit. */
+	takeRebin(): RebinDecision;
+	/** The renderer has written the current result's layout to the GPU. */
+	commitLayout(): void;
+}
+
 /** One side of a rebin: its rows' bin edges, their layout, and the crossed keys' ids per row. */
 export interface BinRemapSide {
 	lower: ArrayLike<number>;

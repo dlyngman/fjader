@@ -6,6 +6,7 @@
 	import { DEFAULT_FILL_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
 	import type { SplitProp } from '../marks/lifecycle/other-rows.svelte';
+	import type { RebinSource } from '$lib/gpu/bin-remap';
 	import { activityReads, markActivityWGSL, otherRowActivityWGSL } from './activity-reads';
 
 	const rectRendererDefinition = {
@@ -75,11 +76,11 @@
 		 */
 		landsFor?: number;
 		/**
-		 * A binned mark's rebin map (MarkLifecycleV2.takeRemap): called once per
-		 * data version written, so it maps from what the GPU holds. With a map,
-		 * a rebin's bars start where the old bars they cover were drawn.
+		 * A binned mark's rebins (MarkLifecycleV2.rebinSource): the renderer
+		 * asks it once per data version written, so a rebin's bars start where
+		 * the old bars they cover were drawn. Bars span their bins: `interval`.
 		 */
-		takeRemap?: (() => Uint32Array | null) | null;
+		rebinSource?: RebinSource | null;
 		zIndex?: number;
 		colorMode?: number;
 		colorScaleIndex?: number;
@@ -121,7 +122,7 @@
 		facetData = null,
 		dataVersion,
 		landsFor = 0,
-		takeRemap = null,
+		rebinSource = null,
 		zIndex = 0,
 		colorMode = 0,
 		colorScaleIndex = 0,
@@ -360,6 +361,11 @@
 
 	// --- DATA WRITING EFFECTS (Independent & Fine-Grained) ---
 
+	// Before the data effects, so a version's first write already asks it.
+	$effect(() => {
+		if (renderer?.resourcesCreated) renderer.setBinning(rebinSource, 'interval');
+	});
+
 	// Whether this write lands: the first of the catch-up's data version
 	// (landsFor). Plain, not $state: only the write effect reads and sets it.
 	// Assumes a catch-up result is ONE morph write: should it ever take two
@@ -393,17 +399,13 @@
 		const first = firstOfVersion();
 		const lands = first && landsFor !== 0 && landsFor === dataVersion;
 		const land = lands ? 'all' : splitData && !splitSlides ? [BINDINGS.SHARE] : undefined;
-		// Once per version, so the map is from the rows the GPU holds. A later
-		// write of the same version (an Other split click) is aligned.
-		const remap = first ? (takeRemap?.() ?? null) : null;
 		if (bandAxis === 'x') {
 			renderer.writeMorphed(
 				'x',
 				x0Data,
 				[[BINDINGS.Y0, y0Data], [BINDINGS.Y1, y1Data], ...split],
 				land,
-				SCALED_Y,
-				remap
+				SCALED_Y
 			);
 		} else {
 			renderer.writeMorphed(
@@ -411,8 +413,7 @@
 				y0Data,
 				[[BINDINGS.X0, x0Data], [BINDINGS.X1, x1Data], ...split],
 				land,
-				SCALED_X,
-				remap
+				SCALED_X
 			);
 		}
 	});

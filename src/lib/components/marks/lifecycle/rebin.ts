@@ -51,7 +51,7 @@ export function isRebin(last: string | null, key: string | null): boolean {
 /**
  * Whether a result's rows are other bins than the last one's: a rebin, or the
  * same bins over a moved window (a pan past it, MarkConfig.binWindow). For the
- * renderer's map (`takeRemap`), which follows the rows: a window move is no
+ * renderer's map (`rebinSource`), which follows the rows: a window move is no
  * rebin for the value axis (isRebin), but its rows changed. Windows by value,
  * as stamped on each result; null is the whole extent.
  */
