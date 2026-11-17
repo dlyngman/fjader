@@ -1036,3 +1036,42 @@ describe('MorphedChannels: a merge’s gather', () => {
 		expect(rested).toBe(0);
 	});
 });
+
+describe('MorphedChannels: a merge’s cut', () => {
+	const REMAP = new Uint32Array(16);
+	const GATHER = new Uint32Array(16);
+
+	it('takes the pieces as its rows: `from` by the remap, `to` by the gather, then travels', () => {
+		const f = fakes();
+		const m = morphed(f);
+		update(m, values(1, 2, 3), values(4, 5, 6));
+		f.frame();
+
+		// Four pieces from three held rows, two new rows.
+		const pieces = values(0, 1, 1.5, 2);
+		m.write(
+			pieces,
+			[
+				[2, values(7, 8)],
+				[3, values(9, 10)]
+			],
+			undefined,
+			REMAP,
+			GATHER
+		);
+		expect(f.slots.starts).toBe(1);
+		const issued = f.frame();
+		// No fold and no snap: the remap builds `from`.
+		expect(issued.some((c) => c.startsWith('copy'))).toBe(false);
+		const remaps = issued.indexOf('pipeline remap-none');
+		const gathers = issued.indexOf('pipeline gather');
+		expect(remaps).toBeGreaterThan(-1);
+		expect(gathers).toBeGreaterThan(remaps);
+		// Over the pieces: remap, gather and resolve for each of two channels.
+		expect(issued.filter((c) => c.startsWith('imm count=4'))).toHaveLength(6);
+
+		// Later writes over the pieces are aligned: they fold.
+		update(m, values(1, 1, 1, 1), values(2, 2, 2, 2), pieces);
+		expect(f.frame()).toContain('copy m-2-resolved -> m-2-from');
+	});
+});

@@ -34,12 +34,16 @@ export const REMAP_HEADER_WORDS = 8;
  *   layout stays drawn and its rows travel to their parent's new value,
  *   gathered through `map` (held bins from new ones); the new layout is
  *   written when they land, through a forward map, invisibly.
+ * - `cut`: a merge into coarser bins that do NOT nest the held ones (2 → 5,
+ *   weeks → months). The held bars are cut at the new edges (`BinCut`), which
+ *   looks the same; then it holds the cut layout as above.
  * - null for anything else: the same rows, which fold, or rows that do not
  *   correspond, which snap (MorphedChannels tells those apart by row ids).
  */
 export type RebinDecision =
 	| { kind: 'forward'; map: Uint32Array; why: ForwardWhy }
 	| { kind: 'hold'; map: Uint32Array }
+	| { kind: 'cut'; cut: BinCut }
 	| null;
 
 /**
@@ -91,6 +95,28 @@ export interface BinRemapSide {
 }
 
 /**
+ * Whether two sides have the same crossed keys in the same slots, per facet:
+ * equal counts can hide a different series. Reads each facet's first run.
+ */
+function sameKeys(prev: BinRemapSide, next: BinRemapSide): boolean {
+	const { series: S, facets: F } = next.layout;
+	if (prev.layout.series !== S || prev.layout.facets !== F) return false;
+	if (prev.ids.length !== next.ids.length) return false;
+	const Bo = prev.layout.bins;
+	const Bn = next.layout.bins;
+	for (let c = 0; c < next.ids.length; c++) {
+		const a = prev.ids[c];
+		const b = next.ids[c];
+		for (let f = 0; f < F; f++) {
+			for (let s = 0; s < S; s++) {
+				if (a[f * Bo * S + s] !== b[f * Bn * S + s]) return false;
+			}
+		}
+	}
+	return true;
+}
+
+/**
  * The map from `prev`'s bins to `next`'s, or null when the rows do not
  * correspond (a different series or facet set or order): the caller snaps.
  * Reads edges at stride and the ids of each facet's first run: O(B + F·S).
@@ -110,16 +136,7 @@ export function buildBinRemap(
 	if (prev.ids.length !== next.ids.length) return null;
 	const Bo = prev.layout.bins;
 	const Bn = next.layout.bins;
-	// The same keys in the same slots: equal counts can hide a different series.
-	for (let c = 0; c < next.ids.length; c++) {
-		const a = prev.ids[c];
-		const b = next.ids[c];
-		for (let f = 0; f < F; f++) {
-			for (let s = 0; s < S; s++) {
-				if (a[f * Bo * S + s] !== b[f * Bn * S + s]) return null;
-			}
-		}
-	}
+	if (!sameKeys(prev, next)) return null;
 
 	// Overlaps, two pointers over the bins of facet 0 (every facet repeats them).
 	const offsets = new Uint32Array(Bn + 1);
@@ -194,4 +211,162 @@ export function isNested(map: Uint32Array, epsilon = NEST_EPSILON): boolean {
 		parented++;
 	}
 	return parented > 0;
+}
+
+/**
+ * The held bars cut at a merge's new edges: each held bin split where a new
+ * bin edge falls inside it, so every piece lies in one held bin and one new
+ * bin. Drawn at the held values it looks like the held bars; drawn at the new
+ * values, like the new bars. So a merge whose bins do not nest (2 → 5, weeks
+ * → months) can travel in it and swap at both ends without showing.
+ */
+export interface BinCut {
+	/** The pieces as a side: edges per row (as drawn), the layout (pieces as bins), ids. */
+	side: BinRemapSide & { lower: Float32Array; upper: Float32Array };
+	/** Held → pieces (RemapShader: `from` from the held rows on screen). */
+	fromHeld: Uint32Array;
+	/** New → pieces (the gather: `to` from the new rows). */
+	fromNew: Uint32Array;
+	/**
+	 * Per piece and facet (facet-major), the first held row of its held bin:
+	 * a held per-row array becomes the pieces' by copying runs of `series`.
+	 */
+	heldRun: Uint32Array;
+	/** Held rows, for checking that an array is in the held layout. */
+	heldRows: number;
+}
+
+/**
+ * Cut `held`'s bins at `next`'s edges (`BinCut`), or null when the rows do
+ * not correspond (other keys) or nothing is cut. A cut within ε of a held
+ * edge is the edge (Float32 rounding). A piece outside every new bin (the
+ * window's margin, the extent's end) goes to the nearest one: off screen.
+ * O(held bins + new bins) for the pieces, plus a run copy per piece and facet.
+ */
+export function buildBinCut(
+	held: BinRemapSide,
+	next: BinRemapSide,
+	epsilon = NEST_EPSILON
+): BinCut | null {
+	if (!sameKeys(held, next)) return null;
+	const { series: S, facets: F } = held.layout;
+	const Bh = held.layout.bins;
+	const Bn = next.layout.bins;
+	if (Bh === 0 || Bn === 0) return null;
+
+	// The new bins' edges, ascending: lower edges, then the last upper.
+	const edges: number[] = [];
+	for (let c = 0; c < Bn; c++) edges.push(Number(next.lower[c * S]));
+	edges.push(Number(next.upper[(Bn - 1) * S]));
+
+	const pieceLo: number[] = [];
+	const pieceHi: number[] = [];
+	const heldParent: number[] = [];
+	const newParent: number[] = [];
+	let e = 0;
+	let c = 0;
+	for (let b = 0; b < Bh; b++) {
+		const lo = Number(held.lower[b * S]);
+		const hi = Number(held.upper[b * S]);
+		const tol = epsilon * (hi - lo);
+		let start = lo;
+		while (e < edges.length && edges[e] <= lo + tol) e++;
+		for (let k = e; k < edges.length && edges[k] < hi - tol; k++) {
+			pieceLo.push(start);
+			pieceHi.push(edges[k]);
+			heldParent.push(b);
+			start = edges[k];
+		}
+		pieceLo.push(start);
+		pieceHi.push(hi);
+		heldParent.push(b);
+	}
+	const P = pieceLo.length;
+	if (P === Bh) return null;
+	// Each piece's new bin, by its middle: the new bins are ascending.
+	for (let p = 0; p < P; p++) {
+		const mid = (pieceLo[p] + pieceHi[p]) / 2;
+		while (c < Bn - 1 && Number(next.upper[c * S]) <= mid) c++;
+		newParent.push(c);
+	}
+
+	const rows = P * S * F;
+	const lower = new Float32Array(rows);
+	const upper = new Float32Array(rows);
+	const heldRun = new Uint32Array(P * F);
+	for (let f = 0; f < F; f++) {
+		for (let p = 0; p < P; p++) {
+			const at = (f * P + p) * S;
+			lower.fill(pieceLo[p], at, at + S);
+			upper.fill(pieceHi[p], at, at + S);
+			heldRun[f * P + p] = (f * Bh + heldParent[p]) * S;
+		}
+	}
+	// Ids as numbers, compared by value with the next side's: one run copy
+	// per piece and facet (a typed column converts on `set`).
+	const ids = held.ids.map((column) => {
+		const source = ArrayBuffer.isView(column)
+			? (column as unknown as Float64Array)
+			: Float64Array.from(column);
+		const out = new Float64Array(rows);
+		for (let i = 0; i < P * F; i++) {
+			const from = heldRun[i];
+			out.set(source.subarray(from, from + S), i * S);
+		}
+		return out;
+	});
+	return {
+		side: { lower, upper, layout: { series: S, bins: P, facets: F }, ids },
+		fromHeld: singleParentMap(P, Bh, S, F, heldParent),
+		fromNew: singleParentMap(P, Bn, S, F, newParent),
+		heldRun,
+		heldRows: Bh * S * F
+	};
+}
+
+/** A map (the remap layout above) where each destination bin has one source bin, weight 1. */
+function singleParentMap(
+	dstBins: number,
+	srcBins: number,
+	S: number,
+	F: number,
+	parent: readonly number[]
+): Uint32Array {
+	const K = dstBins;
+	const words = new Uint32Array(REMAP_HEADER_WORDS + dstBins + 1 + K + K + dstBins);
+	words[0] = dstBins;
+	words[1] = srcBins;
+	words[2] = S;
+	words[3] = F;
+	words[4] = K;
+	let at = REMAP_HEADER_WORDS;
+	for (let b = 0; b <= dstBins; b++) words[at + b] = b;
+	at += dstBins + 1;
+	words.set(parent, at);
+	at += K;
+	new Float32Array(words.buffer, at * 4, K).fill(1);
+	// uncovered: zeros
+	return words;
+}
+
+/**
+ * A held per-row array as the cut's pieces': each piece copies its held
+ * bin's run of `series` rows. Four bytes per row (f32 and u32 alike), or null
+ * when `data` is not in the held layout.
+ */
+export function cutRows(
+	data: AllowSharedBufferSource,
+	cut: BinCut
+): Uint32Array<ArrayBuffer> | null {
+	const view = ArrayBuffer.isView(data)
+		? new Uint32Array(data.buffer, data.byteOffset, data.byteLength >> 2)
+		: new Uint32Array(data);
+	if (view.length !== cut.heldRows) return null;
+	const S = cut.side.layout.series;
+	const out = new Uint32Array(cut.heldRun.length * S);
+	for (let i = 0; i < cut.heldRun.length; i++) {
+		const from = cut.heldRun[i];
+		out.set(view.subarray(from, from + S), i * S);
+	}
+	return out;
 }

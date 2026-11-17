@@ -101,8 +101,10 @@ import {
 } from './fit-domain';
 import { binLayout } from './bin-layout';
 import {
+	buildBinCut,
 	buildBinRemap,
 	isNested,
+	type BinCut,
 	NEST_EPSILON,
 	type BinRemapSide,
 	type ForwardWhy,
@@ -2847,7 +2849,16 @@ export class MarkLifecycleV2 {
 		// results, so a pan's window moving while a query flies cannot mislead.
 		if (!binRowsMoved(last.binKey, last.window, side.binKey, side.window)) return null;
 		const held = this.#holdMap(last, side, canHold);
-		if (typeof held !== 'string') return { kind: 'hold', map: held };
+		if (held instanceof Uint32Array) return { kind: 'hold', map: held };
+		if (typeof held === 'object') {
+			// The GPU will hold the pieces: they are what the next result maps from.
+			this.#pendingSide = {
+				...held.side,
+				binKey: `cut:${last.binKey}>${side.binKey}`,
+				window: last.window
+			};
+			return { kind: 'cut', cut: held };
+		}
 		const map = buildBinRemap(last, side);
 		return map ? { kind: 'forward', map, why: held } : null;
 	}
@@ -2858,12 +2869,13 @@ export class MarkLifecycleV2 {
 	 * - not a rebin (the same bins over a moved window: the forward map is
 	 *   already exact);
 	 * - a catch-up result, which lands at once;
-	 * - the bins do not nest (weeks into months straddle);
+	 * - the bins do not nest (weeks into months straddle): then the held bars
+	 *   are cut at the new edges (`buildBinCut`) and the pieces hold;
 	 * - the held rows do not cover the view: a zoom out past the window's
 	 *   margin would show blank strips until the swap.
 	 * Why not, as a string, for the transition log.
 	 */
-	#holdMap(held: TakenSide, next: TakenSide, canHold: boolean): Uint32Array | ForwardWhy {
+	#holdMap(held: TakenSide, next: TakenSide, canHold: boolean): Uint32Array | BinCut | ForwardWhy {
 		if (held.binKey === next.binKey) return 'window';
 		// Finer bins: a split, which goes forward by design.
 		if (middleBinWidth(next) < middleBinWidth(held)) return 'split';
@@ -2871,7 +2883,8 @@ export class MarkLifecycleV2 {
 		if (this.#handle?.resultCause === 'catchUp') return 'catch-up';
 		if (!this.#heldCoversView(held)) return 'not covered';
 		const map = buildBinRemap(next, held, NEST_EPSILON);
-		return map && isNested(map) ? map : 'not nested';
+		if (map && isNested(map)) return map;
+		return buildBinCut(held, next) ?? 'not nested';
 	}
 
 	/**

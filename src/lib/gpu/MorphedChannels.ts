@@ -373,10 +373,16 @@ export class MorphedChannels {
 		 * For a write during a merge's hold: the map from these rows' (new)
 		 * bins onto the held ones (`buildBinRemap(new, held)`). The held rows
 		 * stay, `rowIds` and `land` are not read, and every channel must
-		 * already morph (`has`). See THE GATHER.
+		 * already morph (`has`). See THE GATHER. With `remap` too, a CUT: the
+		 * rows become `rowIds` (the held bars cut at the new edges), `from`
+		 * comes from the held rows on screen through `remap`, and `to` from
+		 * these rows through `gather`.
 		 */
 		gather: Uint32Array | null = null
 	): boolean {
+		if (gather && remap && this.#alignmentKey !== null) {
+			return this.#writeCut(rowIds, channels, remap, gather);
+		}
 		if (gather && this.#alignmentKey !== null) {
 			this.#writeGather(channels, gather);
 			return false;
@@ -486,7 +492,9 @@ export class MorphedChannels {
 	 */
 	#writeGather(
 		channels: readonly (readonly [number, AllowSharedBufferSource])[],
-		gather: Uint32Array
+		gather: Uint32Array,
+		/** Fold from the screen (a hold); false for a cut, whose remap builds `from`. */
+		fold = true
 	): void {
 		for (const [binding, data] of channels) {
 			const channel = this.#channels.get(binding);
@@ -511,13 +519,61 @@ export class MorphedChannels {
 		this.#gather = map;
 
 		this.#dirty = true;
-		if (!this.#remap) this.#foldPending = true;
+		if (fold && !this.#remap) this.#foldPending = true;
 		this.#startTransition();
 		if (transitionsObserved()) noteTransition('morph', false, this.#affectedCharts, this.#label);
 		if (!this.#registered) {
 			this.#registered = true;
 			this.#host.registerComputeWork(this.#label, (encoder) => this.encode(encoder));
 		}
+	}
+
+	/**
+	 * A cut's write: a new row set (the pieces), whose `from` is the held rows
+	 * on screen through the remap (one held parent each), and whose `to` is
+	 * the new rows through the gather (one new parent each). It travels. With
+	 * a remap already pending, the held rows on screen are not the ones the
+	 * maps are from: it snaps to the gathered values instead.
+	 */
+	#writeCut(
+		rowIds: ArrayLike<number>,
+		channels: readonly (readonly [number, AllowSharedBufferSource])[],
+		remap: Uint32Array,
+		gather: Uint32Array
+	): boolean {
+		const pending = this.#remap !== null;
+		if (pending) this.#retireRemap();
+		if (this.#gather) this.#retireGather();
+		this.#alignmentKey = alignmentKey(rowIds);
+		const bytes = rowIds.length * 4;
+		let reallocated = false;
+		for (const [binding] of channels) {
+			let channel = this.#channels.get(binding);
+			if (!channel) continue;
+			const source = pending ? null : channel.resolved;
+			if (channel.size < bytes) {
+				channel = this.#allocate(binding, bytes, channel, source !== null);
+				reallocated = true;
+			}
+			channel.count = rowIds.length;
+			channel.land = false;
+			channel.remapSource = source;
+		}
+		// `to` from the gather; the sources are this write's rows, new layout.
+		this.#writeGather(channels, gather, false);
+		if (pending) {
+			this.#snapPending = true;
+		} else {
+			const map = this.#device.createBuffer({
+				size: Math.max(16, remap.byteLength),
+				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+				label: `${this.#label}-remap`
+			});
+			this.#device.queue.writeBuffer(map, 0, remap as Uint32Array<ArrayBuffer>);
+			this.#remap = map;
+			this.#foldPending = false;
+		}
+		return reallocated;
 	}
 
 	/** Drop a pending gather (another write replaced `to`): its buffers go after this frame. */

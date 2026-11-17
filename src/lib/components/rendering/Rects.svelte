@@ -363,7 +363,15 @@
 
 	// Before the data effects, so a version's first write already asks it.
 	$effect(() => {
-		if (renderer?.resourcesCreated) renderer.setBinning(rebinSource, 'interval');
+		if (!renderer?.resourcesCreated) return;
+		// The bin edges are the band axis's static pair: a cut writes the pieces' own.
+		const edges =
+			bandAxis === 'x'
+				? ([BINDINGS.X0, BINDINGS.X1] as const)
+				: bandAxis === 'y'
+					? ([BINDINGS.Y0, BINDINGS.Y1] as const)
+					: null;
+		renderer.setBinning(rebinSource, 'interval', edges);
 	});
 
 	// Whether this write lands: the first of the catch-up's data version

@@ -2,7 +2,13 @@ import { UNIFORM_STAND_IN_BYTES } from './uniform-sizes';
 import type { GPUCoordinator, DataBindingEntry, LayerRegistrationResult } from '$lib/gpu';
 import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
 import { MorphedChannels, type ClockHost, type ChannelScale } from '$lib/gpu/MorphedChannels';
-import type { BinGeometry, RebinDecision, RebinSource } from '$lib/gpu/bin-remap';
+import {
+	cutRows,
+	type BinCut,
+	type BinGeometry,
+	type RebinDecision,
+	type RebinSource
+} from '$lib/gpu/bin-remap';
 import { noteTransition, transitionsObserved } from '$lib/animation/transition-log';
 
 export interface RendererOptions {
@@ -34,6 +40,12 @@ const NO_SCALED: readonly number[] = [];
 interface Hold {
 	/** The gather from the current result's bins onto the held ones. */
 	map: Uint32Array;
+	/**
+	 * A cut not yet written to the morphed channels: its first morphed write
+	 * changes their rows to the pieces (`fromHeld`: their start, from the
+	 * held rows on screen).
+	 */
+	cut: { fromHeld: Uint32Array; rowIds: Float32Array } | null;
 	generation: number;
 	/** The latest morphed write, in the new layout: written at the swap. */
 	morph: Parameters<BaseGPURenderer['writeMorphed']> | null;
@@ -74,11 +86,21 @@ export class BaseGPURenderer {
 	#scaledBindings: readonly number[] = NO_SCALED;
 
 	/** A binned mark's rebin source and this renderer's geometry over bins (setBinning). */
-	#binning: { source: RebinSource; geometry: BinGeometry } | null = null;
+	#binning: {
+		source: RebinSource;
+		geometry: BinGeometry;
+		edges: readonly [number, number] | null;
+	} | null = null;
 	/** The data version the rebin decision was taken for: one per version. */
 	#rebinVersion = -1;
 	/** The decision's forward map, for this version's first morphed write. */
 	#pendingRemap: Uint32Array | null = null;
+	/**
+	 * What each static slot last uploaded, by reference (the result's own
+	 * arrays): the layout on the GPU, which a cut copies into its pieces.
+	 */
+	#lastStatic = new Map<number, AllowSharedBufferSource>();
+	#lastVertex = new Map<number, AllowSharedBufferSource>();
 	/** A merge holding the drawn layout (#beginWrite), or null. */
 	#hold: Hold | null = null;
 	/** Numbers holds, so a landing callback from an earlier one does nothing. */
@@ -286,6 +308,13 @@ export class BaseGPURenderer {
 			this.#hold.attributes.set(binding, data);
 			return;
 		}
+		this.#writeAttributeNow(binding, data);
+	}
+
+	/** writeAttribute's upload, whatever a hold defers: what the GPU holds for `binding`. */
+	#writeAttributeNow(binding: number, data: AllowSharedBufferSource): void {
+		if (!this.#device) return;
+		this.#lastStatic.set(binding, data);
 
 		// A channel that morphed and does not any more gives its buffers back, and
 		// the binding needs rebinding to the static buffer allocated below.
@@ -421,6 +450,7 @@ export class BaseGPURenderer {
 		// channel's resolved buffer takes its place in the bind group.
 		let rebind = false;
 		for (const [binding] of channels) {
+			this.#lastStatic.delete(binding);
 			const stale = this.#ownedResources.buffers.get(binding);
 			if (stale) {
 				stale.destroy();
@@ -477,6 +507,13 @@ export class BaseGPURenderer {
 			this.#hold.vertex.set(slot, data);
 			return;
 		}
+		this.#writeVertexNow(slot, data);
+	}
+
+	/** writeVertexBuffer's upload, whatever a hold defers. */
+	#writeVertexNow(slot: number, data: AllowSharedBufferSource): void {
+		if (!this.#device) return;
+		this.#lastVertex.set(slot, data);
 
 		let buffer = this.#vertexBuffers.get(slot);
 		const requiredSize = data.byteLength;
@@ -548,10 +585,23 @@ export class BaseGPURenderer {
 	 * A new source (a rebuilt lifecycle) starts over: its first result has
 	 * nothing committed to map from.
 	 */
-	setBinning(source: RebinSource | null, geometry: BinGeometry): void {
-		if (this.#binning?.source === source && this.#binning?.geometry === geometry) return;
+	setBinning(
+		source: RebinSource | null,
+		geometry: BinGeometry,
+		/** The static bindings holding each row's bin edges (lower, upper): a cut writes them. */
+		edges: readonly [number, number] | null = null
+	): void {
+		const b = this.#binning;
+		if (
+			b?.source === source &&
+			b?.geometry === geometry &&
+			b?.edges?.[0] === edges?.[0] &&
+			b?.edges?.[1] === edges?.[1]
+		) {
+			return;
+		}
 		if (this.#hold) this.#releaseHold();
-		this.#binning = source ? { source, geometry } : null;
+		this.#binning = source ? { source, geometry, edges } : null;
 		this.#rebinVersion = -1;
 		this.#pendingRemap = null;
 	}
@@ -570,28 +620,71 @@ export class BaseGPURenderer {
 		if (version === this.#rebinVersion) return;
 		this.#rebinVersion = version;
 		const canHold =
-			binning.geometry === 'interval' && this.#morphed !== null && MorphedChannels.supported;
+			binning.geometry === 'interval' &&
+			binning.edges !== null &&
+			this.#morphed !== null &&
+			MorphedChannels.supported;
 		const decision = binning.source.takeRebin(canHold);
 		this.#noteRebin(decision);
+		if (decision?.kind === 'cut') {
+			this.#startCut(decision.cut, binning.edges!);
+			binning.source.commitLayout();
+			return;
+		}
 		if (decision?.kind === 'hold') {
 			// Nothing is committed: the GPU keeps the held layout.
 			this.#pendingRemap = null;
-			if (this.#hold) this.#hold.map = decision.map;
-			else {
-				this.#hold = {
-					map: decision.map,
-					generation: ++this.#holdGeneration,
-					morph: null,
-					attributes: new Map(),
-					vertex: new Map(),
-					count: null
-				};
-			}
+			this.#holding(decision.map);
 			return;
 		}
 		if (this.#hold) this.#releaseHold();
-		this.#pendingRemap = decision?.map ?? null;
+		this.#pendingRemap = decision?.kind === 'forward' ? decision.map : null;
 		binning.source.commitLayout();
+	}
+
+	/** Hold (or keep holding) with this gather map; the hold's deferred writes are kept. */
+	#holding(map: Uint32Array): Hold {
+		if (this.#hold) {
+			this.#hold.map = map;
+			this.#hold.cut = null;
+			return this.#hold;
+		}
+		this.#hold = {
+			map,
+			cut: null,
+			generation: ++this.#holdGeneration,
+			morph: null,
+			attributes: new Map(),
+			vertex: new Map(),
+			count: null
+		};
+		return this.#hold;
+	}
+
+	/**
+	 * A cut: the held bars, cut at the new edges, become the drawn layout; it
+	 * looks the same. Its static rows are the held ones' (what this renderer
+	 * last uploaded), run by run, with the edge bindings taking the pieces'
+	 * edges; then it holds the pieces. The morphed channels change rows at the
+	 * version's first morphed write (#gatherInto).
+	 */
+	#startCut(cut: BinCut, [lowerBinding, upperBinding]: readonly [number, number]): void {
+		for (const [binding, data] of this.#lastStatic) {
+			const rows =
+				binding === lowerBinding
+					? cut.side.lower
+					: binding === upperBinding
+						? cut.side.upper
+						: cutRows(data, cut);
+			if (rows) this.#writeAttributeNow(binding, rows);
+		}
+		for (const [slot, data] of this.#lastVertex) {
+			const rows = cutRows(data, cut);
+			if (rows) this.#writeVertexNow(slot, rows);
+		}
+		this.#setCountNow(cut.side.lower.length);
+		const hold = this.#holding(cut.fromNew);
+		hold.cut = { fromHeld: cut.fromHeld, rowIds: cut.side.lower };
 	}
 
 	/**
@@ -608,7 +701,16 @@ export class BaseGPURenderer {
 		hold.morph = write;
 		this.#morphAxis = bandAxis;
 		this.#scaledBindings = scaled;
-		morphed.write(bandIds, channels, land, null, hold.map);
+		const cut = hold.cut;
+		if (cut) {
+			// A cut's first morphed write: the rows become the pieces.
+			hold.cut = null;
+			if (morphed.write(cut.rowIds, channels, land, cut.fromHeld, hold.map)) {
+				this.#scheduleBindGroupUpdate();
+			}
+		} else {
+			morphed.write(bandIds, channels, land, null, hold.map);
+		}
 		// The swap writes buffers the frame's draws bind, so not from inside the
 		// encode that notices the landing: right after it, one frame later.
 		const generation = hold.generation;
@@ -639,19 +741,20 @@ export class BaseGPURenderer {
 		const binning = this.#binning;
 		if (!binning) return;
 		const decision = binning.source.takeRebin(false);
-		this.#pendingRemap = decision?.map ?? null;
+		this.#pendingRemap = decision?.kind === 'forward' ? decision.map : null;
 		binning.source.commitLayout();
 	}
 
 	/** A rebin decision, for the transition log: hold (again, during a hold), or forward and why. */
 	#noteRebin(decision: RebinDecision): void {
 		if (!decision || !transitionsObserved()) return;
+		const again = this.#hold ? ' again' : '';
 		const detail =
 			decision.kind === 'hold'
-				? this.#hold
-					? 'hold again'
-					: 'hold'
-				: `forward: ${decision.why}${this.#hold ? ' (ends hold)' : ''}`;
+				? `hold${again}`
+				: decision.kind === 'cut'
+					? `cut${again}`
+					: `forward: ${decision.why}${this.#hold ? ' (ends hold)' : ''}`;
 		noteTransition('rebin', false, () => this.#chartsToRedraw(), this.#rendererId, detail);
 	}
 
@@ -664,6 +767,12 @@ export class BaseGPURenderer {
 		for (const [binding, data] of hold.attributes) this.writeAttribute(binding, data);
 		for (const [slot, data] of hold.vertex) this.writeVertexBuffer(slot, data);
 		if (hold.count !== null) this.updateInstanceCount(hold.count);
+	}
+
+	/** The instance count, whatever a hold defers. */
+	#setCountNow(count: number): void {
+		this.#instanceCount = count;
+		this.invalidateLayer();
 	}
 
 	// ===== INTERNAL HELPERS =====
@@ -719,8 +828,7 @@ export class BaseGPURenderer {
 			this.#hold.count = count;
 			return;
 		}
-		this.#instanceCount = count;
-		this.invalidateLayer();
+		this.#setCountNow(count);
 	}
 
 	registerLayer(
@@ -788,6 +896,8 @@ export class BaseGPURenderer {
 		this.#initGeneration++;
 
 		this.#hold = null;
+		this.#lastStatic.clear();
+		this.#lastVertex.clear();
 		// Before the buffers below: it unregisters compute work that reads them.
 		this.#morphed?.destroy();
 		this.#morphed = null;

@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { buildBinRemap, isNested, NEST_EPSILON, type BinRemapSide } from './bin-remap';
+import {
+	buildBinCut,
+	buildBinRemap,
+	cutRows,
+	isNested,
+	NEST_EPSILON,
+	type BinRemapSide
+} from './bin-remap';
 import { gatherReference, remapReference } from './RemapShader';
 import { binLayout } from '$lib/components/marks/lifecycle/bin-layout';
 
@@ -200,5 +207,77 @@ describe('a merge that holds: nesting and the gather', () => {
 		const next = side([0, 10, 20]);
 		const landed = gather(held, next, [8, 4], [2, 6, 1, 3]);
 		expect(remap(held, next, landed, [8, 4])).toEqual([8, 4]);
+	});
+});
+
+describe('a merge that does not nest: the cut', () => {
+	// Step 2 into step 5: the new edge at 5 falls inside the held bar 4–6.
+	const held = side([0, 2, 4, 6, 8, 10]);
+	const next = side([0, 5, 10]);
+
+	it('cuts the held bars at the new edges, and only there', () => {
+		const cut = buildBinCut(held, next)!;
+		expect(Array.from(cut.side.lower)).toEqual([0, 2, 4, 5, 6, 8]);
+		expect(Array.from(cut.side.upper)).toEqual([2, 4, 5, 6, 8, 10]);
+		expect(cut.side.layout).toEqual({ series: 1, bins: 6, facets: 1 });
+	});
+
+	it('looks like the held bars at the start, and like the new bars at the end', () => {
+		const cut = buildBinCut(held, next)!;
+		const heldValues = [1, 2, 3, 4, 5];
+		const start = remapReference(
+			'linear',
+			heldValues,
+			new Float32Array(6),
+			cut.fromHeld,
+			SAME,
+			SAME,
+			6,
+			new Float32Array(6)
+		);
+		// The bar 4–6 is two pieces at its own height.
+		expect(Array.from(start)).toEqual([1, 2, 3, 3, 4, 5]);
+		const end = gatherReference([20, 30], new Float32Array(6), cut.fromNew, 6);
+		expect(Array.from(end)).toEqual([20, 20, 20, 30, 30, 30]);
+	});
+
+	it('swaps invisibly at the end: the forward map from the pieces lands on the new values', () => {
+		const cut = buildBinCut(held, next)!;
+		const landed = Array.from(gatherReference([20, 30], new Float32Array(6), cut.fromNew, 6));
+		// Width-weighted: pieces of one new bin are all at its value.
+		const map = buildBinRemap(cut.side, next)!;
+		const out = remapReference('linear', landed, [20, 30], map, SAME, SAME, 2, new Float32Array(2));
+		expect(Array.from(out)).toEqual([20, 30]);
+	});
+
+	it('cuts weeks into months', () => {
+		// Weeks of 7 days from day 0; months of 31 and 28 days.
+		const weeks = side([0, 7, 14, 21, 28, 35, 42, 49, 56]);
+		const months = side([0, 31, 59]);
+		const cut = buildBinCut(weeks, months)!;
+		expect(Array.from(cut.side.lower)).toEqual([0, 7, 14, 21, 28, 31, 35, 42, 49]);
+		expect(isNested(buildBinRemap(months, cut.side, NEST_EPSILON)!)).toBe(true);
+	});
+
+	it('copies each held row’s run per series and facet; ids follow', () => {
+		const h = side([0, 2, 4], 2, 2);
+		const n = side([0, 3, 4], 2, 2);
+		const cut = buildBinCut(h, n)!;
+		// Pieces: [0,2], [2,3], [3,4]; rows facet, piece, series.
+		const rows = cutRows(Float32Array.from([10, 11, 12, 13, 20, 21, 22, 23]), cut)!;
+		expect(Array.from(new Float32Array(rows.buffer))).toEqual([
+			10, 11, 12, 13, 12, 13, 20, 21, 22, 23, 22, 23
+		]);
+		expect(Array.from(cut.side.ids[0])).toEqual([0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1]);
+		expect(Array.from(cut.side.ids[1])).toEqual([0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1]);
+		// Not in the held layout: not cut.
+		expect(cutRows(new Float32Array(3), cut)).toBeNull();
+	});
+
+	it('cuts nothing, and returns null, when the new edges are the held ones within ε', () => {
+		const t = 6e7;
+		const day = 86400;
+		const fine = side([t, t + day / 2, t + day, t + (3 * day) / 2, t + 2 * day]);
+		expect(buildBinCut(fine, side([t, t + day + 4, t + 2 * day]))).toBeNull();
 	});
 });

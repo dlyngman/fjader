@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest';
 import { BaseGPURenderer } from './BaseGPURenderer.svelte';
 import { MorphedChannels } from '$lib/gpu/MorphedChannels';
-import type { RebinDecision, RebinSource } from '$lib/gpu/bin-remap';
+import {
+	buildBinCut,
+	type BinRemapSide,
+	type RebinDecision,
+	type RebinSource
+} from '$lib/gpu/bin-remap';
 
 /**
  * A binned mark's rebin decision is taken once per data version, on that
@@ -29,9 +34,12 @@ function setup() {
 	const written: (Uint32Array | null)[] = [];
 	/** Morphed writes during a hold: the gather map each carried. */
 	const gathered: Uint32Array[] = [];
+	/** A cut's morphed write: its row ids and both maps. */
+	const cuts: { rows: number[]; remap: Uint32Array; gather: Uint32Array }[] = [];
 	vi.spyOn(MorphedChannels.prototype, 'write').mockImplementation(
-		(_ids, _channels, _land, remap, gather) => {
-			if (gather) gathered.push(gather);
+		(ids, _channels, _land, remap, gather) => {
+			if (gather && remap) cuts.push({ rows: Array.from(ids), remap, gather });
+			else if (gather) gathered.push(gather);
 			else written.push(remap ?? null);
 			return false;
 		}
@@ -82,6 +90,7 @@ function setup() {
 		log,
 		written,
 		gathered,
+		cuts,
 		uploads,
 		/** The landing, as an encode reports it, and the microtask the swap runs in. */
 		land: async () => {
@@ -100,7 +109,7 @@ describe('the rebin decision, per data version', () => {
 	it('is taken once, on the first write, whichever write that is', async () => {
 		const { renderer, source, log, written, setVersion, setNext } = setup();
 		await initialized(renderer);
-		renderer.setBinning(source, 'interval');
+		renderer.setBinning(source, 'interval', [0, 1]);
 
 		const map = new Uint32Array([1, 2, 3]);
 		setNext({ kind: 'forward', map, why: 'split' });
@@ -128,7 +137,7 @@ describe('the rebin decision, per data version', () => {
 	it('drops a map no morphed write of its version took', async () => {
 		const { renderer, source, written, setVersion, setNext } = setup();
 		await initialized(renderer);
-		renderer.setBinning(source, 'interval');
+		renderer.setBinning(source, 'interval', [0, 1]);
 
 		setNext({ kind: 'forward', map: new Uint32Array([9]), why: 'split' });
 		renderer.writeAttribute(0, EDGES);
@@ -182,7 +191,7 @@ const MERGED_HEIGHTS = new Float32Array([11, 13]);
 async function drawn() {
 	const t = setup();
 	await initialized(t.renderer);
-	t.renderer.setBinning(t.source, 'interval');
+	t.renderer.setBinning(t.source, 'interval', [0, 1]);
 	writeAll(t.renderer, EDGES, HEIGHTS);
 	t.log.length = 0;
 	t.uploads.length = 0;
@@ -281,3 +290,47 @@ describe('a merge that holds the drawn layout', () => {
 		expect(t.renderer.instanceCount).toBe(2);
 	});
 });
+
+describe('a merge that does not nest: the cut', () => {
+	it('writes the pieces at once, from the held rows, and holds them', async () => {
+		const t = await drawn();
+		const colour = new Float32Array([1, 2, 3]);
+		t.renderer.writeAttribute(4, colour);
+		t.uploads.length = 0;
+
+		// Held bins [0,1], [1,2], [2,3]; a new edge at 1.5 cuts the middle one.
+		const held = side([0, 1, 2, 3]);
+		const next = side([0, 1.5, 3]);
+		const cut = buildBinCut(held, next)!;
+		t.setVersion(2);
+		t.setNext({ kind: 'cut', cut });
+		writeAll(t.renderer, MERGED, MERGED_HEIGHTS);
+
+		expect(t.log).toEqual(['take 2 canHold', 'commit 2']);
+		// The pieces' edges and the colour run-copied: written now, not deferred.
+		expect(t.uploads).toEqual(['rects-binding-0', 'rects-binding-4']);
+		expect(t.renderer.instanceCount).toBe(4);
+		expect(t.cuts).toEqual([{ rows: [0, 1, 1.5, 2], remap: cut.fromHeld, gather: cut.fromNew }]);
+
+		// A later morphed write of the same version gathers into the pieces.
+		t.renderer.writeMorphed('x', MERGED, [[2, MERGED_HEIGHTS]]);
+		expect(t.gathered).toEqual([cut.fromNew]);
+
+		// Landing: the new layout goes up through the forward map.
+		t.setNext({ kind: 'forward', map: FORWARD, why: 'renderer cannot hold' });
+		await t.land();
+		expect(t.renderer.instanceCount).toBe(2);
+		expect(t.written).toEqual([FORWARD]);
+	});
+});
+
+function side(edges: number[]): BinRemapSide {
+	const lower = Float32Array.from(edges.slice(0, -1));
+	const upper = Float32Array.from(edges.slice(1));
+	return {
+		lower,
+		upper,
+		layout: { series: 1, bins: lower.length, facets: 1 },
+		ids: []
+	};
+}
