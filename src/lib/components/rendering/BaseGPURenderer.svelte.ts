@@ -3,8 +3,12 @@ import { UNIFORM_STAND_IN_BYTES } from './uniform-sizes';
 import type { GPUCoordinator, DataBindingEntry, LayerRegistrationResult } from '$lib/gpu';
 import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
 import { MorphedChannels, type ClockHost, type ChannelScale } from '$lib/gpu/MorphedChannels';
+import { TransitionClock } from '$lib/animation/TransitionClock';
 import {
 	cutRows,
+	hasSeams,
+	parentsFromMap,
+	siblingSeams,
 	type BinCut,
 	type BinGeometry,
 	type RebinDecision,
@@ -41,7 +45,32 @@ let warnedMorphUnsupported = false;
  * Mutable for tuning on device (test pages read `?near=`); read at each
  * hold's write.
  */
-export const rebinTuning = { swapNear: 0.75 };
+export const rebinTuning = {
+	swapNear: 0.75,
+	/**
+	 * The seam fade's spring: about 95% in 120 ms, at rest (SEAM_FADE_PRECISION)
+	 * in about 150. Gaps of a pixel or two: anything slower reads as lag.
+	 */
+	seamFadeStiffness: 1560
+};
+
+/** A seam fade ends within 2% of an inset: well under a pixel. */
+const SEAM_FADE_PRECISION = 0.02;
+
+/** How a binned renderer draws rows over bins (setBinning). */
+export interface BinningOptions {
+	geometry: BinGeometry;
+	/** The static bindings holding each row's bin edges (lower, upper): a cut writes them. */
+	edges?: readonly [number, number] | null;
+	/**
+	 * A per-instance vertex slot for seam flags (bin-remap's SEAM_* and
+	 * SIBLING_*), which the renderer's pipeline reads; no buffer there means
+	 * no seams. null: no seams.
+	 */
+	seams?: number | null;
+	/** Where the seam fade's value goes: a uniform binding and byte offset. */
+	seamFade?: { binding: number; offset: number } | null;
+}
 
 /** writeMorphed's `scaled` when nothing is: no binding folds. */
 const NO_SCALED: readonly number[] = [];
@@ -54,6 +83,8 @@ const NO_SCALED: readonly number[] = [];
 interface Hold {
 	/** The gather from the current result's bins onto the held ones. */
 	map: Uint32Array;
+	/** Its rows have arrived since its last gather (#landed). */
+	landed: boolean;
 	/**
 	 * A cut not yet written to the morphed channels: its first morphed write
 	 * changes their rows to the pieces (`fromHeld`: their start, from the
@@ -105,9 +136,17 @@ export class BaseGPURenderer {
 		geometry: BinGeometry;
 		edges: readonly [number, number] | null;
 		seams: number | null;
+		seamFade: { binding: number; offset: number } | null;
 	} | null = null;
-	/** Whether the seams slot holds a cut's seams (dropped when the hold ends). */
+	/** Whether the seams slot holds seams (dropped with their layout). */
 	#seamsWritten = false;
+	/** The seam fade's clock (created on first use), direction and current value. */
+	#fadeClock: TransitionClock | null = null;
+	#fadeDir: 'open' | 'close' | null = null;
+	#fadeNow = 1;
+	/** Numbers fades, so a rest from an earlier one does nothing (#onFadeRest). */
+	#fadeGeneration = 0;
+	#fadeScratch = new Float32Array(1);
 	/** The data version the rebin decision was taken for: one per version. */
 	#rebinVersion = -1;
 	/** The decision's forward map, for this version's first morphed write. */
@@ -506,6 +545,10 @@ export class BaseGPURenderer {
 		}
 
 		this.#device.queue.writeBuffer(buffer, 0, data as ArrayBufferView<ArrayBuffer>);
+		// The mark rewrote its uniform whole: a seam fade's value goes back on top.
+		if (this.#seamsWritten && this.#binning?.seamFade?.binding === binding) {
+			this.#setFade(this.#fadeNow);
+		}
 
 		if (!this.#bindGroupUpdateScheduled) {
 			this.invalidateLayer();
@@ -577,19 +620,30 @@ export class BaseGPURenderer {
 	// A binned mark's results follow its rebins (RebinSource, the lifecycle):
 	// - A split, or a merge that cannot hold: the new layout is written at
 	//   once and its rows start where the old rows they cover were drawn
-	//   (forward map), then travel.
+	//   (forward map), then travel. A split's children start with the gaps
+	//   between them closed, which then open (the seam fade, below).
 	// - A merge into bins that nest the drawn ones HOLDS: the drawn layout
 	//   stays (static writes and the instance count are deferred) and its
 	//   rows travel to their parent's new value (MorphedChannels' gather),
-	//   riding the scale's tween. When they land, the new layout is written
-	//   through the forward map, which starts each parent at its children's
-	//   mean: where they already are, so the swap does not show.
+	//   riding the scale's tween, arriving by `swapNear` of it. Then the gaps
+	//   between siblings close, and the new layout is written through the
+	//   forward map, which starts each parent at its children's mean: where
+	//   they already are, so the swap does not show.
+	// - A merge whose bins do not nest CUTS the held bars at the new edges
+	//   (BinCut), which looks the same, and holds the pieces as above.
 	// Every result during a hold is taken against the held layout (nothing is
 	// committed): a filter result or a further nested merge gathers again,
 	// anything else ends the hold and writes the new layout through a
 	// forward map from the held one. Ending flushes every deferred write, not
 	// only the slots the new result rewrites: a mark rewrites only what
 	// changed.
+	//
+	// SEAMS (optional, `BinningOptions.seams`): per-row flags in a vertex slot
+	// the renderer's pipeline reads. Cut edges draw flush; sibling edges (two
+	// rows that are one bar in the other layout) draw their inset scaled by the
+	// seam fade, a value at `BinningOptions.seamFade` in the renderer's own
+	// uniform, written on the frames a fade runs (a short TransitionClock on the
+	// coordinator's loop): per mark, so not an immediate.
 	//
 	// The geometry says whether this renderer can hold: `interval` (rows span
 	// their bins, so siblings at one height draw as their parent). `point`
@@ -598,34 +652,29 @@ export class BaseGPURenderer {
 
 	/**
 	 * Make this renderer's rows follow a binned mark's rebins: `source` says
-	 * what each result is relative to the rows on the GPU, `geometry` how
+	 * what each result is relative to the rows on the GPU, the options how
 	 * this renderer draws rows over bins. null for a mark that is not binned.
 	 * A new source (a rebuilt lifecycle) starts over: its first result has
 	 * nothing committed to map from.
 	 */
-	setBinning(
-		source: RebinSource | null,
-		geometry: BinGeometry,
-		/** The static bindings holding each row's bin edges (lower, upper): a cut writes them. */
-		edges: readonly [number, number] | null = null,
-		/**
-		 * A per-instance vertex slot for a cut's seams (`BinCut.seams`), which
-		 * the renderer's pipeline reads (no buffer there: no seams), or null.
-		 */
-		seams: number | null = null
-	): void {
+	setBinning(source: RebinSource | null, options: BinningOptions): void {
 		const b = this.#binning;
+		const { geometry, edges = null, seams = null, seamFade = null } = options;
 		if (
 			b?.source === source &&
 			b?.geometry === geometry &&
 			b?.edges?.[0] === edges?.[0] &&
 			b?.edges?.[1] === edges?.[1] &&
-			b?.seams === seams
+			b?.seams === seams &&
+			b?.seamFade?.binding === seamFade?.binding &&
+			b?.seamFade?.offset === seamFade?.offset
 		) {
 			return;
 		}
 		if (this.#hold) this.#releaseHold();
-		this.#binning = source ? { source, geometry, edges, seams } : null;
+		this.#stopFade();
+		this.#dropSeams();
+		this.#binning = source ? { source, geometry, edges, seams, seamFade } : null;
 		this.#rebinVersion = -1;
 		this.#pendingRemap = null;
 	}
@@ -662,12 +711,33 @@ export class BaseGPURenderer {
 		if (decision?.kind === 'hold') {
 			// Nothing is committed: the GPU keeps the held layout.
 			this.#pendingRemap = null;
-			this.#holding(decision.map);
+			const map = decision.map;
+			this.#holding(map, siblingSeams(parentsFromMap(map), map[2], map[3]));
 			return;
 		}
 		if (this.#hold) this.#releaseHold();
-		this.#pendingRemap = decision?.kind === 'forward' ? decision.map : null;
+		this.#forward(decision);
 		this.#commit();
+	}
+
+	/**
+	 * A result that does not hold: a forward map for the next morphed write.
+	 * A new layout's seams: a split's children open their gaps; any other
+	 * layout has none. The same rows (no decision) keep a fade that runs.
+	 */
+	#forward(decision: RebinDecision): void {
+		const map = decision?.kind === 'forward' ? decision.map : null;
+		this.#pendingRemap = map;
+		if (!map) return;
+		this.#stopFade();
+		const seams =
+			this.#binning?.seams != null ? siblingSeams(parentsFromMap(map), map[2], map[3]) : null;
+		if (seams && hasSeams(seams)) {
+			this.#writeSeams(seams);
+			this.#startFade('open');
+		} else {
+			this.#dropSeams();
+		}
 	}
 
 	/** The source's data version; a field, so asking untracked allocates nothing per write. */
@@ -685,16 +755,28 @@ export class BaseGPURenderer {
 		if (source) untrack(() => source.commitLayout());
 	}
 
-	/** Hold (or keep holding) with this gather map; the hold's deferred writes are kept. */
-	#holding(map: Uint32Array): Hold {
+	/**
+	 * Hold (or keep holding) with this gather map; the hold's deferred writes
+	 * are kept. `seams`: the held rows' (siblings under the new parents, and
+	 * a cut's own), written now with their gaps open. A fade already closing
+	 * keeps closing: a result landing as the gaps close does not reopen them.
+	 */
+	#holding(map: Uint32Array, seams: Uint32Array): Hold {
+		this.#writeSeams(hasSeams(seams) ? seams : null);
+		if (this.#fadeDir !== 'close') {
+			this.#stopFade();
+			this.#setFade(1);
+		}
 		if (this.#hold) {
 			this.#hold.map = map;
 			this.#hold.cut = null;
+			this.#hold.landed = false;
 			return this.#hold;
 		}
 		this.#hold = {
 			map,
 			cut: null,
+			landed: false,
 			generation: ++this.#holdGeneration,
 			morph: null,
 			attributes: new Map(),
@@ -726,12 +808,7 @@ export class BaseGPURenderer {
 			if (rows) this.#writeVertexNow(slot, rows);
 		}
 		this.#setCountNow(cut.side.lower.length);
-		const seams = this.#binning?.seams ?? null;
-		if (seams !== null) {
-			this.#writeVertexNow(seams, cut.seams);
-			this.#seamsWritten = true;
-		}
-		const hold = this.#holding(cut.fromNew);
+		const hold = this.#holding(cut.fromNew, cut.seams);
 		hold.cut = { fromHeld: cut.fromHeld, rowIds: cut.side.lower };
 	}
 
@@ -747,27 +824,44 @@ export class BaseGPURenderer {
 		// A loop, not `every`: no callback allocated per write.
 		for (let i = 0; i < channels.length; i++) if (!morphed.has(channels[i][0])) return false;
 		hold.morph = write;
+		hold.landed = false;
 		this.#morphAxis = bandAxis;
 		this.#scaledBindings = scaled;
+		// The rows arrive by swapNear of the ride, so the new layout takes over
+		// exactly where they are.
+		const lead = rebinTuning.swapNear;
 		const cut = hold.cut;
 		if (cut) {
 			// A cut's first morphed write: the rows become the pieces.
 			hold.cut = null;
-			if (morphed.write(cut.rowIds, channels, land, cut.fromHeld, hold.map)) {
+			if (morphed.write(cut.rowIds, channels, land, cut.fromHeld, hold.map, lead)) {
 				this.#scheduleBindGroupUpdate();
 			}
 		} else {
-			morphed.write(bandIds, channels, land, null, hold.map);
+			morphed.write(bandIds, channels, land, null, hold.map, lead);
 		}
-		// The swap writes buffers the frame's draws bind, so not from inside the
-		// encode that notices the landing: right after it, one frame later.
+		// Landing changes buffers the frame's draws bind, so not from inside the
+		// encode that notices it: right after it.
 		const generation = hold.generation;
-		morphed.whenLanding(() => queueMicrotask(() => this.#swap(generation)), rebinTuning.swapNear);
+		morphed.whenLanding(() => queueMicrotask(() => this.#landed(generation)));
 		this.invalidateLayer();
 		return true;
 	}
 
-	/** The hold's rows have landed: write the new layout. Nothing if that hold has ended. */
+	/**
+	 * The hold's rows have arrived: close the gaps between siblings, then swap
+	 * (#onFadeRest). At once when there are none, or they are closed already
+	 * (a later result landed while they closed). Nothing if that hold ended.
+	 */
+	#landed(generation: number): void {
+		const hold = this.#hold;
+		if (!hold || hold.generation !== generation || this.#isDestroyed) return;
+		hold.landed = true;
+		if (!this.#seamsWritten || this.#fadeNow === 0) this.#swap(generation);
+		else if (this.#fadeDir !== 'close') this.#startFade('close');
+	}
+
+	/** Write the new layout. Nothing if that hold has ended. */
 	#swap(generation: number): void {
 		const hold = this.#hold;
 		if (!hold || hold.generation !== generation || this.#isDestroyed) return;
@@ -787,8 +881,7 @@ export class BaseGPURenderer {
 	#endHoldNow(): void {
 		this.#releaseHold();
 		if (!this.#binning) return;
-		const decision = this.#take(false);
-		this.#pendingRemap = decision?.kind === 'forward' ? decision.map : null;
+		this.#forward(this.#take(false));
 		this.#commit();
 	}
 
@@ -811,17 +904,30 @@ export class BaseGPURenderer {
 		if (!hold) return;
 		this.#hold = null;
 		this.#morphed?.whenLanding(null);
+		this.#stopFade();
 		this.#dropSeams();
 		for (const [binding, data] of hold.attributes) this.writeAttribute(binding, data);
 		for (const [slot, data] of hold.vertex) this.writeVertexBuffer(slot, data);
 		if (hold.count !== null) this.updateInstanceCount(hold.count);
 	}
 
+	/** Seams for the rows about to be drawn, or none (null). */
+	#writeSeams(seams: Uint32Array | null): void {
+		const slot = this.#binning?.seams;
+		if (slot == null) return;
+		if (!seams) {
+			this.#dropSeams();
+			return;
+		}
+		this.#writeVertexNow(slot, seams);
+		this.#seamsWritten = true;
+	}
+
 	/**
-	 * The cut's seams go with its hold: the renderer draws without them (no
-	 * buffer in the slot) from the next frame. Destroyed now: a frame that drew
-	 * with them has been submitted, and WebGPU keeps a buffer alive for work
-	 * already submitted.
+	 * Seams go with the layout they were written for: the renderer draws
+	 * without them (no buffer in the slot) from the next frame. Destroyed now:
+	 * a frame that drew with them has been submitted, and WebGPU keeps a
+	 * buffer alive for work already submitted.
 	 */
 	#dropSeams(): void {
 		if (!this.#seamsWritten) return;
@@ -830,6 +936,89 @@ export class BaseGPURenderer {
 		if (slot == null) return;
 		this.#vertexBuffers.get(slot)?.destroy();
 		this.#vertexBuffers.delete(slot);
+		this.invalidateLayer();
+	}
+
+	/**
+	 * Run the seam fade: `open` from 0 (a split's gaps), `close` from 1 (a
+	 * hold's, before its swap). Its clock is on the coordinator's loop, which
+	 * redraws the mark's charts while it runs; each frame writes the value.
+	 */
+	#startFade(direction: 'open' | 'close'): void {
+		if (!this.#binning?.seamFade) {
+			// Nothing to fade: a split shows its gaps, a hold swaps.
+			if (direction === 'close') {
+				this.#fadeDir = 'close';
+				const generation = ++this.#fadeGeneration;
+				queueMicrotask(() => this.#onFadeRest(generation));
+			}
+			return;
+		}
+		this.#fadeDir = direction;
+		this.#setFade(direction === 'open' ? 0 : 1);
+		this.#fadeClock ??= new TransitionClock({
+			loop: this.#gpuCoordinator,
+			stiffness: rebinTuning.seamFadeStiffness,
+			precision: SEAM_FADE_PRECISION,
+			charts: () => this.#chartsToRedraw(),
+			onFrame: this.#onFadeFrame,
+			// The fade it ends, by generation: a stop settles the clock too, and
+			// a newer fade may have started by the time the microtask runs.
+			onRest: () => {
+				const generation = this.#fadeGeneration;
+				queueMicrotask(() => this.#onFadeRest(generation));
+			}
+		});
+		this.#fadeGeneration++;
+		this.#fadeClock.restart();
+	}
+
+	/** Each frame of a fade: its value, from the clock. A field: no allocation per frame. */
+	#onFadeFrame = (): void => {
+		const t = this.#fadeClock?.t ?? 1;
+		if (this.#fadeDir === 'open') this.#setFade(t);
+		else if (this.#fadeDir === 'close') this.#setFade(1 - t);
+	};
+
+	/**
+	 * A fade has finished: a split's seams go (its gaps are full, as without
+	 * any); a hold that has landed swaps. One whose rows set off again (a
+	 * result landed as the gaps closed) waits, closed, for its next landing.
+	 */
+	#onFadeRest(generation: number): void {
+		if (generation !== this.#fadeGeneration) return;
+		const direction = this.#fadeDir;
+		if (!direction) return;
+		this.#fadeDir = null;
+		if (direction === 'open') {
+			this.#dropSeams();
+		} else {
+			this.#setFade(0);
+			const hold = this.#hold;
+			if (hold?.landed) this.#swap(hold.generation);
+		}
+	}
+
+	/** Stop a running fade where it is (the caller sets what comes next). */
+	#stopFade(): void {
+		this.#fadeDir = null;
+		this.#fadeGeneration++;
+		// Off the loop now; its rest is for an ended generation, so it does nothing.
+		if (this.#fadeClock?.running) this.#fadeClock.finish();
+	}
+
+	/**
+	 * The seam fade's value, into the renderer's uniform at the declared
+	 * offset: 4 bytes from a held array. Skipped before the uniform exists;
+	 * rewritten after the mark writes its uniform (writeUniform).
+	 */
+	#setFade(value: number): void {
+		this.#fadeNow = value;
+		const at = this.#binning?.seamFade;
+		const buffer = at ? this.#ownedResources.buffers.get(at.binding) : undefined;
+		if (!at || !buffer || !this.#device) return;
+		this.#fadeScratch[0] = value;
+		this.#device.queue.writeBuffer(buffer, at.offset, this.#fadeScratch);
 		this.invalidateLayer();
 	}
 
@@ -960,6 +1149,8 @@ export class BaseGPURenderer {
 		this.#initGeneration++;
 
 		this.#hold = null;
+		this.#fadeClock?.stop();
+		this.#fadeClock = null;
 		this.#lastStatic.clear();
 		this.#lastVertex.clear();
 		// Before the buffers below: it unregisters compute work that reads them.

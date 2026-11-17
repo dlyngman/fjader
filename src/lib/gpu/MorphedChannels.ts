@@ -265,6 +265,8 @@ export class MorphedChannels {
 	#restWaiter: (() => void) | null = null;
 	/** How far along every channel must be for the waiter (whenLanding). */
 	#restNear = 1;
+	/** The share of a ride or clock by which the rows arrive (write's `lead`). */
+	#lead = 1;
 	#gatherImmediates = new ArrayBuffer(GATHER_IMMEDIATE_SIZE);
 	#gatherImmediatesView = new DataView(this.#gatherImmediates);
 	/** The next dispatch starts from `to`. */
@@ -383,15 +385,24 @@ export class MorphedChannels {
 		 * comes from the held rows on screen through `remap`, and `to` from
 		 * these rows through `gather`.
 		 */
-		gather: Uint32Array | null = null
+		gather: Uint32Array | null = null,
+		/**
+		 * With `gather`: the share of the ride by which these rows arrive (a
+		 * hold's: they converge before the swap, so the new layout takes over
+		 * where they are). 1 arrives with the ride. Any other write resets it.
+		 */
+		lead = 1
 	): boolean {
 		if (gather && remap && this.#alignmentKey !== null) {
+			this.#lead = lead;
 			return this.#writeCut(rowIds, channels, remap, gather);
 		}
 		if (gather && this.#alignmentKey !== null) {
+			this.#lead = lead;
 			this.#writeGather(channels, gather);
 			return false;
 		}
+		this.#lead = 1;
 		// Any other write replaces `to` outright: a gather still pending would
 		// overwrite it with the held layout's.
 		if (this.#gather) this.#retireGather();
@@ -627,6 +638,17 @@ export class MorphedChannels {
 	}
 
 	/**
+	 * Progress `g` (a ride's share, or the clock) as the rows travel it: with a
+	 * lead below 1 they arrive at `lead` and stay. Past 1 (a spring's
+	 * overshoot) unchanged, so it is continuous at 1.
+	 */
+	#led(g: number): number {
+		const lead = this.#lead;
+		if (lead >= 1 || g >= 1) return g;
+		return Math.min(g / lead, 1);
+	}
+
+	/**
 	 * Tell a waiter (whenLanding) that every channel is far enough along: a
 	 * riding channel by its share of the tween as drawn this frame, any other
 	 * by the clock (or landed). No write may be pending. After the encode's own
@@ -643,9 +665,8 @@ export class MorphedChannels {
 			const channel = channels[i];
 			if (channel.count === 0) continue;
 			if (channel.riding) {
-				const g = (channel.tweenF - channel.f0) / (1 - channel.f0);
-				if (g < near) return;
-			} else if (!channel.settled && this.#resolvedT < near) {
+				if (this.#led((channel.tweenF - channel.f0) / (1 - channel.f0)) < near) return;
+			} else if (!channel.settled && this.#led(this.#resolvedT) < near) {
 				return;
 			}
 		}
@@ -766,7 +787,7 @@ export class MorphedChannels {
 		const gather = this.#gather;
 		if (gather) this.#encodeGathers(pass, gather);
 
-		this.#immediatesView.setFloat32(4, resolveT, true);
+		this.#immediatesView.setFloat32(4, this.#led(resolveT), true);
 		let plainSet = false;
 		for (let i = 0; i < channels.length; i++) {
 			const channel = channels[i];
@@ -795,7 +816,7 @@ export class MorphedChannels {
 				view.setUint32(0, channel.count, true);
 				view.setFloat32(
 					4,
-					riding ? (channel.tweenF - channel.f0) / (1 - channel.f0) : resolveT,
+					this.#led(riding ? (channel.tweenF - channel.f0) / (1 - channel.f0) : resolveT),
 					true
 				);
 				view.setUint32(12, !riding && (channel.settled || resolveT >= 1) ? 1 : 0, true);

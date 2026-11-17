@@ -3,7 +3,10 @@ import {
 	buildBinCut,
 	buildBinRemap,
 	cutRows,
+	hasSeams,
 	isNested,
+	parentsFromMap,
+	siblingSeams,
 	NEST_EPSILON,
 	type BinRemapSide
 } from './bin-remap';
@@ -220,8 +223,9 @@ describe('a merge that does not nest: the cut', () => {
 		expect(Array.from(cut.side.lower)).toEqual([0, 2, 4, 5, 6, 8]);
 		expect(Array.from(cut.side.upper)).toEqual([2, 4, 5, 6, 8, 10]);
 		expect(cut.side.layout).toEqual({ series: 1, bins: 6, facets: 1 });
-		// Only the cut at 5 is a seam: the upper edge of 4–5, the lower of 5–6.
-		expect(Array.from(cut.seams)).toEqual([0, 0, 2, 1, 0, 0]);
+		// The cut at 5 is flush (2: upper of 4–5, 1: lower of 5–6); every other
+		// shared edge is between pieces of one new bar: siblings (8 upper, 4 lower).
+		expect(Array.from(cut.seams)).toEqual([8, 12, 6, 9, 12, 4]);
 	});
 
 	it('looks like the held bars at the start, and like the new bars at the end', () => {
@@ -281,5 +285,30 @@ describe('a merge that does not nest: the cut', () => {
 		const day = 86400;
 		const fine = side([t, t + day / 2, t + day, t + (3 * day) / 2, t + 2 * day]);
 		expect(buildBinCut(fine, side([t, t + day + 4, t + 2 * day]))).toBeNull();
+	});
+});
+
+describe('sibling seams', () => {
+	it('flags the edges a split’s children share with a sibling, not their parent’s own', () => {
+		const map = buildBinRemap(side([0, 10, 20]), side([0, 5, 10, 15, 20]))!;
+		const seams = siblingSeams(parentsFromMap(map), 1, 1);
+		expect(Array.from(seams)).toEqual([8, 4, 8, 4]);
+	});
+
+	it('flags a hold’s siblings under one parent; a held bin with none has none', () => {
+		const map = buildBinRemap(side([10, 20]), side([0, 5, 10, 15, 20]), NEST_EPSILON)!;
+		expect(Array.from(parentsFromMap(map))).toEqual([-1, -1, 0, 0]);
+		expect(Array.from(siblingSeams(parentsFromMap(map), 1, 1))).toEqual([0, 0, 8, 4]);
+	});
+
+	it('repeats per series and facet', () => {
+		const map = buildBinRemap(side([0, 10, 20], 2, 2), side([0, 5, 10, 15, 20], 2, 2))!;
+		const facet = [8, 8, 4, 4, 8, 8, 4, 4];
+		expect(Array.from(siblingSeams(parentsFromMap(map), 2, 2))).toEqual([...facet, ...facet]);
+	});
+
+	it('finds none where no two neighbours share a parent', () => {
+		const map = buildBinRemap(side([0, 10, 20]), side([0, 10, 20]))!;
+		expect(hasSeams(siblingSeams(parentsFromMap(map), 1, 1))).toBe(false);
 	});
 });

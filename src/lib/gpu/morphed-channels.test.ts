@@ -1040,6 +1040,38 @@ describe('MorphedChannels: a merge’s gather', () => {
 		expect(at[0]).toBeLessThan(1);
 	});
 
+	it('arrives by its lead: rows written with lead 0.5 have landed once the clock passes 0.5', () => {
+		const f = fakes();
+		const m = morphed(f);
+		update(m, values(1, 2, 3), values(4, 5, 6));
+		f.frame();
+		const at: number[] = [];
+		m.write(
+			values(9, 9),
+			[
+				[2, values(7, 8)],
+				[3, values(9, 10)]
+			],
+			undefined,
+			null,
+			new Uint32Array(16),
+			0.5
+		);
+		m.whenLanding(() => at.push(f.slots.clock.t));
+		f.frame();
+		let tAtHalf: string[] = [];
+		for (let i = 0; i < 1000 && at.length === 0; i++) {
+			f.slots.clock.step();
+			f.slots.clock.updateRenderState(0);
+			tAtHalf = f.frame().filter((c) => c.startsWith('imm count=3'));
+		}
+		expect(at).toHaveLength(1);
+		expect(at[0]).toBeGreaterThanOrEqual(0.5);
+		expect(at[0]).toBeLessThan(1);
+		// The rows are drawn at their end by then: t pushed as 1.
+		expect(tAtHalf.every((c) => c.includes('t=1'))).toBe(true);
+	});
+
 	it('forgets its waiter when told to', () => {
 		const f = fakes();
 		const m = morphed(f);

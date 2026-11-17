@@ -51,7 +51,8 @@
 		DY: 36,
 		OTHER_COLOR_ON_BAND: 40,
 		SPLIT_ALONG_X: 44,
-		ENTRANCE_AXIS: 48
+		ENTRANCE_AXIS: 48,
+		SEAM_FADE: 52
 	};
 
 	interface Props {
@@ -202,7 +203,7 @@
       otherColorOnBand: u32,    // 1: an Other row skips its colour activity too
       splitAlongX: u32,         // 1: an Other bar splits along x (horizontal bars)
       entranceAxis: u32,        // 0: fades in, 1: grows along x, 2: along y
-      _pad0: u32,
+      seamFade: f32,            // Share of the inset on sibling seams (rebins)
       _pad1: u32,
       _pad2: u32,
     };
@@ -344,16 +345,19 @@
 		.replace('{{FACET_DISCARD}}', faceted ? FACET_DISCARD_WGSL : '');
 
 	/**
-	 * Each side's inset. On the binned axis of a binned mark, a side the cut
-	 * made (seam bit 0 lower, 1 upper: p0 is the lower edge) takes none.
+	 * Each side's inset. On the binned axis of a binned mark (p0 is the lower
+	 * edge): a side a cut made (seam bit 1 lower, 2 upper) takes none; a side
+	 * shared with a sibling (4 lower, 8 upper) takes it scaled by the seam
+	 * fade (bin-remap's SEAM_* and SIBLING_*).
 	 */
 	function seamInsetsWGSL(axis: 'x' | 'y' | null): string {
-		const flush = (bit: number, inset: string) => `select(${inset}, 0.0, (seam & ${bit}u) != 0u)`;
+		const side = (cut: number, sibling: number, inset: string) =>
+			`select(select(${inset}, ${inset} * markConstants.seamFade, (seam & ${sibling}u) != 0u), 0.0, (seam & ${cut}u) != 0u)`;
 		return `
-      let ix0 = ${axis === 'x' ? flush(1, 'ix') : 'ix'};
-      let ix1 = ${axis === 'x' ? flush(2, 'ix') : 'ix'};
-      let iy0 = ${axis === 'y' ? flush(1, 'iy') : 'iy'};
-      let iy1 = ${axis === 'y' ? flush(2, 'iy') : 'iy'};`;
+      let ix0 = ${axis === 'x' ? side(1, 4, 'ix') : 'ix'};
+      let ix1 = ${axis === 'x' ? side(2, 8, 'ix') : 'ix'};
+      let iy0 = ${axis === 'y' ? side(1, 4, 'iy') : 'iy'};
+      let iy1 = ${axis === 'y' ? side(2, 8, 'iy') : 'iy'};`;
 	}
 
 	const vertexBufferLayout: GPUVertexBufferLayout[] = [
@@ -412,7 +416,13 @@
 					: null;
 		// Seams only where the pipeline reads them, on the axis it was built for.
 		const seams = seamAxis && seamAxis === bandAxis ? SEAM_VERTEX_SLOT : null;
-		renderer.setBinning(rebinSource, 'interval', edges, seams);
+		renderer.setBinning(rebinSource, {
+			geometry: 'interval',
+			edges,
+			seams,
+			seamFade:
+				seams === null ? null : { binding: BINDINGS.CONSTANTS, offset: UNIFORM_OFFSETS.SEAM_FADE }
+		});
 	});
 
 	// Whether this write lands: the first of the catch-up's data version
@@ -530,6 +540,8 @@
 			view.setUint32(UNIFORM_OFFSETS.OTHER_COLOR_ON_BAND, otherColorOnBand ? 1 : 0, LE);
 			view.setUint32(UNIFORM_OFFSETS.SPLIT_ALONG_X, splitAlongX ? 1 : 0, LE);
 			view.setUint32(UNIFORM_OFFSETS.ENTRANCE_AXIS, grow === 'x' ? 1 : grow === 'y' ? 2 : 0, LE);
+			// Full gaps on sibling seams; a running fade writes its own value on top.
+			view.setFloat32(UNIFORM_OFFSETS.SEAM_FADE, 1, LE);
 
 			renderer.writeUniform(BINDINGS.CONSTANTS, new Uint8Array(buffer));
 		}
@@ -578,8 +590,14 @@
 			passEncoder.setVertexBuffer(1, facetBuffer);
 		}
 		if (seamAxis) {
-			// A cut's seams while one holds, zeros (no seams) otherwise.
-			const seams = renderer.getVertexBuffer(SEAM_VERTEX_SLOT) ?? noSeams(renderer.instanceCount);
+			// Seams while a rebin has some, zeros (no seams) otherwise. Zeros too
+			// for seams shorter than the rows: a vertex buffer short of the
+			// instance count fails the whole command buffer, every chart with it.
+			const written = renderer.getVertexBuffer(SEAM_VERTEX_SLOT);
+			const seams =
+				written && written.size >= renderer.instanceCount * 4
+					? written
+					: noSeams(renderer.instanceCount);
 			passEncoder.setVertexBuffer(SEAM_VERTEX_SLOT, seams);
 		}
 		passEncoder.draw(rectVertexCount, renderer.instanceCount);

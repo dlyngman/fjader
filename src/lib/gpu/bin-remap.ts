@@ -235,17 +235,77 @@ export interface BinCut {
 	/** Held rows, for checking that an array is in the held layout. */
 	heldRows: number;
 	/**
-	 * Per row, which of its edges the cut made (bit 0 lower, bit 1 upper): a
-	 * renderer that insets its bars leaves those edges flush, so the pieces of
-	 * one held bar still draw as that bar, not as finer bins.
+	 * Per row, which of its edges the cut made (SEAM_LOWER, SEAM_UPPER) and
+	 * which it shares with a piece of the same new bin (SIBLING_*): a renderer
+	 * that insets its bars leaves cut edges flush, so the pieces of one held
+	 * bar still draw as that bar, and fades sibling edges closed before the
+	 * swap.
 	 */
 	seams: Uint32Array;
 }
 
-/** `BinCut.seams`: the lower edge is a cut. */
+/**
+ * Seam flags, per row, for a renderer that insets its bars (see BinCut.seams
+ * and `siblingSeams`). CUT edges (a held bar cut at a new edge) draw flush.
+ * SIBLING edges (between two rows that are one bar in the other layout) draw
+ * their inset scaled by the renderer's seam fade, so the gaps close before a
+ * merge's swap and open after a split.
+ */
 export const SEAM_LOWER = 1;
-/** `BinCut.seams`: the upper edge is a cut. */
 export const SEAM_UPPER = 2;
+export const SIBLING_LOWER = 4;
+export const SIBLING_UPPER = 8;
+
+/**
+ * Each destination bin's single source bin in a map (the remap layout), or −1
+ * where it has none or several: a split's children have one parent each, a
+ * hold's held bins one parent or none. O(destination bins).
+ */
+export function parentsFromMap(map: Uint32Array): Int32Array {
+	const bins = map[0];
+	const offsetsAt = REMAP_HEADER_WORDS;
+	const srcAt = offsetsAt + bins + 1;
+	const parents = new Int32Array(bins);
+	for (let b = 0; b < bins; b++) {
+		const start = map[offsetsAt + b];
+		parents[b] = map[offsetsAt + b + 1] - start === 1 ? map[srcAt + start] : -1;
+	}
+	return parents;
+}
+
+/**
+ * The SIBLING seams of a dense layout (F facets × bins × S series) whose
+ * bins have `parents`: an edge between two adjacent bins with the same
+ * parent. OR'd into `into` when given. A run fill per bin and facet.
+ */
+export function siblingSeams(
+	parents: ArrayLike<number>,
+	series: number,
+	facets: number,
+	into?: Uint32Array
+): Uint32Array {
+	const bins = parents.length;
+	const out = into ?? new Uint32Array(bins * series * facets);
+	for (let b = 0; b < bins; b++) {
+		const p = parents[b];
+		if (p < 0) continue;
+		const bits =
+			(b > 0 && parents[b - 1] === p ? SIBLING_LOWER : 0) |
+			(b < bins - 1 && parents[b + 1] === p ? SIBLING_UPPER : 0);
+		if (!bits) continue;
+		for (let f = 0; f < facets; f++) {
+			const at = (f * bins + b) * series;
+			for (let s = 0; s < series; s++) out[at + s] |= bits;
+		}
+	}
+	return out;
+}
+
+/** Whether any row has a seam: a layout with none needs no seam buffer. */
+export function hasSeams(seams: Uint32Array): boolean {
+	for (let i = 0; i < seams.length; i++) if (seams[i] !== 0) return true;
+	return false;
+}
 
 /**
  * Cut `held`'s bins at `next`'s edges (`BinCut`), or null when the rows do
@@ -332,6 +392,8 @@ export function buildBinCut(
 		}
 		return out;
 	});
+	// Pieces of one new bin become one bar: their shared edges are siblings.
+	siblingSeams(newParent, S, F, seams);
 	return {
 		side: { lower, upper, layout: { series: S, bins: P, facets: F }, ids },
 		fromHeld: singleParentMap(P, Bh, S, F, heldParent),
