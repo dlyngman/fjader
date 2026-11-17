@@ -1,6 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { buildBinRemap, type BinRemapSide } from './bin-remap';
-import { remapReference } from './RemapShader';
+import {
+	buildBinCut,
+	buildBinRemap,
+	cutRows,
+	hasSeams,
+	isNested,
+	parentsFromMap,
+	siblingSeams,
+	NEST_EPSILON,
+	type BinRemapSide
+} from './bin-remap';
+import { gatherReference, remapReference } from './RemapShader';
 import { binLayout } from '$lib/components/marks/lifecycle/bin-layout';
 
 /** A dense side: `edges` are the bins' bounds, each bin repeated per series and facet. */
@@ -142,5 +152,163 @@ describe('the bins remap', () => {
 		const out = new Float32Array(2);
 		remapReference('linear', [NaN], [1, 2], map, SAME, SAME, 2, out);
 		expect(Number.isNaN(out[0])).toBe(true);
+	});
+});
+
+/** A held side's rows gathered from a new side's (the hold's `to`), from `to` as it was. */
+function gather(held: BinRemapSide, next: BinRemapSide, src: number[], to: number[]): number[] {
+	const map = buildBinRemap(next, held, NEST_EPSILON)!;
+	return Array.from(gatherReference(src, Float32Array.from(to), map, to.length));
+}
+
+describe('a merge that holds: nesting and the gather', () => {
+	const nested = (held: BinRemapSide, next: BinRemapSide) =>
+		isNested(buildBinRemap(next, held, NEST_EPSILON)!);
+
+	it('tells nested merges from the rest', () => {
+		// Pairs of children into parents: nested.
+		expect(nested(side([0, 5, 10, 15, 20]), side([0, 10, 20]))).toBe(true);
+		// Weeks into months: the week from 28 to 35 straddles two.
+		expect(nested(side([0, 7, 14, 21, 28, 35]), side([0, 31, 59]))).toBe(false);
+		// A split: each held bin covers two new ones.
+		expect(nested(side([0, 10, 20]), side([0, 5, 10, 15, 20]))).toBe(false);
+		// Nothing in common: no held bin has a parent.
+		expect(nested(side([0, 10]), side([20, 40]))).toBe(false);
+	});
+
+	it('tolerates edges one Float32 rounding apart', () => {
+		// Time offsets near 6e7 s have about 4 s of resolution: a parent's edge
+		// can land a few seconds into its neighbour's child.
+		const t = 6e7;
+		const day = 86400;
+		const fine = side([t, t + day / 2, t + day, t + (3 * day) / 2, t + 2 * day]);
+		const coarse = side([t, t + day + 4, t + 2 * day]);
+		expect(nested(fine, coarse)).toBe(true);
+		// Without the tolerance the sliver makes it straddle.
+		expect(isNested(buildBinRemap(coarse, fine)!)).toBe(false);
+	});
+
+	it('gives each held row its parent’s value, per series and facet', () => {
+		const held = side([0, 5, 10, 15, 20], 2, 2);
+		const next = side([0, 10, 20], 2, 2);
+		// New rows: facet, bin, series.
+		const src = [10, 20, 30, 40, 50, 60, 70, 80];
+		const to = gather(held, next, src, new Array(16).fill(0));
+		expect(to).toEqual([10, 20, 10, 20, 30, 40, 30, 40, 50, 60, 50, 60, 70, 80, 70, 80]);
+	});
+
+	it('keeps the value of a held bin with no parent (the window’s margin)', () => {
+		// The new window starts at 10: held bins below it are off screen.
+		const to = gather(side([0, 5, 10, 15, 20]), side([10, 20]), [9], [1, 2, 3, 4]);
+		expect(to).toEqual([1, 2, 9, 9]);
+	});
+
+	it('swaps invisibly: the forward map starts each parent where its children ended', () => {
+		// Children gathered to their parents' values, then the new layout goes
+		// up through the forward map from the held rows: nothing moves.
+		const held = side([0, 5, 10, 15, 20]);
+		const next = side([0, 10, 20]);
+		const landed = gather(held, next, [8, 4], [2, 6, 1, 3]);
+		expect(remap(held, next, landed, [8, 4])).toEqual([8, 4]);
+	});
+});
+
+describe('a merge that does not nest: the cut', () => {
+	// Step 2 into step 5: the new edge at 5 falls inside the held bar 4–6.
+	const held = side([0, 2, 4, 6, 8, 10]);
+	const next = side([0, 5, 10]);
+
+	it('cuts the held bars at the new edges, and only there', () => {
+		const cut = buildBinCut(held, next)!;
+		expect(Array.from(cut.side.lower)).toEqual([0, 2, 4, 5, 6, 8]);
+		expect(Array.from(cut.side.upper)).toEqual([2, 4, 5, 6, 8, 10]);
+		expect(cut.side.layout).toEqual({ series: 1, bins: 6, facets: 1 });
+		// The cut at 5 is flush (2: upper of 4–5, 1: lower of 5–6); every other
+		// shared edge is between pieces of one new bar: siblings (8 upper, 4 lower).
+		expect(Array.from(cut.seams)).toEqual([8, 12, 6, 9, 12, 4]);
+	});
+
+	it('looks like the held bars at the start, and like the new bars at the end', () => {
+		const cut = buildBinCut(held, next)!;
+		const heldValues = [1, 2, 3, 4, 5];
+		const start = remapReference(
+			'linear',
+			heldValues,
+			new Float32Array(6),
+			cut.fromHeld,
+			SAME,
+			SAME,
+			6,
+			new Float32Array(6)
+		);
+		// The bar 4–6 is two pieces at its own height.
+		expect(Array.from(start)).toEqual([1, 2, 3, 3, 4, 5]);
+		const end = gatherReference([20, 30], new Float32Array(6), cut.fromNew, 6);
+		expect(Array.from(end)).toEqual([20, 20, 20, 30, 30, 30]);
+	});
+
+	it('swaps invisibly at the end: the forward map from the pieces lands on the new values', () => {
+		const cut = buildBinCut(held, next)!;
+		const landed = Array.from(gatherReference([20, 30], new Float32Array(6), cut.fromNew, 6));
+		// Width-weighted: pieces of one new bin are all at its value.
+		const map = buildBinRemap(cut.side, next)!;
+		const out = remapReference('linear', landed, [20, 30], map, SAME, SAME, 2, new Float32Array(2));
+		expect(Array.from(out)).toEqual([20, 30]);
+	});
+
+	it('cuts weeks into months', () => {
+		// Weeks of 7 days from day 0; months of 31 and 28 days.
+		const weeks = side([0, 7, 14, 21, 28, 35, 42, 49, 56]);
+		const months = side([0, 31, 59]);
+		const cut = buildBinCut(weeks, months)!;
+		expect(Array.from(cut.side.lower)).toEqual([0, 7, 14, 21, 28, 31, 35, 42, 49]);
+		expect(isNested(buildBinRemap(months, cut.side, NEST_EPSILON)!)).toBe(true);
+	});
+
+	it('copies each held row’s run per series and facet; ids follow', () => {
+		const h = side([0, 2, 4], 2, 2);
+		const n = side([0, 3, 4], 2, 2);
+		const cut = buildBinCut(h, n)!;
+		// Pieces: [0,2], [2,3], [3,4]; rows facet, piece, series.
+		const rows = cutRows(Float32Array.from([10, 11, 12, 13, 20, 21, 22, 23]), cut)!;
+		expect(Array.from(new Float32Array(rows.buffer))).toEqual([
+			10, 11, 12, 13, 12, 13, 20, 21, 22, 23, 22, 23
+		]);
+		expect(Array.from(cut.side.ids[0])).toEqual([0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1]);
+		expect(Array.from(cut.side.ids[1])).toEqual([0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1]);
+		// Not in the held layout: not cut.
+		expect(cutRows(new Float32Array(3), cut)).toBeNull();
+	});
+
+	it('cuts nothing, and returns null, when the new edges are the held ones within ε', () => {
+		const t = 6e7;
+		const day = 86400;
+		const fine = side([t, t + day / 2, t + day, t + (3 * day) / 2, t + 2 * day]);
+		expect(buildBinCut(fine, side([t, t + day + 4, t + 2 * day]))).toBeNull();
+	});
+});
+
+describe('sibling seams', () => {
+	it('flags the edges a split’s children share with a sibling, not their parent’s own', () => {
+		const map = buildBinRemap(side([0, 10, 20]), side([0, 5, 10, 15, 20]))!;
+		const seams = siblingSeams(parentsFromMap(map), 1, 1);
+		expect(Array.from(seams)).toEqual([8, 4, 8, 4]);
+	});
+
+	it('flags a hold’s siblings under one parent; a held bin with none has none', () => {
+		const map = buildBinRemap(side([10, 20]), side([0, 5, 10, 15, 20]), NEST_EPSILON)!;
+		expect(Array.from(parentsFromMap(map))).toEqual([-1, -1, 0, 0]);
+		expect(Array.from(siblingSeams(parentsFromMap(map), 1, 1))).toEqual([0, 0, 8, 4]);
+	});
+
+	it('repeats per series and facet', () => {
+		const map = buildBinRemap(side([0, 10, 20], 2, 2), side([0, 5, 10, 15, 20], 2, 2))!;
+		const facet = [8, 8, 4, 4, 8, 8, 4, 4];
+		expect(Array.from(siblingSeams(parentsFromMap(map), 2, 2))).toEqual([...facet, ...facet]);
+	});
+
+	it('finds none where no two neighbours share a parent', () => {
+		const map = buildBinRemap(side([0, 10, 20]), side([0, 10, 20]))!;
+		expect(hasSeams(siblingSeams(parentsFromMap(map), 1, 1))).toBe(false);
 	});
 });

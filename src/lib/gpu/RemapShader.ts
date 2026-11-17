@@ -187,3 +187,134 @@ export function remapPipelineFor(device: GPUDevice, kind: RemapKind): RemapPipel
 	}
 	return entry;
 }
+
+/**
+ * The gather kernel: a merge's held rows take their parent's new value, so
+ * they travel there in the layout already drawn (BaseGPURenderer's hold).
+ *
+ *   to[j] = Σ_k weight[k] · src[row_k] + uncovered[b] · to[j]
+ *
+ * `src` is the new result's rows, in the NEW layout; `to` is the held
+ * layout's. The map runs from new bins onto held ones (`buildBinRemap(new,
+ * held)`): nested, so each held bin has one parent at weight 1, or none (in
+ * the window's margin), when it keeps the `to` it had. Reading its own slot
+ * is safe: each invocation writes only its own. No transform: the new values
+ * are in the target's units, which is what `to` holds while riding.
+ *
+ * Runs once per write during a hold, per channel, after the fold and before
+ * the resolve. Immediates: `count` padded to 16.
+ */
+export const GATHER_IMMEDIATE_SIZE = 16;
+
+export function gatherShader(): string {
+	return /* wgsl */ `
+requires immediate_address_space;
+
+struct Params {
+  count: u32,
+  _pad0: u32,
+  _pad1: u32,
+  _pad2: u32,
+};
+
+@group(0) @binding(0) var<storage, read>       src: array<f32>;
+@group(0) @binding(1) var<storage, read_write> dst: array<f32>;
+@group(0) @binding(2) var<storage, read>       map: array<u32>;
+var<immediate> params: Params;
+
+@compute @workgroup_size(${RESOLVE_WORKGROUP})
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let j = gid.x;
+  if (j >= params.count) {
+    return;
+  }
+  let dstBins = map[0];
+  let srcBins = map[1];
+  let series = map[2];
+  let overlaps = map[4];
+  let s = j % series;
+  let b = (j / series) % dstBins;
+  let f = j / (series * dstBins);
+  let offsetsAt = ${REMAP_HEADER_WORDS}u;
+  let srcBinAt = offsetsAt + dstBins + 1u;
+  let weightAt = srcBinAt + overlaps;
+  let uncoveredAt = weightAt + overlaps;
+
+  var sum = 0.0;
+  for (var k = map[offsetsAt + b]; k < map[offsetsAt + b + 1u]; k++) {
+    let row = (f * srcBins + map[srcBinAt + k]) * series + s;
+    sum += bitcast<f32>(map[weightAt + k]) * src[row];
+  }
+  let uncovered = bitcast<f32>(map[uncoveredAt + b]);
+  if (uncovered > 0.0) {
+    sum += uncovered * dst[j];
+  }
+  dst[j] = sum;
+}
+`;
+}
+
+/** The same in JS, asserted against the kernel's intent. Writes `dst` in place. */
+export function gatherReference(
+	src: ArrayLike<number>,
+	dst: Float32Array,
+	map: Uint32Array,
+	count: number
+): Float32Array {
+	const dstBins = map[0];
+	const srcBins = map[1];
+	const series = map[2];
+	const K = map[4];
+	const offsetsAt = REMAP_HEADER_WORDS;
+	const srcBinAt = offsetsAt + dstBins + 1;
+	const floats = new Float32Array(map.buffer, map.byteOffset, map.length);
+	const weightAt = srcBinAt + K;
+	const uncoveredAt = weightAt + K;
+	for (let j = 0; j < count; j++) {
+		const s = j % series;
+		const b = Math.floor(j / series) % dstBins;
+		const f = Math.floor(j / (series * dstBins));
+		let sum = 0;
+		for (let k = map[offsetsAt + b]; k < map[offsetsAt + b + 1]; k++) {
+			sum += floats[weightAt + k] * src[(f * srcBins + map[srcBinAt + k]) * series + s];
+		}
+		const u = floats[uncoveredAt + b];
+		if (u > 0) sum += u * dst[j];
+		dst[j] = sum;
+	}
+	return dst;
+}
+
+const GATHER_PIPELINES = new WeakMap<GPUDevice, RemapPipeline>();
+
+/** One gather pipeline per device, shared by every holding mark. */
+export function gatherPipelineFor(device: GPUDevice): RemapPipeline {
+	let entry = GATHER_PIPELINES.get(device);
+	if (!entry) {
+		const stage = GPUShaderStage.COMPUTE;
+		const label = 'gather';
+		const layout = device.createBindGroupLayout({
+			label,
+			entries: [
+				{ binding: 0, visibility: stage, buffer: { type: 'read-only-storage' } },
+				{ binding: 1, visibility: stage, buffer: { type: 'storage' } },
+				{ binding: 2, visibility: stage, buffer: { type: 'read-only-storage' } }
+			]
+		});
+		const pipeline = device.createComputePipeline({
+			label,
+			layout: device.createPipelineLayout({
+				label,
+				bindGroupLayouts: [layout],
+				immediateSize: GATHER_IMMEDIATE_SIZE
+			}),
+			compute: {
+				module: device.createShaderModule({ label, code: gatherShader() }),
+				entryPoint: 'main'
+			}
+		});
+		entry = { pipeline, layout };
+		GATHER_PIPELINES.set(device, entry);
+	}
+	return entry;
+}

@@ -1,11 +1,12 @@
 <script lang="ts">
 	import { UNIFORM_BYTES } from './uniform-sizes';
-	import { getContext, onMount, onDestroy } from 'svelte';
+	import { getContext, onMount, onDestroy, untrack } from 'svelte';
 	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { DEFAULT_FILL_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
 	import type { SplitProp } from '../marks/lifecycle/other-rows.svelte';
+	import type { RebinSource } from '$lib/gpu/bin-remap';
 	import { activityReads, markActivityWGSL, otherRowActivityWGSL } from './activity-reads';
 
 	const rectRendererDefinition = {
@@ -50,7 +51,8 @@
 		DY: 36,
 		OTHER_COLOR_ON_BAND: 40,
 		SPLIT_ALONG_X: 44,
-		ENTRANCE_AXIS: 48
+		ENTRANCE_AXIS: 48,
+		SEAM_FADE: 52
 	};
 
 	interface Props {
@@ -75,11 +77,11 @@
 		 */
 		landsFor?: number;
 		/**
-		 * A binned mark's rebin map (MarkLifecycleV2.takeRemap): called once per
-		 * data version written, so it maps from what the GPU holds. With a map,
-		 * a rebin's bars start where the old bars they cover were drawn.
+		 * A binned mark's rebins (MarkLifecycleV2.rebinSource): the renderer
+		 * asks it once per data version written, so a rebin's bars start where
+		 * the old bars they cover were drawn. Bars span their bins: `interval`.
 		 */
-		takeRemap?: (() => Uint32Array | null) | null;
+		rebinSource?: RebinSource | null;
 		zIndex?: number;
 		colorMode?: number;
 		colorScaleIndex?: number;
@@ -99,9 +101,17 @@
 		 * category id that the shader resolves through the slot table, and
 		 * interpolating an identity produces a fraction that resolves to some
 		 * other category. Position already animates, through the slot table. A
-		 * bin's edges do not change under a filter, and a re-bin snaps.
+		 * bin's edges do not change under a filter; a rebin changes the rows,
+		 * which follow it through the renderer's binning (`rebinSource`).
 		 */
 		bandAxis?: 'x' | 'y' | null;
+		/**
+		 * The axis this mark bins, when it does (a histogram), as known when it
+		 * mounts: read once, it picks the pipeline. A binned mark's pipeline
+		 * reads per-rect seams, so the pieces of a bar a merge cuts draw flush
+		 * at the cut (BinCut.seams). Every other mark's pipeline is unchanged.
+		 */
+		binnedAxis?: 'x' | 'y' | null;
 		/**
 		 * The axis this mark grows along when its chart enters: its measure axis,
 		 * for bars and histograms anchored at 0. null fades it in instead, for
@@ -121,7 +131,7 @@
 		facetData = null,
 		dataVersion,
 		landsFor = 0,
-		takeRemap = null,
+		rebinSource = null,
 		zIndex = 0,
 		colorMode = 0,
 		colorScaleIndex = 0,
@@ -132,6 +142,7 @@
 		dy = 0,
 		markId = '',
 		bandAxis = null,
+		binnedAxis = null,
 		grow = null
 	}: Props = $props();
 
@@ -147,7 +158,10 @@
 	const webGPUContext = getContext<WebGPUCanvasContext>('webgpu-canvas');
 	const gpuCoordinator = getGPUContext();
 	const faceted = !!chartContext.fx;
-	const effectiveMarkType = faceted ? 'rects-faceted' : 'rects';
+	// The binned axis picks the pipeline, so it is read once, as the facet is.
+	const seamAxis = untrack(() => binnedAxis);
+	const SEAM_VERTEX_SLOT = faceted ? 2 : 1;
+	const effectiveMarkType = `rects${faceted ? '-faceted' : ''}${seamAxis ? `-seams-${seamAxis}` : ''}`;
 
 	// --- Facet compile-time specialization ---
 	// Facet index arrives as a vertex attribute (stepMode: instance), not a storage buffer.
@@ -189,7 +203,7 @@
       otherColorOnBand: u32,    // 1: an Other row skips its colour activity too
       splitAlongX: u32,         // 1: an Other bar splits along x (horizontal bars)
       entranceAxis: u32,        // 0: fades in, 1: grows along x, 2: along y
-      _pad0: u32,
+      seamFade: f32,            // Share of the inset on sibling seams (rebins)
       _pad1: u32,
       _pad2: u32,
     };
@@ -221,6 +235,7 @@
       @location(0) rectCorner: vec2<f32>,
       @builtin(instance_index) instanceIdx: u32,
       {{FACET_PARAM}}
+      {{SEAM_PARAM}}
     ) -> VertexOutput {
       {{FACET_DISCARD}}
       let x0 = x0Values[instanceIdx];
@@ -244,10 +259,11 @@
       // Apply inset (shrink rect inward on all sides)
       let ix = markConstants.inset * sign(p1.x - p0.x);
       let iy = markConstants.inset * sign(p1.y - p0.y);
+      {{SEAM_INSETS}}
 
       // Interpolate rectangle corners and apply pixel offsets
-      let finalX = mix(p0.x + ix, p1.x - ix, rectCorner.x) + markConstants.dx;
-      let finalY = mix(p0.y + iy, p1.y - iy, rectCorner.y) + markConstants.dy;
+      let finalX = mix(p0.x + ix0, p1.x - ix1, rectCorner.x) + markConstants.dx;
+      let finalY = mix(p0.y + iy0, p1.y - iy1, rectCorner.y) + markConstants.dy;
       let enterAlpha = entranceAlpha(markConstants.entranceAxis);
 
       // Convert to normalized device coordinates
@@ -324,7 +340,25 @@
     }
   `
 		.replace('{{FACET_PARAM}}', faceted ? '@location(1) facetIdx: f32,' : '')
+		.replace('{{SEAM_PARAM}}', seamAxis ? '@location(2) seam: u32,' : '')
+		.replace('{{SEAM_INSETS}}', seamInsetsWGSL(seamAxis))
 		.replace('{{FACET_DISCARD}}', faceted ? FACET_DISCARD_WGSL : '');
+
+	/**
+	 * Each side's inset. On the binned axis of a binned mark (p0 is the lower
+	 * edge): a side a cut made (seam bit 1 lower, 2 upper) takes none; a side
+	 * shared with a sibling (4 lower, 8 upper) takes it scaled by the seam
+	 * fade (bin-remap's SEAM_* and SIBLING_*).
+	 */
+	function seamInsetsWGSL(axis: 'x' | 'y' | null): string {
+		const side = (cut: number, sibling: number, inset: string) =>
+			`select(select(${inset}, ${inset} * markConstants.seamFade, (seam & ${sibling}u) != 0u), 0.0, (seam & ${cut}u) != 0u)`;
+		return `
+      let ix0 = ${axis === 'x' ? side(1, 4, 'ix') : 'ix'};
+      let ix1 = ${axis === 'x' ? side(2, 8, 'ix') : 'ix'};
+      let iy0 = ${axis === 'y' ? side(1, 4, 'iy') : 'iy'};
+      let iy1 = ${axis === 'y' ? side(2, 8, 'iy') : 'iy'};`;
+	}
 
 	const vertexBufferLayout: GPUVertexBufferLayout[] = [
 		{
@@ -338,6 +372,16 @@
 						arrayStride: 4,
 						stepMode: 'instance' as GPUVertexStepMode,
 						attributes: [{ shaderLocation: 1, offset: 0, format: 'float32' as GPUVertexFormat }]
+					}
+				]
+			: []),
+		// A binned mark's seams: per-instance u32, in the slot after the facet's.
+		...(seamAxis
+			? [
+					{
+						arrayStride: 4,
+						stepMode: 'instance' as GPUVertexStepMode,
+						attributes: [{ shaderLocation: 2, offset: 0, format: 'uint32' as GPUVertexFormat }]
 					}
 				]
 			: [])
@@ -359,6 +403,27 @@
 	];
 
 	// --- DATA WRITING EFFECTS (Independent & Fine-Grained) ---
+
+	// Before the data effects, so a version's first write already asks it.
+	$effect(() => {
+		if (!renderer?.resourcesCreated) return;
+		// The bin edges are the band axis's static pair: a cut writes the pieces' own.
+		const edges =
+			bandAxis === 'x'
+				? ([BINDINGS.X0, BINDINGS.X1] as const)
+				: bandAxis === 'y'
+					? ([BINDINGS.Y0, BINDINGS.Y1] as const)
+					: null;
+		// Seams only where the pipeline reads them, on the axis it was built for.
+		const seams = seamAxis && seamAxis === bandAxis ? SEAM_VERTEX_SLOT : null;
+		renderer.setBinning(rebinSource, {
+			geometry: 'interval',
+			edges,
+			seams,
+			seamFade:
+				seams === null ? null : { binding: BINDINGS.CONSTANTS, offset: UNIFORM_OFFSETS.SEAM_FADE }
+		});
+	});
 
 	// Whether this write lands: the first of the catch-up's data version
 	// (landsFor). Plain, not $state: only the write effect reads and sets it.
@@ -393,17 +458,13 @@
 		const first = firstOfVersion();
 		const lands = first && landsFor !== 0 && landsFor === dataVersion;
 		const land = lands ? 'all' : splitData && !splitSlides ? [BINDINGS.SHARE] : undefined;
-		// Once per version, so the map is from the rows the GPU holds. A later
-		// write of the same version (an Other split click) is aligned.
-		const remap = first ? (takeRemap?.() ?? null) : null;
 		if (bandAxis === 'x') {
 			renderer.writeMorphed(
 				'x',
 				x0Data,
 				[[BINDINGS.Y0, y0Data], [BINDINGS.Y1, y1Data], ...split],
 				land,
-				SCALED_Y,
-				remap
+				SCALED_Y
 			);
 		} else {
 			renderer.writeMorphed(
@@ -411,8 +472,7 @@
 				y0Data,
 				[[BINDINGS.X0, x0Data], [BINDINGS.X1, x1Data], ...split],
 				land,
-				SCALED_X,
-				remap
+				SCALED_X
 			);
 		}
 	});
@@ -480,6 +540,8 @@
 			view.setUint32(UNIFORM_OFFSETS.OTHER_COLOR_ON_BAND, otherColorOnBand ? 1 : 0, LE);
 			view.setUint32(UNIFORM_OFFSETS.SPLIT_ALONG_X, splitAlongX ? 1 : 0, LE);
 			view.setUint32(UNIFORM_OFFSETS.ENTRANCE_AXIS, grow === 'x' ? 1 : grow === 'y' ? 2 : 0, LE);
+			// Full gaps on sibling seams; a running fade writes its own value on top.
+			view.setFloat32(UNIFORM_OFFSETS.SEAM_FADE, 1, LE);
 
 			renderer.writeUniform(BINDINGS.CONSTANTS, new Uint8Array(buffer));
 		}
@@ -527,7 +589,37 @@
 			if (!facetBuffer) return;
 			passEncoder.setVertexBuffer(1, facetBuffer);
 		}
+		if (seamAxis) {
+			// Seams while a rebin has some, zeros (no seams) otherwise. Zeros too
+			// for seams shorter than the rows: a vertex buffer short of the
+			// instance count fails the whole command buffer, every chart with it.
+			const written = renderer.getVertexBuffer(SEAM_VERTEX_SLOT);
+			const seams =
+				written && written.size >= renderer.instanceCount * 4
+					? written
+					: noSeams(renderer.instanceCount);
+			passEncoder.setVertexBuffer(SEAM_VERTEX_SLOT, seams);
+		}
 		passEncoder.draw(rectVertexCount, renderer.instanceCount);
+	}
+
+	/**
+	 * Zeros for the seam slot, at least `count` rows: a binned mark draws with
+	 * no seams most of the time. Grown with headroom and zero-filled at
+	 * creation (WebGPU's guarantee), so a frame only compares a size.
+	 */
+	let seamZeros: GPUBuffer | null = null;
+	function noSeams(count: number): GPUBuffer {
+		const bytes = Math.max(16, count * 4);
+		if (!seamZeros || seamZeros.size < bytes) {
+			seamZeros?.destroy();
+			seamZeros = webGPUContext.getDevice().createBuffer({
+				size: Math.ceil((bytes * 1.5) / 4) * 4,
+				usage: GPUBufferUsage.VERTEX,
+				label: 'rects-no-seams'
+			});
+		}
+		return seamZeros;
 	}
 
 	onMount(() =>
@@ -564,11 +656,14 @@
 			gpuCoordinator?.retainRenderer(markId, {
 				destroy() {
 					rgb?.destroy();
+					// Read at destroy: a retained renderer still draws, and may grow it.
+					seamZeros?.destroy();
 					r.destroy();
 				}
 			});
 		if (retained) return;
 		if (rgb) rgb.destroy();
+		seamZeros?.destroy();
 		if (r) r.destroy();
 	});
 </script>

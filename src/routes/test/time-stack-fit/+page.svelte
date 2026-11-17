@@ -69,6 +69,10 @@
 	import { bin } from '$lib/sql/bin';
 	import { attachQueryLog } from '$lib/query-engine/debug/query-log';
 	import { binLayout } from '$lib/components/marks/lifecycle/bin-layout';
+	import {
+		rebinTuning,
+		seamFadeStiffnessFor
+	} from '$lib/components/rendering/BaseGPURenderer.svelte';
 	import { windowedFit } from '$lib/components/marks/lifecycle/fit-domain';
 
 	const fit = page.url.searchParams.get('fit') !== '0';
@@ -81,6 +85,12 @@
 				? 'rule'
 				: null;
 	const sparse = page.url.searchParams.get('sparse') === '1';
+	// ?near=0.9: how far along a merge's bars travel before they swap (tuning).
+	const near = Number(page.url.searchParams.get('near'));
+	if (near > 0 && near <= 1) rebinTuning.swapNear = near;
+	// ?fade=200: the seam fade's length in ms, to 95% (tuning).
+	const fadeMs = Number(page.url.searchParams.get('fade'));
+	if (fadeMs > 0) rebinTuning.seamFadeStiffness = seamFadeStiffnessFor(fadeMs);
 	const TAG = `${fit ? 'fit' : 'plain'}${overlay ? `-${overlay}` : ''}${sparse ? '-sparse' : ''}`;
 	/** A variant's query string; `o` is null, 'rule' or 'line'. */
 	const variant = (f, o = null, s = false) =>
@@ -436,6 +446,16 @@
 					if (ms.length === 0) return '–';
 					return ms.some((tr) => !tr.snap) ? 'morph' : 'snap';
 				})(),
+				// The renderers' rebin decisions in this rebin's window (hold, or
+				// forward and why), each once.
+				decision:
+					[
+						...new Set(
+							transitions
+								.filter((tr) => tr.part === 'rebin' && tr.t >= r.t - 5 && tr.t < end)
+								.map((tr) => tr.detail)
+						)
+					].join(', ') || '–',
 				before: before?.frac ?? null,
 				settled: settled?.frac ?? null,
 				labelLag: labelsAt == null ? null : Math.round(labelsAt - r.t)
@@ -513,7 +533,13 @@
 
 	onMount(() => {
 		const offTransitions = gpuCoordinator.observeTransitions((rec) => {
-			transitions.push({ t: now(), part: rec.part, label: rec.label, snap: rec.snap });
+			transitions.push({
+				t: now(),
+				part: rec.part,
+				label: rec.label,
+				snap: rec.snap,
+				detail: rec.detail
+			});
 			lastActivity = performance.now();
 		});
 		gpuCoordinator.addFrameCallback(onFrame);
@@ -655,6 +681,7 @@
 						<th>y moves</th>
 						<th>y snaps</th>
 						<th>bars</th>
+						<th>rebin decision</th>
 						<th>tallest in view: before</th>
 						<th>settled</th>
 						{#if overlay === 'labels'}<th>labels lag (ms)</th>{/if}
@@ -668,6 +695,7 @@
 							<td>{r.moves}</td>
 							<td>{r.snaps}</td>
 							<td>{r.bars}</td>
+							<td>{r.decision}</td>
 							<td>{pct(r.before)}</td>
 							<td>{pct(r.settled)}</td>
 							{#if overlay === 'labels'}<td>{r.labelLag ?? '–'}</td>{/if}

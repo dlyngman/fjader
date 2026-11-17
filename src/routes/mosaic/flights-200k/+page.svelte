@@ -3,6 +3,7 @@
 	import { initFjader } from '$lib';
 	import { onMount } from 'svelte';
 	import MainView from './MainView.svelte';
+	import { observeTransitions } from '$lib/animation/transition-log';
 
 	const { queryEngine } = initFjader();
 	//
@@ -29,6 +30,24 @@
 	// 	}
 	// };
 
+	// ?log=1: the histograms' rebin decisions (hold, or forward and why), newest first.
+	let rebinLog = $state([]);
+	const showLog =
+		typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('log');
+
+	onMount(() => {
+		if (!showLog) return;
+		const t0 = performance.now();
+		return observeTransitions((rec) => {
+			if (rec.part !== 'rebin') return;
+			const t = Math.round(rec.time - t0);
+			rebinLog = [{ t, label: rec.label.split('-')[0], detail: rec.detail }, ...rebinLog].slice(
+				0,
+				40
+			);
+		});
+	});
+
 	onMount(async () => {
 		try {
 			await queryEngine.exec(
@@ -51,6 +70,13 @@
 	{:else}
 		<MainView />
 	{/if}
+	{#if showLog}
+		<ol class="rebin-log">
+			{#each rebinLog as entry (entry)}
+				<li>{entry.t} ms · {entry.label} · {entry.detail}</li>
+			{/each}
+		</ol>
+	{/if}
 </div>
 
 <style>
@@ -59,6 +85,23 @@
 		min-height: 100vh;
 		display: flex;
 		flex-direction: column;
+	}
+
+	.rebin-log {
+		position: fixed;
+		right: 8px;
+		bottom: 8px;
+		max-height: 40vh;
+		overflow: auto;
+		margin: 0;
+		padding: 6px 10px 6px 28px;
+		font:
+			11px/1.4 ui-monospace,
+			monospace;
+		background: rgb(255 255 255 / 0.92);
+		border: 1px solid #ccc;
+		border-radius: 4px;
+		pointer-events: auto;
 	}
 
 	.loading-container,
