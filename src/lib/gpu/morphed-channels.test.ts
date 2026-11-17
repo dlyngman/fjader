@@ -1021,25 +1021,6 @@ describe('MorphedChannels: a merge’s gather', () => {
 		expect(rested).toBe(1);
 	});
 
-	it('tells it earlier with a threshold: once the clock is that far along', () => {
-		const f = fakes();
-		const m = morphed(f);
-		update(m, values(1, 2, 3), values(4, 5, 6));
-		f.frame();
-		const at: number[] = [];
-		gatherWrite(m, values(7, 8), values(9, 10));
-		m.whenLanding(() => at.push(f.slots.clock.t), 0.5);
-		f.frame();
-		for (let i = 0; i < 1000 && at.length === 0; i++) {
-			f.slots.clock.step();
-			f.slots.clock.updateRenderState(0);
-			f.frame();
-		}
-		expect(at).toHaveLength(1);
-		expect(at[0]).toBeGreaterThanOrEqual(0.5);
-		expect(at[0]).toBeLessThan(1);
-	});
-
 	it('arrives by its lead: rows written with lead 0.5 have landed once the clock passes 0.5', () => {
 		const f = fakes();
 		const m = morphed(f);

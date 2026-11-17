@@ -263,8 +263,6 @@ export class MorphedChannels {
 	#gather: GPUBuffer | null = null;
 	/** Called once, from an encode, when nothing moves any more (whenAtRest). */
 	#restWaiter: (() => void) | null = null;
-	/** How far along every channel must be for the waiter (whenLanding). */
-	#restNear = 1;
 	/** The share of a ride or clock by which the rows arrive (write's `lead`). */
 	#lead = 1;
 	#gatherImmediates = new ArrayBuffer(GATHER_IMMEDIATE_SIZE);
@@ -335,16 +333,14 @@ export class MorphedChannels {
 	}
 
 	/**
-	 * Call `fn` once, from an encode, when every channel is at least `near`
-	 * of the way to where it is going and no write is pending: by its share of
-	 * the scale's tween while riding one, by the clock otherwise. 1 waits for
-	 * rest. Replaces any earlier waiter. Called from inside the frame's compute
-	 * work: `fn` must not write buffers a draw this frame binds (defer it,
-	 * e.g. to a microtask).
+	 * Call `fn` once, from an encode, when every channel has arrived (by its
+	 * share of the scale's tween while riding one, by the clock otherwise, each
+	 * through the write's lead) and no write is pending. Replaces any earlier
+	 * waiter. Called from inside the frame's compute work: `fn` must not write
+	 * buffers a draw this frame binds (defer it, e.g. to a microtask).
 	 */
-	whenLanding(fn: (() => void) | null, near = 1): void {
+	whenLanding(fn: (() => void) | null): void {
 		this.#restWaiter = fn;
-		this.#restNear = near;
 	}
 
 	/** The buffer the vertex stage binds for this channel, if it morphs. */
@@ -649,7 +645,7 @@ export class MorphedChannels {
 	}
 
 	/**
-	 * Tell a waiter (whenLanding) that every channel is far enough along: a
+	 * Tell a waiter (whenLanding) that every channel has arrived: a
 	 * riding channel by its share of the tween as drawn this frame, any other
 	 * by the clock (or landed). No write may be pending. After the encode's own
 	 * work, so a landing this frame counts.
@@ -659,14 +655,13 @@ export class MorphedChannels {
 		if (!waiter) return;
 		if (this.#gather || this.#remap) return;
 		if (this.#foldPending || this.#snapPending || this.#dirty) return;
-		const near = this.#restNear;
 		const channels = this.#channelList;
 		for (let i = 0; i < channels.length; i++) {
 			const channel = channels[i];
 			if (channel.count === 0) continue;
 			if (channel.riding) {
-				if (this.#led((channel.tweenF - channel.f0) / (1 - channel.f0)) < near) return;
-			} else if (!channel.settled && this.#led(this.#resolvedT) < near) {
+				if (this.#led((channel.tweenF - channel.f0) / (1 - channel.f0)) < 1) return;
+			} else if (!channel.settled && this.#led(this.#resolvedT) < 1) {
 				return;
 			}
 		}

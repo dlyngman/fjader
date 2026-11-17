@@ -35,24 +35,25 @@ export interface InitConfig {
 let warnedMorphUnsupported = false;
 
 /**
- * How far along a hold's rows travel before the swap: the new layout's bars
- * then start at their children's mean and land the rest themselves. At rest
- * (1), converged children stay drawn apart, their insets showing, for the
- * tween's long tail. At 0.75 (chosen on device) the children make most of
- * the movement and land together as the merged bar, and a fast zoom out,
- * whose rebins restart the ride, still reaches the swap. The swap shows as
- * the spread left between siblings, (1 − swapNear) of where they started.
- * Mutable for tuning on device (test pages read `?near=`); read at each
- * hold's write.
+ * Rebin animation settings, mutable for tuning on device (test pages read
+ * `?near=` and `?fade=`).
+ *
+ * `swapNear`: the share of the ride by which a hold's rows arrive at their
+ * parent's value (MorphedChannels' lead). Then the sibling gaps close and the
+ * new layout takes over exactly where they are. Waiting for the whole ride
+ * kept converged children apart through the tween's long tail; at 0.75
+ * (chosen on device) a fast zoom out, whose rebins restart the ride, still
+ * reaches the swap. Read at each hold's write.
  */
 export const rebinTuning = {
 	swapNear: 0.75,
 	/**
-	 * The seam fade's spring: about 95% in 200 ms, at rest (SEAM_FADE_PRECISION)
-	 * in about 245 (chosen on device; 120 ms read as a pop). `seamFadeStiffnessFor`
-	 * converts a duration.
+	 * The seam fade's spring: about 95% in 160 ms, at rest (SEAM_FADE_PRECISION)
+	 * in about 200 (chosen on device between 120, which read as a pop, and
+	 * 200). `seamFadeStiffnessFor` converts a duration. Read when a renderer
+	 * first fades.
 	 */
-	seamFadeStiffness: 560
+	seamFadeStiffness: 878
 };
 
 /**
@@ -986,8 +987,9 @@ export class BaseGPURenderer {
 	/** Each frame of a fade: its value, from the clock. A field: no allocation per frame. */
 	#onFadeFrame = (): void => {
 		const t = this.#fadeClock?.t ?? 1;
-		if (this.#fadeDir === 'open') this.#setFade(t);
-		else if (this.#fadeDir === 'close') this.#setFade(1 - t);
+		// No invalidation: the running clock redraws the mark's charts.
+		if (this.#fadeDir === 'open') this.#setFade(t, false);
+		else if (this.#fadeDir === 'close') this.#setFade(1 - t, false);
 	};
 
 	/**
@@ -1022,14 +1024,14 @@ export class BaseGPURenderer {
 	 * offset: 4 bytes from a held array. Skipped before the uniform exists;
 	 * rewritten after the mark writes its uniform (writeUniform).
 	 */
-	#setFade(value: number): void {
+	#setFade(value: number, invalidate = true): void {
 		this.#fadeNow = value;
 		const at = this.#binning?.seamFade;
 		const buffer = at ? this.#ownedResources.buffers.get(at.binding) : undefined;
 		if (!at || !buffer || !this.#device) return;
 		this.#fadeScratch[0] = value;
 		this.#device.queue.writeBuffer(buffer, at.offset, this.#fadeScratch);
-		this.invalidateLayer();
+		if (invalidate) this.invalidateLayer();
 	}
 
 	/** The instance count, whatever a hold defers. */
