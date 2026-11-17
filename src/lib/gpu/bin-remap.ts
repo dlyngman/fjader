@@ -234,7 +234,18 @@ export interface BinCut {
 	heldRun: Uint32Array;
 	/** Held rows, for checking that an array is in the held layout. */
 	heldRows: number;
+	/**
+	 * Per row, which of its edges the cut made (bit 0 lower, bit 1 upper): a
+	 * renderer that insets its bars leaves those edges flush, so the pieces of
+	 * one held bar still draw as that bar, not as finer bins.
+	 */
+	seams: Uint32Array;
 }
+
+/** `BinCut.seams`: the lower edge is a cut. */
+export const SEAM_LOWER = 1;
+/** `BinCut.seams`: the upper edge is a cut. */
+export const SEAM_UPPER = 2;
 
 /**
  * Cut `held`'s bins at `next`'s edges (`BinCut`), or null when the rows do
@@ -293,6 +304,7 @@ export function buildBinCut(
 	const rows = P * S * F;
 	const lower = new Float32Array(rows);
 	const upper = new Float32Array(rows);
+	const seams = new Uint32Array(rows);
 	const heldRun = new Uint32Array(P * F);
 	for (let f = 0; f < F; f++) {
 		for (let p = 0; p < P; p++) {
@@ -300,6 +312,11 @@ export function buildBinCut(
 			lower.fill(pieceLo[p], at, at + S);
 			upper.fill(pieceHi[p], at, at + S);
 			heldRun[f * P + p] = (f * Bh + heldParent[p]) * S;
+			// A piece's edge is a cut unless it is its held bar's own edge.
+			const seam =
+				(p > 0 && heldParent[p - 1] === heldParent[p] ? SEAM_LOWER : 0) |
+				(p < P - 1 && heldParent[p + 1] === heldParent[p] ? SEAM_UPPER : 0);
+			if (seam) seams.fill(seam, at, at + S);
 		}
 	}
 	// Ids as numbers, compared by value with the next side's: one run copy
@@ -320,7 +337,8 @@ export function buildBinCut(
 		fromHeld: singleParentMap(P, Bh, S, F, heldParent),
 		fromNew: singleParentMap(P, Bn, S, F, newParent),
 		heldRun,
-		heldRows: Bh * S * F
+		heldRows: Bh * S * F,
+		seams
 	};
 }
 

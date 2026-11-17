@@ -220,6 +220,8 @@ describe('a merge that does not nest: the cut', () => {
 		expect(Array.from(cut.side.lower)).toEqual([0, 2, 4, 5, 6, 8]);
 		expect(Array.from(cut.side.upper)).toEqual([2, 4, 5, 6, 8, 10]);
 		expect(cut.side.layout).toEqual({ series: 1, bins: 6, facets: 1 });
+		// Only the cut at 5 is a seam: the upper edge of 4–5, the lower of 5–6.
+		expect(Array.from(cut.seams)).toEqual([0, 0, 2, 1, 0, 0]);
 	});
 
 	it('looks like the held bars at the start, and like the new bars at the end', () => {

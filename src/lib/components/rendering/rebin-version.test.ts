@@ -324,6 +324,27 @@ describe('a merge that does not nest: the cut', () => {
 	});
 });
 
+describe('a cut’s seams', () => {
+	it('go to the declared slot with the cut, and leave with its hold', async () => {
+		const t = setup();
+		await initialized(t.renderer);
+		t.renderer.setBinning(t.source, 'interval', [0, 1], 9);
+		writeAll(t.renderer, EDGES, HEIGHTS);
+		t.uploads.length = 0;
+
+		const cut = buildBinCut(side([0, 1, 2, 3]), side([0, 1.5, 3]))!;
+		t.setVersion(2);
+		t.setNext({ kind: 'cut', cut });
+		writeAll(t.renderer, MERGED, MERGED_HEIGHTS);
+		expect(t.uploads).toContain('rects-vertex-slot-9');
+		expect(t.renderer.getVertexBuffer(9)).toBeDefined();
+
+		t.setNext({ kind: 'forward', map: FORWARD, why: 'renderer cannot hold' });
+		await t.land();
+		expect(t.renderer.getVertexBuffer(9)).toBeUndefined();
+	});
+});
+
 function side(edges: number[]): BinRemapSide {
 	const lower = Float32Array.from(edges.slice(0, -1));
 	const upper = Float32Array.from(edges.slice(1));

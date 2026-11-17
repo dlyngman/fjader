@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { UNIFORM_BYTES } from './uniform-sizes';
-	import { getContext, onMount, onDestroy } from 'svelte';
+	import { getContext, onMount, onDestroy, untrack } from 'svelte';
 	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { DEFAULT_FILL_COLOR } from '$lib/scales/color-utils';
@@ -105,6 +105,13 @@
 		 */
 		bandAxis?: 'x' | 'y' | null;
 		/**
+		 * The axis this mark bins, when it does (a histogram), as known when it
+		 * mounts: read once, it picks the pipeline. A binned mark's pipeline
+		 * reads per-rect seams, so the pieces of a bar a merge cuts draw flush
+		 * at the cut (BinCut.seams). Every other mark's pipeline is unchanged.
+		 */
+		binnedAxis?: 'x' | 'y' | null;
+		/**
 		 * The axis this mark grows along when its chart enters: its measure axis,
 		 * for bars and histograms anchored at 0. null fades it in instead, for
 		 * rects with bounds of their own (a Gantt bar has no 0 to grow from).
@@ -134,6 +141,7 @@
 		dy = 0,
 		markId = '',
 		bandAxis = null,
+		binnedAxis = null,
 		grow = null
 	}: Props = $props();
 
@@ -149,7 +157,10 @@
 	const webGPUContext = getContext<WebGPUCanvasContext>('webgpu-canvas');
 	const gpuCoordinator = getGPUContext();
 	const faceted = !!chartContext.fx;
-	const effectiveMarkType = faceted ? 'rects-faceted' : 'rects';
+	// The binned axis picks the pipeline, so it is read once, as the facet is.
+	const seamAxis = untrack(() => binnedAxis);
+	const SEAM_VERTEX_SLOT = faceted ? 2 : 1;
+	const effectiveMarkType = `rects${faceted ? '-faceted' : ''}${seamAxis ? `-seams-${seamAxis}` : ''}`;
 
 	// --- Facet compile-time specialization ---
 	// Facet index arrives as a vertex attribute (stepMode: instance), not a storage buffer.
@@ -223,6 +234,7 @@
       @location(0) rectCorner: vec2<f32>,
       @builtin(instance_index) instanceIdx: u32,
       {{FACET_PARAM}}
+      {{SEAM_PARAM}}
     ) -> VertexOutput {
       {{FACET_DISCARD}}
       let x0 = x0Values[instanceIdx];
@@ -246,10 +258,11 @@
       // Apply inset (shrink rect inward on all sides)
       let ix = markConstants.inset * sign(p1.x - p0.x);
       let iy = markConstants.inset * sign(p1.y - p0.y);
+      {{SEAM_INSETS}}
 
       // Interpolate rectangle corners and apply pixel offsets
-      let finalX = mix(p0.x + ix, p1.x - ix, rectCorner.x) + markConstants.dx;
-      let finalY = mix(p0.y + iy, p1.y - iy, rectCorner.y) + markConstants.dy;
+      let finalX = mix(p0.x + ix0, p1.x - ix1, rectCorner.x) + markConstants.dx;
+      let finalY = mix(p0.y + iy0, p1.y - iy1, rectCorner.y) + markConstants.dy;
       let enterAlpha = entranceAlpha(markConstants.entranceAxis);
 
       // Convert to normalized device coordinates
@@ -326,7 +339,22 @@
     }
   `
 		.replace('{{FACET_PARAM}}', faceted ? '@location(1) facetIdx: f32,' : '')
+		.replace('{{SEAM_PARAM}}', seamAxis ? '@location(2) seam: u32,' : '')
+		.replace('{{SEAM_INSETS}}', seamInsetsWGSL(seamAxis))
 		.replace('{{FACET_DISCARD}}', faceted ? FACET_DISCARD_WGSL : '');
+
+	/**
+	 * Each side's inset. On the binned axis of a binned mark, a side the cut
+	 * made (seam bit 0 lower, 1 upper: p0 is the lower edge) takes none.
+	 */
+	function seamInsetsWGSL(axis: 'x' | 'y' | null): string {
+		const flush = (bit: number, inset: string) => `select(${inset}, 0.0, (seam & ${bit}u) != 0u)`;
+		return `
+      let ix0 = ${axis === 'x' ? flush(1, 'ix') : 'ix'};
+      let ix1 = ${axis === 'x' ? flush(2, 'ix') : 'ix'};
+      let iy0 = ${axis === 'y' ? flush(1, 'iy') : 'iy'};
+      let iy1 = ${axis === 'y' ? flush(2, 'iy') : 'iy'};`;
+	}
 
 	const vertexBufferLayout: GPUVertexBufferLayout[] = [
 		{
@@ -340,6 +368,16 @@
 						arrayStride: 4,
 						stepMode: 'instance' as GPUVertexStepMode,
 						attributes: [{ shaderLocation: 1, offset: 0, format: 'float32' as GPUVertexFormat }]
+					}
+				]
+			: []),
+		// A binned mark's seams: per-instance u32, in the slot after the facet's.
+		...(seamAxis
+			? [
+					{
+						arrayStride: 4,
+						stepMode: 'instance' as GPUVertexStepMode,
+						attributes: [{ shaderLocation: 2, offset: 0, format: 'uint32' as GPUVertexFormat }]
 					}
 				]
 			: [])
@@ -372,7 +410,9 @@
 				: bandAxis === 'y'
 					? ([BINDINGS.Y0, BINDINGS.Y1] as const)
 					: null;
-		renderer.setBinning(rebinSource, 'interval', edges);
+		// Seams only where the pipeline reads them, on the axis it was built for.
+		const seams = seamAxis && seamAxis === bandAxis ? SEAM_VERTEX_SLOT : null;
+		renderer.setBinning(rebinSource, 'interval', edges, seams);
 	});
 
 	// Whether this write lands: the first of the catch-up's data version
@@ -537,7 +577,31 @@
 			if (!facetBuffer) return;
 			passEncoder.setVertexBuffer(1, facetBuffer);
 		}
+		if (seamAxis) {
+			// A cut's seams while one holds, zeros (no seams) otherwise.
+			const seams = renderer.getVertexBuffer(SEAM_VERTEX_SLOT) ?? noSeams(renderer.instanceCount);
+			passEncoder.setVertexBuffer(SEAM_VERTEX_SLOT, seams);
+		}
 		passEncoder.draw(rectVertexCount, renderer.instanceCount);
+	}
+
+	/**
+	 * Zeros for the seam slot, at least `count` rows: a binned mark draws with
+	 * no seams most of the time. Grown with headroom and zero-filled at
+	 * creation (WebGPU's guarantee), so a frame only compares a size.
+	 */
+	let seamZeros: GPUBuffer | null = null;
+	function noSeams(count: number): GPUBuffer {
+		const bytes = Math.max(16, count * 4);
+		if (!seamZeros || seamZeros.size < bytes) {
+			seamZeros?.destroy();
+			seamZeros = webGPUContext.getDevice().createBuffer({
+				size: Math.ceil((bytes * 1.5) / 4) * 4,
+				usage: GPUBufferUsage.VERTEX,
+				label: 'rects-no-seams'
+			});
+		}
+		return seamZeros;
 	}
 
 	onMount(() =>
@@ -574,11 +638,14 @@
 			gpuCoordinator?.retainRenderer(markId, {
 				destroy() {
 					rgb?.destroy();
+					// Read at destroy: a retained renderer still draws, and may grow it.
+					seamZeros?.destroy();
 					r.destroy();
 				}
 			});
 		if (retained) return;
 		if (rgb) rgb.destroy();
+		seamZeros?.destroy();
 		if (r) r.destroy();
 	});
 </script>

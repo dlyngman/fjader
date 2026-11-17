@@ -104,7 +104,10 @@ export class BaseGPURenderer {
 		source: RebinSource;
 		geometry: BinGeometry;
 		edges: readonly [number, number] | null;
+		seams: number | null;
 	} | null = null;
+	/** Whether the seams slot holds a cut's seams (dropped when the hold ends). */
+	#seamsWritten = false;
 	/** The data version the rebin decision was taken for: one per version. */
 	#rebinVersion = -1;
 	/** The decision's forward map, for this version's first morphed write. */
@@ -527,7 +530,8 @@ export class BaseGPURenderer {
 	/** writeVertexBuffer's upload, whatever a hold defers. */
 	#writeVertexNow(slot: number, data: AllowSharedBufferSource): void {
 		if (!this.#device) return;
-		this.#lastVertex.set(slot, data);
+		// A cut's seams are its own, not data a later cut copies.
+		if (slot !== this.#binning?.seams) this.#lastVertex.set(slot, data);
 
 		let buffer = this.#vertexBuffers.get(slot);
 		const requiredSize = data.byteLength;
@@ -603,19 +607,25 @@ export class BaseGPURenderer {
 		source: RebinSource | null,
 		geometry: BinGeometry,
 		/** The static bindings holding each row's bin edges (lower, upper): a cut writes them. */
-		edges: readonly [number, number] | null = null
+		edges: readonly [number, number] | null = null,
+		/**
+		 * A per-instance vertex slot for a cut's seams (`BinCut.seams`), which
+		 * the renderer's pipeline reads (no buffer there: no seams), or null.
+		 */
+		seams: number | null = null
 	): void {
 		const b = this.#binning;
 		if (
 			b?.source === source &&
 			b?.geometry === geometry &&
 			b?.edges?.[0] === edges?.[0] &&
-			b?.edges?.[1] === edges?.[1]
+			b?.edges?.[1] === edges?.[1] &&
+			b?.seams === seams
 		) {
 			return;
 		}
 		if (this.#hold) this.#releaseHold();
-		this.#binning = source ? { source, geometry, edges } : null;
+		this.#binning = source ? { source, geometry, edges, seams } : null;
 		this.#rebinVersion = -1;
 		this.#pendingRemap = null;
 	}
@@ -716,6 +726,11 @@ export class BaseGPURenderer {
 			if (rows) this.#writeVertexNow(slot, rows);
 		}
 		this.#setCountNow(cut.side.lower.length);
+		const seams = this.#binning?.seams ?? null;
+		if (seams !== null) {
+			this.#writeVertexNow(seams, cut.seams);
+			this.#seamsWritten = true;
+		}
 		const hold = this.#holding(cut.fromNew);
 		hold.cut = { fromHeld: cut.fromHeld, rowIds: cut.side.lower };
 	}
@@ -796,9 +811,26 @@ export class BaseGPURenderer {
 		if (!hold) return;
 		this.#hold = null;
 		this.#morphed?.whenLanding(null);
+		this.#dropSeams();
 		for (const [binding, data] of hold.attributes) this.writeAttribute(binding, data);
 		for (const [slot, data] of hold.vertex) this.writeVertexBuffer(slot, data);
 		if (hold.count !== null) this.updateInstanceCount(hold.count);
+	}
+
+	/**
+	 * The cut's seams go with its hold: the renderer draws without them (no
+	 * buffer in the slot) from the next frame. Destroyed now: a frame that drew
+	 * with them has been submitted, and WebGPU keeps a buffer alive for work
+	 * already submitted.
+	 */
+	#dropSeams(): void {
+		if (!this.#seamsWritten) return;
+		this.#seamsWritten = false;
+		const slot = this.#binning?.seams;
+		if (slot == null) return;
+		this.#vertexBuffers.get(slot)?.destroy();
+		this.#vertexBuffers.delete(slot);
+		this.invalidateLayer();
 	}
 
 	/** The instance count, whatever a hold defers. */

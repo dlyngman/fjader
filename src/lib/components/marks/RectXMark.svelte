@@ -5,7 +5,7 @@
 	import { Rects } from '../rendering';
 	import { getGPUContext } from '$lib/gpu';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
-	import { expandBinForExtent } from '$lib/sql/bin';
+	import { expandBinForExtent, isBinExpression } from '$lib/sql/bin';
 	import { isCategoricalScale } from '$lib/scales/scale-categories';
 	import {
 		buildSelectFromChannels,
@@ -361,6 +361,7 @@
 		dataVersion={setup?.dataVersion || 0}
 		landsFor={setup?.landsFor ?? 0}
 		rebinSource={setup?.rebinSource ?? null}
+		binnedAxis={isBinExpression(ey1) ? 'y' : null}
 		bandAxis={setup?.alignedBand ?? null}
 		grow={hasExplicitBounds ? null : 'x'}
 		inset={entry.inset ?? 0.5}
