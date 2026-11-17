@@ -48,11 +48,21 @@ let warnedMorphUnsupported = false;
 export const rebinTuning = {
 	swapNear: 0.75,
 	/**
-	 * The seam fade's spring: about 95% in 120 ms, at rest (SEAM_FADE_PRECISION)
-	 * in about 150. Gaps of a pixel or two: anything slower reads as lag.
+	 * The seam fade's spring: about 95% in 200 ms, at rest (SEAM_FADE_PRECISION)
+	 * in about 245 (chosen on device; 120 ms read as a pop). `seamFadeStiffnessFor`
+	 * converts a duration.
 	 */
-	seamFadeStiffness: 1560
+	seamFadeStiffness: 560
 };
+
+/**
+ * The seam fade's stiffness for `ms` to 95%: a critically damped spring from
+ * rest is 95% there at ωt ≈ 4.74, and the stiffness is ω².
+ */
+export function seamFadeStiffnessFor(ms: number): number {
+	const omega = 4.74 / (ms / 1000);
+	return omega * omega;
+}
 
 /** A seam fade ends within 2% of an inset: well under a pixel. */
 const SEAM_FADE_PRECISION = 0.02;
