@@ -26,13 +26,21 @@ import type { BinLayout } from '$lib/components/marks/lifecycle/bin-layout';
 export const REMAP_HEADER_WORDS = 8;
 
 /**
- * What a result is, relative to the rows the GPU holds: a rebin to travel
- * from through `map` (forward: each new bin starts where the old ones it
- * covers were drawn), or null for anything else (the same rows, which fold,
- * or rows that do not correspond, which snap: MorphedChannels tells those
- * apart by the row ids).
+ * What a result is, relative to the rows the GPU holds:
+ * - `forward`: a rebin to travel from through `map`: the new layout is
+ *   drawn at once, each new bin starting where the old ones it covers were
+ *   drawn (a split, or a merge that cannot hold).
+ * - `hold`: a merge into coarser bins that nest the held ones. The held
+ *   layout stays drawn and its rows travel to their parent's new value,
+ *   gathered through `map` (held bins from new ones); the new layout is
+ *   written when they land, through a forward map, invisibly.
+ * - null for anything else: the same rows, which fold, or rows that do not
+ *   correspond, which snap (MorphedChannels tells those apart by row ids).
  */
-export type RebinDecision = { kind: 'forward'; map: Uint32Array } | null;
+export type RebinDecision =
+	| { kind: 'forward'; map: Uint32Array }
+	| { kind: 'hold'; map: Uint32Array }
+	| null;
 
 /**
  * How a renderer draws its rows over bins, which decides how a rebin can
@@ -51,8 +59,11 @@ export type BinGeometry = 'interval' | 'point';
 export interface RebinSource {
 	/** The current result's version: one decision per version, on its first write. */
 	dataVersion(): number;
-	/** The current result against the layout last committed. Does not commit. */
-	takeRebin(): RebinDecision;
+	/**
+	 * The current result against the layout last committed. Does not commit.
+	 * `canHold`: whether the renderer can hold its layout through a merge.
+	 */
+	takeRebin(canHold: boolean): RebinDecision;
 	/** The renderer has written the current result's layout to the GPU. */
 	commitLayout(): void;
 }
@@ -71,7 +82,16 @@ export interface BinRemapSide {
  * correspond (a different series or facet set or order): the caller snaps.
  * Reads edges at stride and the ids of each facet's first run: O(B + F·S).
  */
-export function buildBinRemap(prev: BinRemapSide, next: BinRemapSide): Uint32Array | null {
+export function buildBinRemap(
+	prev: BinRemapSide,
+	next: BinRemapSide,
+	/**
+	 * Overlaps below this share of the new bin's width are left out (and
+	 * count as uncovered): slivers from Float32 edges that are one rounding
+	 * apart, which would make a nested bin look like it straddles two.
+	 */
+	minWeight = 0
+): Uint32Array | null {
 	const { series: S, facets: F } = next.layout;
 	if (prev.layout.series !== S || prev.layout.facets !== F) return null;
 	if (prev.ids.length !== next.ids.length) return null;
@@ -110,7 +130,7 @@ export function buildBinRemap(prev: BinRemapSide, next: BinRemapSide): Uint32Arr
 			const oLo = Number(prev.lower[k * S]);
 			if (oLo >= hi) break;
 			const overlap = Math.min(hi, Number(prev.upper[k * S])) - Math.max(lo, oLo);
-			if (overlap <= 0) continue;
+			if (overlap <= 0 || overlap / width < minWeight) continue;
 			oldBin.push(k);
 			weight.push(overlap / width);
 			covered += overlap;
@@ -135,4 +155,30 @@ export function buildBinRemap(prev: BinRemapSide, next: BinRemapSide): Uint32Arr
 	at += K;
 	new Float32Array(words.buffer, at * 4, Bn).set(uncovered);
 	return words;
+}
+
+/** Edge rounding tolerated when telling nested bins (`buildBinRemap`'s minWeight, `isNested`). */
+export const NEST_EPSILON = 1e-3;
+
+/**
+ * Whether a map built from new bins onto the held ones (`buildBinRemap(new,
+ * held, NEST_EPSILON)`) nests: every held bin lies inside exactly one new bin
+ * (one overlap, weight ≥ 1 − ε) or outside all of them (none: a held bin in
+ * the window's margin with no parent), and at least one has a parent. Reads
+ * the map's offsets and weights: O(held bins).
+ */
+export function isNested(map: Uint32Array, epsilon = NEST_EPSILON): boolean {
+	const bins = map[0];
+	const K = map[4];
+	const offsetsAt = REMAP_HEADER_WORDS;
+	const weightAt = offsetsAt + bins + 1 + K;
+	const weights = new Float32Array(map.buffer, map.byteOffset, map.length);
+	let parented = 0;
+	for (let b = 0; b < bins; b++) {
+		const n = map[offsetsAt + b + 1] - map[offsetsAt + b];
+		if (n === 0) continue;
+		if (n > 1 || weights[weightAt + map[offsetsAt + b]] < 1 - epsilon) return false;
+		parented++;
+	}
+	return parented > 0;
 }

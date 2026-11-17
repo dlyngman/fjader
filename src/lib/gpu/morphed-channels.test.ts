@@ -62,7 +62,7 @@ function fakes() {
 				// would change every exact list below.
 				setPipeline(pipeline: { label?: string }) {
 					const label = pipeline.label ?? '';
-					if (label.startsWith('resolve-') || label.startsWith('remap')) {
+					if (label.startsWith('resolve-') || label.startsWith('remap') || label === 'gather') {
 						log.push(`pipeline ${label}`);
 					}
 				},
@@ -934,5 +934,105 @@ describe('the pixel-space resolve on a real tween (reference)', () => {
 		const rows = heights(7, 630, 50);
 		expect(rows.length).toBeGreaterThan(10);
 		for (const { f, height } of rows) expect(height).toBeCloseTo((1 - f) * 0.9 + f * 0.5, 5);
+	});
+});
+
+describe('MorphedChannels: a merge’s gather', () => {
+	// The held layout: three rows. The new result: two (merged) rows, and a map
+	// that is opaque here (the kernel is tested against its reference).
+	const MAP = new Uint32Array(16);
+	const gatherWrite = (m: MorphedChannels, y0: Float32Array, y1: Float32Array) =>
+		m.write(
+			values(9, 9),
+			[
+				[2, y0],
+				[3, y1]
+			],
+			undefined,
+			null,
+			MAP
+		);
+
+	it('keeps the held rows, folds from the screen, gathers into `to` before resolving', () => {
+		const f = fakes();
+		const m = morphed(f);
+		update(m, values(1, 2, 3), values(4, 5, 6));
+		f.frame();
+
+		gatherWrite(m, values(7, 8), values(9, 10));
+		expect(f.slots.starts).toBe(1);
+		const issued = f.frame();
+		// No snap: `from` is the screen, not `to`.
+		expect(issued).toContain('copy m-2-resolved -> m-2-from');
+		expect(issued).not.toContain('copy m-2-to -> m-2-from');
+		// The gathers come first in the pass, then the resolves, over the HELD rows.
+		expect(issued.indexOf('pipeline gather')).toBeGreaterThan(issued.indexOf('pass'));
+		const dispatches = issued.flatMap((c, i) => (c.startsWith('dispatch') ? [i] : []));
+		expect(dispatches).toHaveLength(4);
+		// Both gathers (one pipeline set per channel) dispatch before either resolve.
+		expect(issued.filter((c) => c === 'pipeline gather')).toHaveLength(2);
+		expect(issued.lastIndexOf('pipeline gather')).toBeLessThan(dispatches[2]);
+		expect(issued.filter((c) => c === 'imm count=3 t=0').length).toBeGreaterThanOrEqual(2);
+	});
+
+	it('does not touch the held rows’ ids: a later aligned write still folds', () => {
+		const f = fakes();
+		const m = morphed(f);
+		update(m, values(1, 2, 3), values(4, 5, 6));
+		f.frame();
+		gatherWrite(m, values(7, 8), values(9, 10));
+		f.frame();
+
+		update(m, values(2, 3, 4), values(5, 6, 7));
+		const issued = f.frame();
+		expect(issued).toContain('copy m-2-resolved -> m-2-from');
+		expect(issued).not.toContain('pipeline gather');
+	});
+
+	it('drops a pending gather when another write replaces `to`', () => {
+		const f = fakes();
+		const m = morphed(f);
+		update(m, values(1, 2, 3), values(4, 5, 6));
+		f.frame();
+		gatherWrite(m, values(7, 8), values(9, 10));
+		update(m, values(2, 3, 4), values(5, 6, 7));
+		expect(f.frame()).not.toContain('pipeline gather');
+	});
+
+	it('tells its waiter once, when the transition has landed', () => {
+		const f = fakes();
+		const m = morphed(f);
+		update(m, values(1, 2, 3), values(4, 5, 6));
+		f.frame();
+		let rested = 0;
+		gatherWrite(m, values(7, 8), values(9, 10));
+		m.whenAtRest(() => rested++);
+
+		f.frame();
+		f.slots.clock.step();
+		f.slots.clock.updateRenderState(0);
+		f.frame();
+		expect(rested).toBe(0);
+
+		f.slots.clock.settle();
+		f.frame();
+		expect(rested).toBe(1);
+		f.frame();
+		expect(rested).toBe(1);
+	});
+
+	it('forgets its waiter when told to', () => {
+		const f = fakes();
+		const m = morphed(f);
+		update(m, values(1, 2, 3), values(4, 5, 6));
+		f.frame();
+		let rested = 0;
+		gatherWrite(m, values(7, 8), values(9, 10));
+		m.whenAtRest(() => rested++);
+		m.whenAtRest(null);
+		f.frame();
+		f.slots.clock.settle();
+		f.frame();
+		expect(rested).toBe(0);
 	});
 });

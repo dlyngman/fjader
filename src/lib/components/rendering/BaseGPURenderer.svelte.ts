@@ -25,6 +25,22 @@ let warnedMorphUnsupported = false;
 /** writeMorphed's `scaled` when nothing is: no binding folds. */
 const NO_SCALED: readonly number[] = [];
 
+/**
+ * A merge holding the layout on the GPU while its rows travel to their
+ * parents' values (see BaseGPURenderer's REBINS). The writes it defers are
+ * the latest per slot, by reference: the arrays are the result's own.
+ */
+interface Hold {
+	/** The gather from the current result's bins onto the held ones. */
+	map: Uint32Array;
+	generation: number;
+	/** The latest morphed write, in the new layout: written at the swap. */
+	morph: Parameters<BaseGPURenderer['writeMorphed']> | null;
+	attributes: Map<number, AllowSharedBufferSource>;
+	vertex: Map<number, AllowSharedBufferSource>;
+	count: number | null;
+}
+
 export class BaseGPURenderer {
 	// Core properties
 	#markType: string;
@@ -62,6 +78,10 @@ export class BaseGPURenderer {
 	#rebinVersion = -1;
 	/** The decision's forward map, for this version's first morphed write. */
 	#pendingRemap: Uint32Array | null = null;
+	/** A merge holding the drawn layout (#beginWrite), or null. */
+	#hold: Hold | null = null;
+	/** Numbers holds, so a landing callback from an earlier one does nothing. */
+	#holdGeneration = 0;
 
 	// State management
 	#resourcesCreated = $state(false);
@@ -261,6 +281,10 @@ export class BaseGPURenderer {
 	writeAttribute(binding: number, data: AllowSharedBufferSource): void {
 		if (!this.#device || !data) return;
 		this.#beginWrite();
+		if (this.#hold) {
+			this.#hold.attributes.set(binding, data);
+			return;
+		}
 
 		// A channel that morphed and does not any more gives its buffers back, and
 		// the binding needs rebinding to the static buffer allocated below.
@@ -338,6 +362,11 @@ export class BaseGPURenderer {
 	): void {
 		if (!this.#device) return;
 		this.#beginWrite();
+		if (this.#hold) {
+			if (this.#gatherInto(bandAxis, bandIds, channels, land, scaled)) return;
+			// A channel the held rows do not have: the new layout goes up now.
+			this.#endHoldNow();
+		}
 		// A rebin's map from the rows on screen to these (MorphedChannels.write):
 		// the first morphed write of the version takes it, later ones are aligned.
 		const remap = this.#pendingRemap;
@@ -443,6 +472,10 @@ export class BaseGPURenderer {
 	writeVertexBuffer(slot: number, data: AllowSharedBufferSource): void {
 		if (!this.#device || !data) return;
 		this.#beginWrite();
+		if (this.#hold) {
+			this.#hold.vertex.set(slot, data);
+			return;
+		}
 
 		let buffer = this.#vertexBuffers.get(slot);
 		const requiredSize = data.byteLength;
@@ -484,6 +517,28 @@ export class BaseGPURenderer {
 	}
 
 	// ===== REBINS =====
+	//
+	// A binned mark's results follow its rebins (RebinSource, the lifecycle):
+	// - A split, or a merge that cannot hold: the new layout is written at
+	//   once and its rows start where the old rows they cover were drawn
+	//   (forward map), then travel.
+	// - A merge into bins that nest the drawn ones HOLDS: the drawn layout
+	//   stays (static writes and the instance count are deferred) and its
+	//   rows travel to their parent's new value (MorphedChannels' gather),
+	//   riding the scale's tween. When they land, the new layout is written
+	//   through the forward map, which starts each parent at its children's
+	//   mean: where they already are, so the swap does not show.
+	// Every result during a hold is taken against the held layout (nothing is
+	// committed): a filter result or a further nested merge gathers again,
+	// anything else ends the hold and writes the new layout through a
+	// forward map from the held one. Ending flushes every deferred write, not
+	// only the slots the new result rewrites: a mark rewrites only what
+	// changed.
+	//
+	// The geometry says whether this renderer can hold: `interval` (rows span
+	// their bins, so siblings at one height draw as their parent). `point`
+	// needs a morphing position and presence first; until then it does not
+	// hold and merges go forward.
 
 	/**
 	 * Make this renderer's rows follow a binned mark's rebins: `source` says
@@ -494,6 +549,7 @@ export class BaseGPURenderer {
 	 */
 	setBinning(source: RebinSource | null, geometry: BinGeometry): void {
 		if (this.#binning?.source === source && this.#binning?.geometry === geometry) return;
+		if (this.#hold) this.#releaseHold();
 		this.#binning = source ? { source, geometry } : null;
 		this.#rebinVersion = -1;
 		this.#pendingRemap = null;
@@ -512,9 +568,85 @@ export class BaseGPURenderer {
 		const version = binning.source.dataVersion();
 		if (version === this.#rebinVersion) return;
 		this.#rebinVersion = version;
-		const decision = binning.source.takeRebin();
+		const canHold =
+			binning.geometry === 'interval' && this.#morphed !== null && MorphedChannels.supported;
+		const decision = binning.source.takeRebin(canHold);
+		if (decision?.kind === 'hold') {
+			// Nothing is committed: the GPU keeps the held layout.
+			this.#pendingRemap = null;
+			if (this.#hold) this.#hold.map = decision.map;
+			else {
+				this.#hold = {
+					map: decision.map,
+					generation: ++this.#holdGeneration,
+					morph: null,
+					attributes: new Map(),
+					vertex: new Map(),
+					count: null
+				};
+			}
+			return;
+		}
+		if (this.#hold) this.#releaseHold();
 		this.#pendingRemap = decision?.map ?? null;
 		binning.source.commitLayout();
+	}
+
+	/**
+	 * A morphed write during a hold: gathered into the held rows, and kept for
+	 * the swap. False when it cannot gather (a channel the held rows lack).
+	 */
+	#gatherInto(...write: Parameters<BaseGPURenderer['writeMorphed']>): boolean {
+		const hold = this.#hold!;
+		const morphed = this.#morphed;
+		const [bandAxis, bandIds, channels, land, scaled = NO_SCALED] = write;
+		if (!morphed || !MorphedChannels.supported) return false;
+		// A loop, not `every`: no callback allocated per write.
+		for (let i = 0; i < channels.length; i++) if (!morphed.has(channels[i][0])) return false;
+		hold.morph = write;
+		this.#morphAxis = bandAxis;
+		this.#scaledBindings = scaled;
+		morphed.write(bandIds, channels, land, null, hold.map);
+		// The swap writes buffers the frame's draws bind, so not from inside the
+		// encode that notices the landing: right after it, one frame later.
+		const generation = hold.generation;
+		morphed.whenAtRest(() => queueMicrotask(() => this.#swap(generation)));
+		this.invalidateLayer();
+		return true;
+	}
+
+	/** The hold's rows have landed: write the new layout. Nothing if that hold has ended. */
+	#swap(generation: number): void {
+		const hold = this.#hold;
+		if (!hold || hold.generation !== generation || this.#isDestroyed) return;
+		const morph = hold.morph;
+		this.#endHoldNow();
+		if (morph) this.writeMorphed(...morph);
+	}
+
+	/**
+	 * End the hold now: flush what it deferred, then take the current result
+	 * against the held layout as a forward map (for the next morphed write)
+	 * and commit it.
+	 */
+	#endHoldNow(): void {
+		this.#releaseHold();
+		const binning = this.#binning;
+		if (!binning) return;
+		const decision = binning.source.takeRebin(false);
+		this.#pendingRemap = decision?.map ?? null;
+		binning.source.commitLayout();
+	}
+
+	/** Stop holding and write every deferred static write and the instance count. */
+	#releaseHold(): void {
+		const hold = this.#hold;
+		if (!hold) return;
+		this.#hold = null;
+		this.#morphed?.whenAtRest(null);
+		for (const [binding, data] of hold.attributes) this.writeAttribute(binding, data);
+		for (const [slot, data] of hold.vertex) this.writeVertexBuffer(slot, data);
+		if (hold.count !== null) this.updateInstanceCount(hold.count);
 	}
 
 	// ===== INTERNAL HELPERS =====
@@ -566,6 +698,10 @@ export class BaseGPURenderer {
 
 	updateInstanceCount(count: number): void {
 		this.#beginWrite();
+		if (this.#hold) {
+			this.#hold.count = count;
+			return;
+		}
 		this.#instanceCount = count;
 		this.invalidateLayer();
 	}
@@ -634,6 +770,7 @@ export class BaseGPURenderer {
 		this.#isDestroyed = true;
 		this.#initGeneration++;
 
+		this.#hold = null;
 		// Before the buffers below: it unregisters compute work that reads them.
 		this.#morphed?.destroy();
 		this.#morphed = null;

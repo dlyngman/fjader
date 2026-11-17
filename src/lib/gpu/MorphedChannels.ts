@@ -9,7 +9,13 @@ import {
 import { TransitionClock, type ClockLoop } from '$lib/animation/TransitionClock';
 import { immediatesSupported } from './immediates';
 import { foldScaleKind, type FoldScaleKind } from './ScaleNormalize';
-import { REMAP_IMMEDIATE_SIZE, remapPipelineFor, type RemapKind } from './RemapShader';
+import {
+	GATHER_IMMEDIATE_SIZE,
+	REMAP_IMMEDIATE_SIZE,
+	gatherPipelineFor,
+	remapPipelineFor,
+	type RemapKind
+} from './RemapShader';
 
 /**
  * Channels of one mark that morph between data updates rather than replacing
@@ -56,6 +62,12 @@ import { REMAP_IMMEDIATE_SIZE, remapPipelineFor, type RemapKind } from './RemapS
  * new segment, data landing, the mark's own transition), the tween's end
  * lands, and a channel at rest stays out: drawn under the moving domain, `to`
  * already follows the static path, at no cost.
+ *
+ * THE GATHER. While a merge holds its layout (BaseGPURenderer), a write
+ * carries the new rows in the NEW layout and a map onto the held one: the
+ * rows stay, `to` takes each held row's parent value (RemapShader's gather)
+ * and the write travels as an aligned one. `whenAtRest` tells the renderer
+ * when it has landed, so it can write the new layout.
  */
 
 /**
@@ -189,6 +201,8 @@ interface Channel {
 	 * Null without a remap, or for a channel with nothing on screen (it snaps).
 	 */
 	remapSource: GPUBuffer | null;
+	/** The new rows a pending gather reads (a hold's write), in the new layout. */
+	gatherSource: GPUBuffer | null;
 }
 
 /**
@@ -245,6 +259,12 @@ export class MorphedChannels {
 	 */
 	#retired: GPUBuffer[] = [];
 
+	/** A pending gather's map (a hold's write): new bins onto the held ones. */
+	#gather: GPUBuffer | null = null;
+	/** Called once, from an encode, when nothing moves any more (whenAtRest). */
+	#restWaiter: (() => void) | null = null;
+	#gatherImmediates = new ArrayBuffer(GATHER_IMMEDIATE_SIZE);
+	#gatherImmediatesView = new DataView(this.#gatherImmediates);
 	/** The next dispatch starts from `to`. */
 	#snapPending = false;
 	/** The next dispatch starts from what is on screen. */
@@ -305,6 +325,21 @@ export class MorphedChannels {
 		this.#passDescriptor = { label: `${options.label}-resolve` };
 	}
 
+	/** Whether `binding` morphs: a hold can gather only into channels it has. */
+	has(binding: number): boolean {
+		return this.#channels.has(binding);
+	}
+
+	/**
+	 * Call `fn` once, from an encode, when no channel moves: every transition
+	 * and ride has landed and no write is pending. Replaces any earlier waiter.
+	 * Called from inside the frame's compute work: `fn` must not write buffers
+	 * a draw this frame binds (defer it, e.g. to a microtask).
+	 */
+	whenAtRest(fn: (() => void) | null): void {
+		this.#restWaiter = fn;
+	}
+
 	/** The buffer the vertex stage binds for this channel, if it morphs. */
 	resolved(binding: number): GPUBuffer | undefined {
 		return this.#channels.get(binding)?.resolved;
@@ -333,8 +368,22 @@ export class MorphedChannels {
 		 * start where the old ones they cover were drawn, and travel, rather
 		 * than snap. Ignored when the row set did not change.
 		 */
-		remap: Uint32Array | null = null
+		remap: Uint32Array | null = null,
+		/**
+		 * For a write during a merge's hold: the map from these rows' (new)
+		 * bins onto the held ones (`buildBinRemap(new, held)`). The held rows
+		 * stay, `rowIds` and `land` are not read, and every channel must
+		 * already morph (`has`). See THE GATHER.
+		 */
+		gather: Uint32Array | null = null
 	): boolean {
+		if (gather && this.#alignmentKey !== null) {
+			this.#writeGather(channels, gather);
+			return false;
+		}
+		// Any other write replaces `to` outright: a gather still pending would
+		// overwrite it with the held layout's.
+		if (this.#gather) this.#retireGather();
 		const key = alignmentKey(rowIds);
 		let travels = this.#alignmentKey === key;
 		const hadRows = this.#alignmentKey !== null;
@@ -429,6 +478,110 @@ export class MorphedChannels {
 	}
 
 	/**
+	 * A hold's write: each channel's new rows go to a buffer of their own for
+	 * the gather, which writes the held `to` in the next encode. The held rows
+	 * fold from the screen and travel, as an aligned write does. With a remap
+	 * pending (the held layout was written this frame and has not run), the
+	 * remap builds `from` and the gather `to`: no fold.
+	 */
+	#writeGather(
+		channels: readonly (readonly [number, AllowSharedBufferSource])[],
+		gather: Uint32Array
+	): void {
+		for (const [binding, data] of channels) {
+			const channel = this.#channels.get(binding);
+			if (!channel) continue;
+			if (channel.gatherSource) this.#retired.push(channel.gatherSource);
+			const source = this.#device.createBuffer({
+				size: Math.max(16, data.byteLength),
+				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+				label: `${this.#label}-${binding}-gather`
+			});
+			this.#device.queue.writeBuffer(source, 0, data as ArrayBufferView<ArrayBuffer>);
+			channel.gatherSource = source;
+			channel.land = false;
+		}
+		if (this.#gather) this.#retired.push(this.#gather);
+		const map = this.#device.createBuffer({
+			size: Math.max(16, gather.byteLength),
+			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+			label: `${this.#label}-gather-map`
+		});
+		this.#device.queue.writeBuffer(map, 0, gather as Uint32Array<ArrayBuffer>);
+		this.#gather = map;
+
+		this.#dirty = true;
+		if (!this.#remap) this.#foldPending = true;
+		this.#startTransition();
+		if (transitionsObserved()) noteTransition('morph', false, this.#affectedCharts, this.#label);
+		if (!this.#registered) {
+			this.#registered = true;
+			this.#host.registerComputeWork(this.#label, (encoder) => this.encode(encoder));
+		}
+	}
+
+	/** Drop a pending gather (another write replaced `to`): its buffers go after this frame. */
+	#retireGather(): void {
+		if (this.#gather) this.#retired.push(this.#gather);
+		this.#gather = null;
+		for (const channel of this.#channelList) {
+			if (channel.gatherSource) this.#retired.push(channel.gatherSource);
+			channel.gatherSource = null;
+		}
+	}
+
+	/**
+	 * The gather dispatches, one per channel with new rows: the held `to`
+	 * takes each held row's parent value (RemapShader's gather). In the pass
+	 * after any remap and before the resolves, which read `to`.
+	 */
+	#encodeGathers(pass: GPUComputePassEncoder, map: GPUBuffer): void {
+		const channels = this.#channelList;
+		const { pipeline, layout } = gatherPipelineFor(this.#device);
+		for (let i = 0; i < channels.length; i++) {
+			const channel = channels[i];
+			const source = channel.gatherSource;
+			if (!source) continue;
+			channel.gatherSource = null;
+			if (channel.count > 0) {
+				pass.setPipeline(pipeline);
+				// Per write: the source is a different buffer each time.
+				const bindGroup = this.#device.createBindGroup({
+					layout,
+					entries: [
+						{ binding: 0, resource: { buffer: source } },
+						{ binding: 1, resource: { buffer: channel.to } },
+						{ binding: 2, resource: { buffer: map } }
+					]
+				});
+				this.#gatherImmediatesView.setUint32(0, channel.count, true);
+				pass.setImmediates(0, this.#gatherImmediates);
+				pass.setBindGroup(0, bindGroup);
+				pass.dispatchWorkgroups(Math.ceil(channel.count / RESOLVE_WORKGROUP));
+			}
+			this.#retired.push(source);
+		}
+		this.#retired.push(map);
+		this.#gather = null;
+	}
+
+	/**
+	 * Tell a waiter (whenAtRest) that nothing moves: the clock has finished,
+	 * no channel rides a tween, and no write is pending. After the encode's
+	 * own work, so a landing this frame counts.
+	 */
+	#notifyRest(): void {
+		const waiter = this.#restWaiter;
+		if (!waiter) return;
+		if (this.#resolvedT < 1 || this.#gather || this.#remap) return;
+		if (this.#foldPending || this.#snapPending || this.#dirty) return;
+		const channels = this.#channelList;
+		for (let i = 0; i < channels.length; i++) if (channels[i].riding) return;
+		this.#restWaiter = null;
+		waiter();
+	}
+
+	/**
 	 * Stop morphing a channel and release its buffers. Returns whether it was
 	 * morphing, in which case the caller's binding has lost its buffer.
 	 */
@@ -480,6 +633,7 @@ export class MorphedChannels {
 			!this.#tweenWork
 		) {
 			this.#moveDrawn();
+			this.#notifyRest();
 			return;
 		}
 
@@ -536,6 +690,9 @@ export class MorphedChannels {
 		// Dispatches in one pass see each other's writes, in order.
 		if (remaps) this.#encodeRemaps(pass, remap!);
 		else if (remap) this.#retireRemap();
+		// Gathers after remaps, before resolves: they write the `to` both read.
+		const gather = this.#gather;
+		if (gather) this.#encodeGathers(pass, gather);
 
 		this.#immediatesView.setFloat32(4, resolveT, true);
 		let plainSet = false;
@@ -600,6 +757,7 @@ export class MorphedChannels {
 		}
 		pass.end();
 		this.#moveDrawn();
+		this.#notifyRest();
 	}
 
 	/**
@@ -786,7 +944,9 @@ export class MorphedChannels {
 		}
 		this.#ownClock?.stop();
 		this.#ownClock = null;
+		this.#restWaiter = null;
 		this.#retireRemap();
+		this.#retireGather();
 		this.#destroyRetired();
 		for (const channel of this.#channelList) this.#destroyChannel(channel);
 		this.#channels.clear();
@@ -857,7 +1017,8 @@ export class MorphedChannels {
 			kind: null,
 			scaledBindGroup: null,
 			scaledBindGroupKind: null,
-			remapSource: null
+			remapSource: null,
+			gatherSource: null
 		};
 		// What was drawn describes the screen, not the buffers: a reallocated
 		// channel keeps it, which a remap reads (most zoom-in rebins reallocate).

@@ -102,6 +102,8 @@ import {
 import { binLayout } from './bin-layout';
 import {
 	buildBinRemap,
+	isNested,
+	NEST_EPSILON,
 	type BinRemapSide,
 	type RebinDecision,
 	type RebinSource
@@ -517,6 +519,8 @@ export class MarkLifecycleV2 {
 	#lastBinSpec: string | null = null;
 	/** A view in the bins' units, reused: #onViewport runs every frame (no allocation). */
 	#viewScratch: [number, number] = [0, 0];
+	/** The last viewport on the binned axis, in the scale's units (a hold's coverage). */
+	#lastView: [number, number] | null = null;
 	/**
 	 * The rows the renderer last committed (`rebinSource`), as a remap reads
 	 * them. Holds references to that result's columns, so the previous table
@@ -633,6 +637,7 @@ export class MarkLifecycleV2 {
 				getData: () => this.data,
 				onViewport: (axis, domain) => this.#onViewport(axis, domain),
 				triggerReBin: (axis, domain) => {
+					if (axis === 'x' || axis === 'y') this.#noteView(axis, [domain[0], domain[1]]);
 					// The window around the new view, set before the parts change: the
 					// re-registration's first query reads it as it is sent.
 					if (this.#windowedAxis() === axis) {
@@ -2800,23 +2805,28 @@ export class MarkLifecycleV2 {
 	 */
 	readonly rebinSource: RebinSource = {
 		dataVersion: () => this.dataVersion,
-		takeRebin: () => this.#takeRebin(),
+		takeRebin: (canHold) => this.#takeRebin(canHold),
 		commitLayout: () => {
 			this.#takenSide = this.#pendingSide;
 		}
 	};
 
 	/**
-	 * The current result against the rows last committed: a forward map when it
-	 * is a rebin of them (`buildBinRemap`), else null. Null when the bins did
-	 * not change, or the rows on either side are not the dense layout, or do
-	 * not correspond (the rebin then snaps).
+	 * The current result against the rows last committed: a hold when it
+	 * merges them into bins that nest them (`#holdMap`), a forward map when it
+	 * is any other rebin of them (`buildBinRemap`), else null. Null when the
+	 * bins did not change, or the rows on either side are not the dense layout,
+	 * or do not correspond (the rebin then snaps).
+	 *
+	 * While the renderer holds, nothing new is committed, so every result is
+	 * taken against the held rows: a filter result or a further nested merge
+	 * holds again (a new gather), anything else ends the hold.
 	 *
 	 * Reads the result's columns at stride (O(B + F·S)) and builds the map in
 	 * one pass over both sides' bins: binned data, bounded by the dense row
 	 * limit.
 	 */
-	#takeRebin(): RebinDecision {
+	#takeRebin(canHold: boolean): RebinDecision {
 		const side = this.#remapSide();
 		const last = this.#takenSide;
 		this.#pendingSide = side;
@@ -2824,8 +2834,41 @@ export class MarkLifecycleV2 {
 		// Other bins, or the same bins over a moved window: both stamped on the
 		// results, so a pan's window moving while a query flies cannot mislead.
 		if (!binRowsMoved(last.binKey, last.window, side.binKey, side.window)) return null;
+		const held = canHold ? this.#holdMap(last, side) : null;
+		if (held) return { kind: 'hold', map: held };
 		const map = buildBinRemap(last, side);
 		return map ? { kind: 'forward', map } : null;
+	}
+
+	/**
+	 * The gather for holding `held` through a merge into `next`, or null when
+	 * it should not hold:
+	 * - not a rebin (the same bins over a moved window: the forward map is
+	 *   already exact);
+	 * - a catch-up result, which lands at once;
+	 * - the bins do not nest (weeks into months straddle);
+	 * - the held rows do not cover the view: a zoom out past the window's
+	 *   margin would show blank strips until the swap.
+	 */
+	#holdMap(held: TakenSide, next: TakenSide): Uint32Array | null {
+		if (held.binKey === next.binKey) return null;
+		if (this.#handle?.resultCause === 'catchUp') return null;
+		if (!this.#heldCoversView(held)) return null;
+		const map = buildBinRemap(next, held, NEST_EPSILON);
+		return map && isNested(map) ? map : null;
+	}
+
+	/**
+	 * Whether the held rows span the last viewport on the binned axis. Both in
+	 * the scale's units: the bin edges are what the bars are drawn with. The
+	 * first facet's first and last bins, at the series stride.
+	 */
+	#heldCoversView(held: TakenSide): boolean {
+		const view = this.#lastView;
+		if (!view) return false;
+		const { bins, series } = held.layout;
+		if (bins === 0) return false;
+		return Number(held.lower[0]) <= view[0] && Number(held.upper[(bins - 1) * series]) >= view[1];
 	}
 
 	/** The current result as one side of a remap, or null when it is not the dense layout. */
@@ -2899,6 +2942,7 @@ export class MarkLifecycleV2 {
 	 * stops windowing (fitDomain off) goes back to the whole extent.
 	 */
 	#onViewport(axis: 'x' | 'y', domain: [number, number]): void {
+		this.#noteView(axis, domain);
 		const handle = this.#handle;
 		if (!handle) return;
 		const current = handle.params.binWindow ?? null;
@@ -2916,6 +2960,14 @@ export class MarkLifecycleV2 {
 		const view = viewInBinUnits(domain, this.#timeOrigin(axis), this.#viewScratch);
 		if (!binWindowNeedsMove(current, view, band ? binExtent(band) : null)) return;
 		handle.setBinWindow(binWindowFor(view, band), true);
+	}
+
+	/** The viewport on the binned axis, as the rung reads it each frame (no allocation). */
+	#noteView(axis: 'x' | 'y', domain: readonly [number, number]): void {
+		if (axis !== this.#binnedAxis()) return;
+		const view = (this.#lastView ??= [0, 0]);
+		view[0] = Math.min(domain[0], domain[1]);
+		view[1] = Math.max(domain[0], domain[1]);
 	}
 
 	/** The axis a bin() channel is on, when exactly one is; null without bins or with both. */

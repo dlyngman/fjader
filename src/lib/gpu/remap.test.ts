@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { buildBinRemap, type BinRemapSide } from './bin-remap';
-import { remapReference } from './RemapShader';
+import { buildBinRemap, isNested, NEST_EPSILON, type BinRemapSide } from './bin-remap';
+import { gatherReference, remapReference } from './RemapShader';
 import { binLayout } from '$lib/components/marks/lifecycle/bin-layout';
 
 /** A dense side: `edges` are the bins' bounds, each bin repeated per series and facet. */
@@ -142,5 +142,63 @@ describe('the bins remap', () => {
 		const out = new Float32Array(2);
 		remapReference('linear', [NaN], [1, 2], map, SAME, SAME, 2, out);
 		expect(Number.isNaN(out[0])).toBe(true);
+	});
+});
+
+/** A held side's rows gathered from a new side's (the hold's `to`), from `to` as it was. */
+function gather(held: BinRemapSide, next: BinRemapSide, src: number[], to: number[]): number[] {
+	const map = buildBinRemap(next, held, NEST_EPSILON)!;
+	return Array.from(gatherReference(src, Float32Array.from(to), map, to.length));
+}
+
+describe('a merge that holds: nesting and the gather', () => {
+	const nested = (held: BinRemapSide, next: BinRemapSide) =>
+		isNested(buildBinRemap(next, held, NEST_EPSILON)!);
+
+	it('tells nested merges from the rest', () => {
+		// Pairs of children into parents: nested.
+		expect(nested(side([0, 5, 10, 15, 20]), side([0, 10, 20]))).toBe(true);
+		// Weeks into months: the week from 28 to 35 straddles two.
+		expect(nested(side([0, 7, 14, 21, 28, 35]), side([0, 31, 59]))).toBe(false);
+		// A split: each held bin covers two new ones.
+		expect(nested(side([0, 10, 20]), side([0, 5, 10, 15, 20]))).toBe(false);
+		// Nothing in common: no held bin has a parent.
+		expect(nested(side([0, 10]), side([20, 40]))).toBe(false);
+	});
+
+	it('tolerates edges one Float32 rounding apart', () => {
+		// Time offsets near 6e7 s have about 4 s of resolution: a parent's edge
+		// can land a few seconds into its neighbour's child.
+		const t = 6e7;
+		const day = 86400;
+		const fine = side([t, t + day / 2, t + day, t + (3 * day) / 2, t + 2 * day]);
+		const coarse = side([t, t + day + 4, t + 2 * day]);
+		expect(nested(fine, coarse)).toBe(true);
+		// Without the tolerance the sliver makes it straddle.
+		expect(isNested(buildBinRemap(coarse, fine)!)).toBe(false);
+	});
+
+	it('gives each held row its parent’s value, per series and facet', () => {
+		const held = side([0, 5, 10, 15, 20], 2, 2);
+		const next = side([0, 10, 20], 2, 2);
+		// New rows: facet, bin, series.
+		const src = [10, 20, 30, 40, 50, 60, 70, 80];
+		const to = gather(held, next, src, new Array(16).fill(0));
+		expect(to).toEqual([10, 20, 10, 20, 30, 40, 30, 40, 50, 60, 50, 60, 70, 80, 70, 80]);
+	});
+
+	it('keeps the value of a held bin with no parent (the window’s margin)', () => {
+		// The new window starts at 10: held bins below it are off screen.
+		const to = gather(side([0, 5, 10, 15, 20]), side([10, 20]), [9], [1, 2, 3, 4]);
+		expect(to).toEqual([1, 2, 9, 9]);
+	});
+
+	it('swaps invisibly: the forward map starts each parent where its children ended', () => {
+		// Children gathered to their parents' values, then the new layout goes
+		// up through the forward map from the held rows: nothing moves.
+		const held = side([0, 5, 10, 15, 20]);
+		const next = side([0, 10, 20]);
+		const landed = gather(held, next, [8, 4], [2, 6, 1, 3]);
+		expect(remap(held, next, landed, [8, 4])).toEqual([8, 4]);
 	});
 });
