@@ -4,13 +4,6 @@
 	import { onMount } from 'svelte';
 	import MainView from './MainView.svelte';
 	import { observeTransitions } from '$lib/animation/transition-log';
-	import { rebinTuning } from '$lib/components/rendering/BaseGPURenderer.svelte';
-
-	// ?near=0.9: how far along a merge's bars travel before they swap (tuning).
-	if (typeof window !== 'undefined') {
-		const near = Number(new URLSearchParams(window.location.search).get('near'));
-		if (near > 0 && near <= 1) rebinTuning.swapNear = near;
-	}
 
 	const { queryEngine } = initFjader();
 	//

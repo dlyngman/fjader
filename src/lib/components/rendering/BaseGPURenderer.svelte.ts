@@ -1,3 +1,4 @@
+import { untrack } from 'svelte';
 import { UNIFORM_STAND_IN_BYTES } from './uniform-sizes';
 import type { GPUCoordinator, DataBindingEntry, LayerRegistrationResult } from '$lib/gpu';
 import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
@@ -629,7 +630,11 @@ export class BaseGPURenderer {
 	#beginWrite(): void {
 		const binning = this.#binning;
 		if (!binning) return;
-		const version = binning.source.dataVersion();
+		// Untracked, here and wherever the source is asked: a write runs inside
+		// the mark's effect, and the source reads the lifecycle's state (the
+		// result, its parts). Tracked, every write effect would come to depend
+		// on it and rerun, re-uploading unchanged arrays, on each new result.
+		const version = untrack(this.#readVersion);
 		if (version === this.#rebinVersion) return;
 		this.#rebinVersion = version;
 		const canHold =
@@ -637,11 +642,11 @@ export class BaseGPURenderer {
 			binning.edges !== null &&
 			this.#morphed !== null &&
 			MorphedChannels.supported;
-		const decision = binning.source.takeRebin(canHold);
+		const decision = this.#take(canHold);
 		this.#noteRebin(decision);
 		if (decision?.kind === 'cut') {
 			this.#startCut(decision.cut, binning.edges!);
-			binning.source.commitLayout();
+			this.#commit();
 			return;
 		}
 		if (decision?.kind === 'hold') {
@@ -652,7 +657,22 @@ export class BaseGPURenderer {
 		}
 		if (this.#hold) this.#releaseHold();
 		this.#pendingRemap = decision?.kind === 'forward' ? decision.map : null;
-		binning.source.commitLayout();
+		this.#commit();
+	}
+
+	/** The source's data version; a field, so asking untracked allocates nothing per write. */
+	#readVersion = (): number => this.#binning?.source.dataVersion() ?? -1;
+
+	/** The source's decision for the current result, untracked (see #beginWrite). */
+	#take(canHold: boolean): RebinDecision {
+		const source = this.#binning?.source;
+		return source ? untrack(() => source.takeRebin(canHold)) : null;
+	}
+
+	/** Commit the current result's layout at the source, untracked. */
+	#commit(): void {
+		const source = this.#binning?.source;
+		if (source) untrack(() => source.commitLayout());
 	}
 
 	/** Hold (or keep holding) with this gather map; the hold's deferred writes are kept. */
@@ -751,11 +771,10 @@ export class BaseGPURenderer {
 	 */
 	#endHoldNow(): void {
 		this.#releaseHold();
-		const binning = this.#binning;
-		if (!binning) return;
-		const decision = binning.source.takeRebin(false);
+		if (!this.#binning) return;
+		const decision = this.#take(false);
 		this.#pendingRemap = decision?.kind === 'forward' ? decision.map : null;
-		binning.source.commitLayout();
+		this.#commit();
 	}
 
 	/** A rebin decision, for the transition log: hold (again, during a hold), or forward and why. */
