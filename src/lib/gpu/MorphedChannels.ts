@@ -66,7 +66,7 @@ import {
  * THE GATHER. While a merge holds its layout (BaseGPURenderer), a write
  * carries the new rows in the NEW layout and a map onto the held one: the
  * rows stay, `to` takes each held row's parent value (RemapShader's gather)
- * and the write travels as an aligned one. `whenAtRest` tells the renderer
+ * and the write travels as an aligned one. `whenLanding` tells the renderer
  * when it has landed, so it can write the new layout.
  */
 
@@ -263,6 +263,8 @@ export class MorphedChannels {
 	#gather: GPUBuffer | null = null;
 	/** Called once, from an encode, when nothing moves any more (whenAtRest). */
 	#restWaiter: (() => void) | null = null;
+	/** How far along every channel must be for the waiter (whenLanding). */
+	#restNear = 1;
 	#gatherImmediates = new ArrayBuffer(GATHER_IMMEDIATE_SIZE);
 	#gatherImmediatesView = new DataView(this.#gatherImmediates);
 	/** The next dispatch starts from `to`. */
@@ -331,13 +333,16 @@ export class MorphedChannels {
 	}
 
 	/**
-	 * Call `fn` once, from an encode, when no channel moves: every transition
-	 * and ride has landed and no write is pending. Replaces any earlier waiter.
-	 * Called from inside the frame's compute work: `fn` must not write buffers
-	 * a draw this frame binds (defer it, e.g. to a microtask).
+	 * Call `fn` once, from an encode, when every channel is at least `near`
+	 * of the way to where it is going and no write is pending: by its share of
+	 * the scale's tween while riding one, by the clock otherwise. 1 waits for
+	 * rest. Replaces any earlier waiter. Called from inside the frame's compute
+	 * work: `fn` must not write buffers a draw this frame binds (defer it,
+	 * e.g. to a microtask).
 	 */
-	whenAtRest(fn: (() => void) | null): void {
+	whenLanding(fn: (() => void) | null, near = 1): void {
 		this.#restWaiter = fn;
+		this.#restNear = near;
 	}
 
 	/** The buffer the vertex stage binds for this channel, if it morphs. */
@@ -622,17 +627,28 @@ export class MorphedChannels {
 	}
 
 	/**
-	 * Tell a waiter (whenAtRest) that nothing moves: the clock has finished,
-	 * no channel rides a tween, and no write is pending. After the encode's
-	 * own work, so a landing this frame counts.
+	 * Tell a waiter (whenLanding) that every channel is far enough along: a
+	 * riding channel by its share of the tween as drawn this frame, any other
+	 * by the clock (or landed). No write may be pending. After the encode's own
+	 * work, so a landing this frame counts.
 	 */
 	#notifyRest(): void {
 		const waiter = this.#restWaiter;
 		if (!waiter) return;
-		if (this.#resolvedT < 1 || this.#gather || this.#remap) return;
+		if (this.#gather || this.#remap) return;
 		if (this.#foldPending || this.#snapPending || this.#dirty) return;
+		const near = this.#restNear;
 		const channels = this.#channelList;
-		for (let i = 0; i < channels.length; i++) if (channels[i].riding) return;
+		for (let i = 0; i < channels.length; i++) {
+			const channel = channels[i];
+			if (channel.count === 0) continue;
+			if (channel.riding) {
+				const g = (channel.tweenF - channel.f0) / (1 - channel.f0);
+				if (g < near) return;
+			} else if (!channel.settled && this.#resolvedT < near) {
+				return;
+			}
+		}
 		this.#restWaiter = null;
 		waiter();
 	}

@@ -1006,7 +1006,7 @@ describe('MorphedChannels: a merge’s gather', () => {
 		f.frame();
 		let rested = 0;
 		gatherWrite(m, values(7, 8), values(9, 10));
-		m.whenAtRest(() => rested++);
+		m.whenLanding(() => rested++);
 
 		f.frame();
 		f.slots.clock.step();
@@ -1021,6 +1021,25 @@ describe('MorphedChannels: a merge’s gather', () => {
 		expect(rested).toBe(1);
 	});
 
+	it('tells it earlier with a threshold: once the clock is that far along', () => {
+		const f = fakes();
+		const m = morphed(f);
+		update(m, values(1, 2, 3), values(4, 5, 6));
+		f.frame();
+		const at: number[] = [];
+		gatherWrite(m, values(7, 8), values(9, 10));
+		m.whenLanding(() => at.push(f.slots.clock.t), 0.5);
+		f.frame();
+		for (let i = 0; i < 1000 && at.length === 0; i++) {
+			f.slots.clock.step();
+			f.slots.clock.updateRenderState(0);
+			f.frame();
+		}
+		expect(at).toHaveLength(1);
+		expect(at[0]).toBeGreaterThanOrEqual(0.5);
+		expect(at[0]).toBeLessThan(1);
+	});
+
 	it('forgets its waiter when told to', () => {
 		const f = fakes();
 		const m = morphed(f);
@@ -1028,8 +1047,8 @@ describe('MorphedChannels: a merge’s gather', () => {
 		f.frame();
 		let rested = 0;
 		gatherWrite(m, values(7, 8), values(9, 10));
-		m.whenAtRest(() => rested++);
-		m.whenAtRest(null);
+		m.whenLanding(() => rested++);
+		m.whenLanding(null);
 		f.frame();
 		f.slots.clock.settle();
 		f.frame();

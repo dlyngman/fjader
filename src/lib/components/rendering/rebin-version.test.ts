@@ -46,7 +46,7 @@ function setup() {
 	);
 	vi.spyOn(MorphedChannels.prototype, 'has').mockReturnValue(true);
 	let atRest: (() => void) | null = null;
-	vi.spyOn(MorphedChannels.prototype, 'whenAtRest').mockImplementation((fn) => {
+	vi.spyOn(MorphedChannels.prototype, 'whenLanding').mockImplementation((fn) => {
 		atRest = fn;
 	});
 

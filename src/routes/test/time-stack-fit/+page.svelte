@@ -69,6 +69,7 @@
 	import { bin } from '$lib/sql/bin';
 	import { attachQueryLog } from '$lib/query-engine/debug/query-log';
 	import { binLayout } from '$lib/components/marks/lifecycle/bin-layout';
+	import { rebinTuning } from '$lib/components/rendering/BaseGPURenderer.svelte';
 	import { windowedFit } from '$lib/components/marks/lifecycle/fit-domain';
 
 	const fit = page.url.searchParams.get('fit') !== '0';
@@ -81,6 +82,9 @@
 				? 'rule'
 				: null;
 	const sparse = page.url.searchParams.get('sparse') === '1';
+	// ?near=0.9: how far along a merge's bars travel before they swap (tuning).
+	const near = Number(page.url.searchParams.get('near'));
+	if (near > 0 && near <= 1) rebinTuning.swapNear = near;
 	const TAG = `${fit ? 'fit' : 'plain'}${overlay ? `-${overlay}` : ''}${sparse ? '-sparse' : ''}`;
 	/** A variant's query string; `o` is null, 'rule' or 'line'. */
 	const variant = (f, o = null, s = false) =>

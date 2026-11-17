@@ -29,6 +29,16 @@ export interface InitConfig {
 /** Warned once per page, not per mark. */
 let warnedMorphUnsupported = false;
 
+/**
+ * How far along a hold's rows travel before the swap: the new layout's bars
+ * then start at their children's mean and land the rest themselves. At rest
+ * (1), converged children stay drawn apart, their insets showing, for the
+ * tween's long tail; earlier, the swap shows as the spread left between
+ * siblings, (1 − swapNear) of where they started. Mutable for tuning on
+ * device (test pages read `?near=`); read at each hold's write.
+ */
+export const rebinTuning = { swapNear: 0.95 };
+
 /** writeMorphed's `scaled` when nothing is: no binding folds. */
 const NO_SCALED: readonly number[] = [];
 
@@ -714,7 +724,7 @@ export class BaseGPURenderer {
 		// The swap writes buffers the frame's draws bind, so not from inside the
 		// encode that notices the landing: right after it, one frame later.
 		const generation = hold.generation;
-		morphed.whenAtRest(() => queueMicrotask(() => this.#swap(generation)));
+		morphed.whenLanding(() => queueMicrotask(() => this.#swap(generation)), rebinTuning.swapNear);
 		this.invalidateLayer();
 		return true;
 	}
@@ -763,7 +773,7 @@ export class BaseGPURenderer {
 		const hold = this.#hold;
 		if (!hold) return;
 		this.#hold = null;
-		this.#morphed?.whenAtRest(null);
+		this.#morphed?.whenLanding(null);
 		for (const [binding, data] of hold.attributes) this.writeAttribute(binding, data);
 		for (const [slot, data] of hold.vertex) this.writeVertexBuffer(slot, data);
 		if (hold.count !== null) this.updateInstanceCount(hold.count);
