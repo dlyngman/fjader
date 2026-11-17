@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { AutoBinNode } from '$lib/sql/bin';
 import type { BinPadding } from '$lib/types';
-import { binRowsMoved, binSpecKey, isRebin, rebinTweens } from './rebin';
+import { binRowsMoved, binSpecKey, heldCoversView, isRebin, rebinTweens } from './rebin';
 
 /** The spec a mark's parts carry for one bin channel, as the lifecycle builds it. */
 function spec(
@@ -90,5 +90,26 @@ describe('how a rebin moves its value axis', () => {
 	it('an axis the user zoomed is not overridden', () => {
 		expect(rebinTweens(true, false)).toBe(false);
 		expect(rebinTweens(true, true)).toBe(false);
+	});
+});
+
+describe('whether a hold’s rows cover what the new rows draw in view', () => {
+	it('covers an unwindowed histogram whose axis runs past the data', () => {
+		// Data 0–100 at both steps; the view is padded to −10–110.
+		expect(heldCoversView([0, 100], [0, 100], [-10, 110], 5)).toBe(true);
+	});
+
+	it('allows the last new bin to reach one step past the held rows', () => {
+		// Held step 2 ends at 1500; the new step-5 bin ends at 1505.
+		expect(heldCoversView([-60, 1500], [-60, 1505], [-100, 1600], 5)).toBe(true);
+	});
+
+	it('refuses a zoom out past a window’s margin: new bars in view the held rows lack', () => {
+		// Held window 40–60; the new rows (and the view) run 0–100.
+		expect(heldCoversView([40, 60], [0, 100], [10, 90], 5)).toBe(false);
+	});
+
+	it('ignores new rows outside the view', () => {
+		expect(heldCoversView([40, 60], [0, 100], [45, 55], 5)).toBe(true);
 	});
 });

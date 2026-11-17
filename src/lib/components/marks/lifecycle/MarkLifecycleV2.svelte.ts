@@ -118,7 +118,7 @@ import {
 	insideBinWindow,
 	viewInBinUnits
 } from './bin-window';
-import { binRowsMoved, binSpecKey, isRebin, rebinTweens } from './rebin';
+import { binRowsMoved, binSpecKey, heldCoversView, isRebin, rebinTweens } from './rebin';
 import {
 	buildQueryParts,
 	assembleQuery,
@@ -138,6 +138,13 @@ import { OtherRows, type SplitPlan } from './other-rows.svelte';
 
 /** One result's rows as a remap reads them, with the bins and window they were computed over. */
 type TakenSide = BinRemapSide & { binKey: string | null; window: BinWindow | null };
+
+/** A side's span: its first facet's first and last bins, at the series stride. */
+function sideSpan(side: TakenSide): [number, number] | null {
+	const { bins, series } = side.layout;
+	if (bins === 0) return null;
+	return [Number(side.lower[0]), Number(side.upper[(bins - 1) * series])];
+}
 
 /**
  * A side's bin width, read at its middle bin: the end bins can be clipped to
@@ -2881,23 +2888,25 @@ export class MarkLifecycleV2 {
 		if (middleBinWidth(next) < middleBinWidth(held)) return 'split';
 		if (!canHold) return 'renderer cannot hold';
 		if (this.#handle?.resultCause === 'catchUp') return 'catch-up';
-		if (!this.#heldCoversView(held)) return 'not covered';
+		if (!this.#heldCoversView(held, next)) return 'not covered';
 		const map = buildBinRemap(next, held, NEST_EPSILON);
 		if (map && isNested(map)) return map;
 		return buildBinCut(held, next) ?? 'not nested';
 	}
 
 	/**
-	 * Whether the held rows span the last viewport on the binned axis. Both in
-	 * the scale's units: the bin edges are what the bars are drawn with. The
-	 * first facet's first and last bins, at the series stride.
+	 * Whether the held rows cover what the new rows draw in the last viewport
+	 * on the binned axis (`heldCoversView`). In the scale's units: the bin
+	 * edges are what the bars are drawn with. Each side's span is its first
+	 * facet's first and last bins, at the series stride.
 	 */
-	#heldCoversView(held: TakenSide): boolean {
+	#heldCoversView(held: TakenSide, next: TakenSide): boolean {
 		const view = this.#lastView;
 		if (!view) return false;
-		const { bins, series } = held.layout;
-		if (bins === 0) return false;
-		return Number(held.lower[0]) <= view[0] && Number(held.upper[(bins - 1) * series]) >= view[1];
+		const h = sideSpan(held);
+		const n = sideSpan(next);
+		if (!h || !n) return false;
+		return heldCoversView(h, n, view, middleBinWidth(next));
 	}
 
 	/** The current result as one side of a remap, or null when it is not the dense layout. */

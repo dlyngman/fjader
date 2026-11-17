@@ -67,3 +67,23 @@ export function binRowsMoved(
 	if (!lastWindow || !window) return true;
 	return lastWindow[0] !== window[0] || lastWindow[1] !== window[1];
 }
+
+/**
+ * Whether held rows spanning [heldLo, heldHi] cover what new rows spanning
+ * [nextLo, nextHi] draw inside `view`: a hold draws the held rows until the
+ * swap, so a part of the view where only the new rows have bars would stand
+ * blank until then (a zoom out past a window's margin). Where neither has
+ * bars (past the data's extent) is not a gap. `slack`: one new bin at either
+ * end, whose part past the held rows is a bar that grows at the swap.
+ */
+export function heldCoversView(
+	held: readonly [number, number],
+	next: readonly [number, number],
+	view: readonly [number, number],
+	slack: number
+): boolean {
+	const lo = Math.max(next[0], view[0]);
+	const hi = Math.min(next[1], view[1]);
+	if (lo >= hi) return true;
+	return held[0] <= lo + slack && held[1] >= hi - slack;
+}
