@@ -33,11 +33,14 @@ let warnedMorphUnsupported = false;
  * How far along a hold's rows travel before the swap: the new layout's bars
  * then start at their children's mean and land the rest themselves. At rest
  * (1), converged children stay drawn apart, their insets showing, for the
- * tween's long tail; earlier, the swap shows as the spread left between
- * siblings, (1 − swapNear) of where they started. Mutable for tuning on
- * device (test pages read `?near=`); read at each hold's write.
+ * tween's long tail. At 0.75 (chosen on device) the children make most of
+ * the movement and land together as the merged bar, and a fast zoom out,
+ * whose rebins restart the ride, still reaches the swap. The swap shows as
+ * the spread left between siblings, (1 − swapNear) of where they started.
+ * Mutable for tuning on device (test pages read `?near=`); read at each
+ * hold's write.
  */
-export const rebinTuning = { swapNear: 0.95 };
+export const rebinTuning = { swapNear: 0.75 };
 
 /** writeMorphed's `scaled` when nothing is: no binding folds. */
 const NO_SCALED: readonly number[] = [];
