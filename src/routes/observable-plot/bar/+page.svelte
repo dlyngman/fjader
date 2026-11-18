@@ -149,20 +149,20 @@
 									inset={0.5}
 									sort={{ y: 'x1', order: 'asc' }}
 								/>
+								<TextMark
+									table="civilizations"
+									x="start"
+									y="civilization"
+									text="civilization"
+									textAnchor="end"
+									dx={-3}
+								/>
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}
 
 					{#snippet foreground()}
 						<Crosshair />
-						<TextMark
-							table="civilizations"
-							x="start"
-							y="civilization"
-							text="civilization"
-							textAnchor="end"
-							dx={-3}
-						/>
 					{/snippet}
 				</ChartContainer>
 			</div>

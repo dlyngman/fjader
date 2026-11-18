@@ -39,6 +39,14 @@ import {
 	type PlotRect,
 	type PlotViewport
 } from './plot-viewport';
+import {
+	ATLAS_ENTRIES_BINDING,
+	ATLAS_FORMAT,
+	ATLAS_SAMPLER_BINDING,
+	ATLAS_TABLE_BYTES,
+	ATLAS_TEXTURE_BINDING,
+	type AtlasBinding
+} from './text/atlas-bindings';
 
 /** Number of color stops per ramp slot. Shared with ColorScaleState for bakeGradient(). */
 export const COLOR_RAMP_RESOLUTION = 256;
@@ -86,6 +94,8 @@ interface ChartConfig {
 	plotRect: PlotRect;
 	/** `plotRect` in device pixels, as the pass sets it. Updated with the frame uniforms. */
 	viewport: PlotViewport;
+	/** The chart's text atlas, bound in its frame bind group; null binds the stand-ins. */
+	textAtlas: AtlasBinding | null;
 	_lastRenderFrame: number;
 	_isDirty: boolean;
 	/** The entrance this chart makes, with reduced motion already applied. */
@@ -2124,6 +2134,7 @@ export class GPUCoordinator {
 			msaa: null,
 			plotRect: { ...config.plotRect },
 			viewport: emptyPlotViewport(),
+			textAtlas: null,
 			_lastRenderFrame: -1,
 			_isDirty: false,
 			entranceMode: resolveEntrance(config.entrance),
@@ -2383,6 +2394,23 @@ export class GPUCoordinator {
 						binding: 0,
 						visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
 						buffer: { type: 'uniform' }
+					},
+					// The chart's text atlas (text/atlas-bindings.ts). In every
+					// pipeline's layout, read only by text shaders.
+					{
+						binding: ATLAS_TEXTURE_BINDING,
+						visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+						texture: { sampleType: 'float' }
+					},
+					{
+						binding: ATLAS_SAMPLER_BINDING,
+						visibility: GPUShaderStage.FRAGMENT,
+						sampler: { type: 'filtering' }
+					},
+					{
+						binding: ATLAS_ENTRIES_BINDING,
+						visibility: GPUShaderStage.VERTEX,
+						buffer: { type: 'uniform' }
 					}
 				]
 			});
@@ -2433,6 +2461,7 @@ export class GPUCoordinator {
 		if (!chartConfig?.frameUniformsBuffer || chartConfig.perFrameBindGroup) return;
 
 		const frameLayout = this.#getOrCreateFrameLayout();
+		const atlas = chartConfig.textAtlas ?? this.#atlasStandIns();
 
 		chartConfig.perFrameBindGroup = this.#device!.createBindGroup({
 			label: `per-frame-bind-group-${chartId}`,
@@ -2441,9 +2470,62 @@ export class GPUCoordinator {
 				{
 					binding: 0,
 					resource: { buffer: chartConfig.frameUniformsBuffer }
-				}
+				},
+				{ binding: ATLAS_TEXTURE_BINDING, resource: atlas.view },
+				{ binding: ATLAS_SAMPLER_BINDING, resource: this.#atlasSampler() },
+				{ binding: ATLAS_ENTRIES_BINDING, resource: { buffer: atlas.entries } }
 			]
 		});
+	}
+
+	#atlasStandIn: AtlasBinding | null = null;
+	#atlasSamplerInstance: GPUSampler | null = null;
+
+	/** A 1×1 texture and a zeroed entry table: what a chart without text binds. */
+	#atlasStandIns(): AtlasBinding {
+		if (!this.#atlasStandIn) {
+			const texture = this.#device!.createTexture({
+				label: 'text-atlas-stand-in',
+				size: [1, 1],
+				format: ATLAS_FORMAT,
+				usage: GPUTextureUsage.TEXTURE_BINDING
+			});
+			const entries = this.#device!.createBuffer({
+				label: 'text-atlas-entries-stand-in',
+				size: ATLAS_TABLE_BYTES,
+				usage: GPUBufferUsage.UNIFORM
+			});
+			this.#atlasStandIn = { view: texture.createView(), entries };
+		}
+		return this.#atlasStandIn;
+	}
+
+	#atlasSampler(): GPUSampler {
+		this.#atlasSamplerInstance ??= this.#device!.createSampler({
+			label: 'text-atlas-sampler',
+			magFilter: 'linear',
+			minFilter: 'linear',
+			addressModeU: 'clamp-to-edge',
+			addressModeV: 'clamp-to-edge'
+		});
+		return this.#atlasSamplerInstance;
+	}
+
+	/**
+	 * Bind `atlas` as `chartId`'s text atlas, or the stand-ins for null. Called
+	 * when the atlas is first used and whenever its texture is replaced (it
+	 * grew): the frame bind group holds the texture's view, so it is rebuilt.
+	 * Writes to the entry table need no call: the buffer stays the same.
+	 */
+	setChartTextAtlas(chartId: string, atlas: AtlasBinding | null): void {
+		const chartConfig = this.#registeredCharts.get(chartId);
+		if (!chartConfig) return;
+		chartConfig.textAtlas = atlas;
+		if (chartConfig.frameUniformsBuffer) {
+			chartConfig.perFrameBindGroup = null;
+			this.#createChartFrameBindGroup(chartId);
+		}
+		this.invalidateChart(chartId);
 	}
 
 	// nullColor, where should we set this? per chart or per mark or theme wide?

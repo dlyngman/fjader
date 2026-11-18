@@ -2,12 +2,12 @@
 	/**
 	 * Dashboard-30: thirty charts on one screen, all reacting to one selection,
 	 * driven by a scripted session, with a per-frame cost probe. Its variants
-	 * measure what SVG text costs while data animates: a baseline for drawing
-	 * text on the GPU.
+	 * measure what text costs while data animates: labels (TextMark, drawn on
+	 * the GPU) and axes (SVG).
 	 *
 	 *   ?labels=0     no TextMark labels (default: labels on the bar charts and
-	 *                 one histogram, as SVG text today)
-	 *   ?axes=0       no axes (with labels=0: the page without SVG text)
+	 *                 one histogram)
+	 *   ?axes=0       no axes (with labels=0: the page without text)
 	 *   ?charts=N     only the first N charts (default 30)
 	 *   ?mutations=1  count DOM mutation records per frame (observing costs too,
 	 *                 so leave it off for timing runs)
@@ -706,49 +706,47 @@
 												selection="brush"
 											/>
 										{/if}
+										{#if labelled(c)}
+											{#if c.kind === 'barY'}
+												<TextMark
+													table="dash"
+													x={c.cat}
+													y={measureOf(c)}
+													text={measureOf(c)}
+													format={c.measure ? fmtMean : fmtCount}
+													transforms={transformsOf(c)}
+													dy={-6}
+													fontSize={9}
+													selection="brush"
+												/>
+											{:else if c.kind === 'barX'}
+												<TextMark
+													table="dash"
+													x={count()}
+													y={c.cat}
+													text={count()}
+													format={fmtCount}
+													transforms={transformsOf(c)}
+													textAnchor="start"
+													dx={3}
+													fontSize={9}
+													selection="brush"
+												/>
+											{:else if c.kind === 'hist'}
+												<TextMark
+													table="dash"
+													x={bin(c.x, c.steps ? { steps: c.steps } : {})}
+													y={count()}
+													text={count()}
+													format={fmtCount}
+													dy={-6}
+													fontSize={8}
+													selection="brush"
+												/>
+											{/if}
+										{/if}
 									{/snippet}
 								</WebGPUCanvas>
-							{/snippet}
-							{#snippet foreground()}
-								{#if labelled(c)}
-									{#if c.kind === 'barY'}
-										<TextMark
-											table="dash"
-											x={c.cat}
-											y={measureOf(c)}
-											text={measureOf(c)}
-											format={c.measure ? fmtMean : fmtCount}
-											transforms={transformsOf(c)}
-											dy={-6}
-											fontSize={9}
-											selection="brush"
-										/>
-									{:else if c.kind === 'barX'}
-										<TextMark
-											table="dash"
-											x={count()}
-											y={c.cat}
-											text={count()}
-											format={fmtCount}
-											transforms={transformsOf(c)}
-											textAnchor="start"
-											dx={3}
-											fontSize={9}
-											selection="brush"
-										/>
-									{:else if c.kind === 'hist'}
-										<TextMark
-											table="dash"
-											x={bin(c.x, c.steps ? { steps: c.steps } : {})}
-											y={count()}
-											text={count()}
-											format={fmtCount}
-											dy={-6}
-											fontSize={8}
-											selection="brush"
-										/>
-									{/if}
-								{/if}
 							{/snippet}
 							{#snippet interactors()}
 								{#if c.toggle}<Toggle selection="brush" field={c.cat} />{/if}

@@ -63,6 +63,7 @@ describe('uniform struct sizes', () => {
 		['linesMarkConstants', './Lines.svelte', 'MarkConstants'],
 		['areasMarkConstants', './Areas.svelte', 'MarkConstants'],
 		['gridLineRuleConstants', './GridLine.svelte', 'RuleConstants'],
+		['textsMarkConstants', './Texts.svelte', 'MarkConstants'],
 		['parallelConfig', './ParallelLines.svelte', 'ParallelConfig']
 	];
 
@@ -91,7 +92,8 @@ describe('uniform struct sizes', () => {
 			'./RuleY.svelte',
 			'./Lines.svelte',
 			'./Areas.svelte',
-			'./GridLine.svelte'
+			'./GridLine.svelte',
+			'./Texts.svelte'
 		]) {
 			expect(source(file)).toMatch(/new ArrayBuffer\(UNIFORM_BYTES\.\w+\)/);
 			expect(source(file)).not.toMatch(/new ArrayBuffer\(\d+\)/);

@@ -24,6 +24,7 @@ export const UNIFORM_BYTES = {
 	linesMarkConstants: 64,
 	areasMarkConstants: 64,
 	gridLineRuleConstants: 32,
+	textsMarkConstants: 64,
 	parallelConfig: 176,
 	parallelAxisScales: PARALLEL_MAX_AXES * SCALE_PARAM_BYTES
 } as const;

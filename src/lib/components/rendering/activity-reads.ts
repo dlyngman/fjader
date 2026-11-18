@@ -23,7 +23,7 @@
 
 import { NO_GROUP } from '$lib/gpu/identity-slot-packing';
 
-/** The renderers that read selection activity. Text reads it on the CPU. */
+/** The renderers that read selection activity. */
 export type ActivityRenderer =
 	| 'dots'
 	| 'rects'

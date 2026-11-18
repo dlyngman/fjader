@@ -59,22 +59,22 @@
 							{#snippet canvasComponents()}
 								<Grid />
 								<BarMarkX table="penguins" x={msql.count()} y="species" />
+								<TextMark
+									table="penguins"
+									x={msql.count()}
+									y="species"
+									text={msql.count()}
+									dx={-8}
+									textAnchor="end"
+									fontSize={12}
+									fill="white"
+								/>
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}
 
 					{#snippet foreground()}
 						<Crosshair />
-						<TextMark
-							table="penguins"
-							x={msql.count()}
-							y="species"
-							text={msql.count()}
-							dx={-8}
-							textAnchor="end"
-							fontSize={12}
-							fill="white"
-						/>
 					{/snippet}
 				</ChartContainer>
 			</div>
@@ -98,21 +98,21 @@
 							{#snippet canvasComponents()}
 								<Grid />
 								<DotsMark table="penguins" x="bill_length" y="body_mass" fill="species" />
+								<TextMark
+									table="penguins"
+									x="bill_length"
+									y="body_mass"
+									text="species"
+									dy={-10}
+									fontSize={9}
+									fill="species"
+								/>
 							{/snippet}
 						</WebGPUCanvas>
 					{/snippet}
 
 					{#snippet foreground()}
 						<Crosshair />
-						<TextMark
-							table="penguins"
-							x="bill_length"
-							y="body_mass"
-							text="species"
-							dy={-10}
-							fontSize={9}
-							fill="species"
-						/>
 					{/snippet}
 				</ChartContainer>
 			</div>
@@ -144,12 +144,9 @@
 									curve="catmull-rom"
 								/>
 								<DotsMark table="driving" x="miles" y="gas" r={2} />
+								<TextMark table="driving" x="miles" y="gas" text="year" fontSize={9} dy={-8} />
 							{/snippet}
 						</WebGPUCanvas>
-					{/snippet}
-
-					{#snippet foreground()}
-						<TextMark table="driving" x="miles" y="gas" text="year" fontSize={9} dy={-8} />
 					{/snippet}
 				</ChartContainer>
 			</div>
