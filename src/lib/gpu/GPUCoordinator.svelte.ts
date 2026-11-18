@@ -33,6 +33,12 @@ import {
 	MAX_COLOR_SLOTS
 } from './ColorScaleShaderLib';
 import { trackScalesById } from './tracked-scales';
+import {
+	computePlotViewport,
+	emptyPlotViewport,
+	type PlotRect,
+	type PlotViewport
+} from './plot-viewport';
 
 /** Number of color stops per ramp slot. Shared with ColorScaleState for bakeGradient(). */
 export const COLOR_RAMP_RESOLUTION = 256;
@@ -73,6 +79,13 @@ interface ChartConfig {
 	perFrameBindGroup: GPUBindGroup | null;
 	renderPassDescriptor: GPURenderPassDescriptor | null;
 	msaa: { texture: GPUTexture; view: GPUTextureView } | null;
+	/**
+	 * The plot area within the canvas, in CSS pixels. The canvas covers the
+	 * whole cell; marks draw in this rectangle only (see plot-viewport.ts).
+	 */
+	plotRect: PlotRect;
+	/** `plotRect` in device pixels, as the pass sets it. Updated with the frame uniforms. */
+	viewport: PlotViewport;
 	_lastRenderFrame: number;
 	_isDirty: boolean;
 	/** The entrance this chart makes, with reduced motion already applied. */
@@ -220,6 +233,8 @@ interface ChartRegistrationConfig {
 	entrance?: EntranceMode;
 	/** Holds the entrance until the chart's marks have their first data. */
 	entranceGate?: EntranceGate | null;
+	/** The plot area within the canvas, in CSS pixels. */
+	plotRect: PlotRect;
 }
 
 /** A chart's entrance starting, for observeEntrances. */
@@ -271,6 +286,8 @@ interface CaptureRequest {
 
 export interface ChartRegistrationResult {
 	setContextReady: () => void;
+	/** The plot area moved or resized within the canvas (CSS pixels). */
+	setPlotRect: (rect: PlotRect) => void;
 	setVisible: (visible: boolean) => void;
 	invalidate: () => void;
 	remove: () => void;
@@ -1488,6 +1505,14 @@ export class GPUCoordinator {
 				this.#createRenderPassDescriptor(view, chartConfig)
 			);
 
+			// Marks draw in the plot area: the canvas covers the cell, margins
+			// included. The pass's clear still covers the whole canvas.
+			const vp = chartConfig.viewport;
+			if (vp.drawable) {
+				passEncoder.setViewport(vp.x, vp.y, vp.width, vp.height, 0, 1);
+				passEncoder.setScissorRect(vp.scissorX, vp.scissorY, vp.scissorWidth, vp.scissorHeight);
+			}
+
 			// The chart's scales, written once for the whole pass and before the
 			// first draw. Every pipeline declares the same
 			// CHART_SCALE_IMMEDIATE_SIZE and a draw requires every declared byte to
@@ -1501,7 +1526,7 @@ export class GPUCoordinator {
 			this.#writeEntrance(chartConfig, this.#chartScaleImmediates);
 			passEncoder.setImmediates(0, this.#chartScaleImmediates);
 
-			if (chartConfig.perFrameBindGroup) {
+			if (chartConfig.perFrameBindGroup && vp.drawable) {
 				passEncoder.setBindGroup(0, chartConfig.perFrameBindGroup);
 				passEncoder.setBindGroup(2, this.#scaleResourcesBindGroup!);
 
@@ -2097,6 +2122,8 @@ export class GPUCoordinator {
 			perFrameBindGroup: null,
 			renderPassDescriptor: null,
 			msaa: null,
+			plotRect: { ...config.plotRect },
+			viewport: emptyPlotViewport(),
 			_lastRenderFrame: -1,
 			_isDirty: false,
 			entranceMode: resolveEntrance(config.entrance),
@@ -2149,6 +2176,19 @@ export class GPUCoordinator {
 					this.updateChartFrameUniforms(chartId);
 					this.invalidateChart(chartId);
 				}
+			},
+			setPlotRect: (rect: PlotRect) => {
+				const cfg = this.#registeredCharts.get(chartId);
+				if (!cfg) return;
+				const r = cfg.plotRect;
+				if (r.x === rect.x && r.y === rect.y && r.width === rect.width && r.height === rect.height)
+					return;
+				r.x = rect.x;
+				r.y = rect.y;
+				r.width = rect.width;
+				r.height = rect.height;
+				this.updateChartFrameUniforms(chartId);
+				this.invalidateChart(chartId);
 			},
 			setVisible: (visible: boolean) => {
 				const cfg = this.#registeredCharts.get(chartId);
@@ -2421,13 +2461,23 @@ export class GPUCoordinator {
 		const dpr = window.devicePixelRatio || 1;
 		const canvas = chartConfig.canvas;
 
-		const resX = canvas.width;
-		const resY = canvas.height;
+		// The plot's viewport on the cell-sized canvas. Resolution and range are
+		// the viewport's own size, so shaders map pixels to clip space within the
+		// plot exactly as they did when the canvas was the plot.
+		const viewport = computePlotViewport(
+			chartConfig.plotRect,
+			dpr,
+			canvas.width,
+			canvas.height,
+			chartConfig.viewport
+		);
+		const resX = viewport.width;
+		const resY = viewport.height;
 
 		const rangeMinX = 0;
-		const rangeMaxX = canvas.clientWidth * dpr;
-		const rangeMinY = 0; // Top of chart (screen coords)
-		const rangeMaxY = canvas.clientHeight * dpr;
+		const rangeMaxX = viewport.width;
+		const rangeMinY = 0; // Top of the plot (screen coords)
+		const rangeMaxY = viewport.height;
 
 		const buf = new ArrayBuffer(64);
 		const f32 = new Float32Array(buf);
