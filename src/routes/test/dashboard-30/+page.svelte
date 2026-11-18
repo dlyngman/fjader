@@ -1,8 +1,9 @@
 <script>
 	/**
 	 * Dashboard-30: thirty charts on one screen, all reacting to one selection,
-	 * driven by a scripted session, with a per-frame cost probe. Phase 0 of
-	 * proposal_gpu_text.md: the SVG baseline every later phase reports against.
+	 * driven by a scripted session, with a per-frame cost probe. Its variants
+	 * measure what SVG text costs while data animates: a baseline for drawing
+	 * text on the GPU.
 	 *
 	 *   ?labels=0     no TextMark labels (default: labels on the bar charts and
 	 *                 one histogram, as SVG text today)

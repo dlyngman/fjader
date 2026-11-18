@@ -1,7 +1,7 @@
 <script>
 	/**
-	 * HTML-in-Canvas probe (proposal_gpu_text.md, phase 0 V1): what this browser
-	 * actually exposes, checked by using it rather than by reading about it.
+	 * HTML-in-Canvas probe: what this browser actually exposes, checked by
+	 * using it rather than by reading about it.
 	 *
 	 * 1. Detection: the API surface on each prototype, plus every member whose
 	 *    name mentions "Element" on GPUQueue and HTMLCanvasElement, so a rename
