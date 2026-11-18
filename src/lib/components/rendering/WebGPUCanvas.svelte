@@ -16,9 +16,15 @@
 
 	const c = getContext<ChartContext>('chart');
 	const isFaceted = !!c.fx && facetIndex == null;
+	// The plot area. The canvas covers the whole cell, margins included, so
+	// text can be drawn there; marks draw in the plot only, through the
+	// viewport the coordinator sets from `plotRect` (gpu/plot-viewport.ts).
 	let width = $derived(c.innerWidth);
 	let height = $derived(c.innerHeight);
 	let margin = $derived(c.margin);
+	let cellWidth = $derived(width + margin.left + margin.right);
+	let cellHeight = $derived(height + margin.top + margin.bottom);
+	const plotRect = () => ({ x: margin.left, y: margin.top, width, height });
 
 	let canvas = $state<HTMLCanvasElement>();
 	let context: GPUCanvasContext | null = null;
@@ -26,7 +32,6 @@
 	let chartControl: ChartRegistrationResult | null = null;
 	let contextConfigured = $state(isFaceted);
 	let initializationError = $state<string | null>(null);
-	let lastTransform = '';
 
 	const chartId = c.chartId;
 
@@ -122,7 +127,8 @@
 				facetIndex: facetIndex ?? 0,
 				facetScale,
 				entrance: c.config?.chartProps?.entrance as EntranceMode | undefined,
-				entranceGate: c.config?.entrance ?? null
+				entranceGate: c.config?.entrance ?? null,
+				plotRect: plotRect()
 			});
 
 			// Notify coordinator that context is ready
@@ -145,33 +151,20 @@
 			// Calculate new dimensions
 			const devicePixelRatio = window.devicePixelRatio || 1;
 
-			const canvasWidth = Math.ceil(width * devicePixelRatio);
-			const canvasHeight = Math.ceil(height * devicePixelRatio);
+			const canvasWidth = Math.ceil(cellWidth * devicePixelRatio);
+			const canvasHeight = Math.ceil(cellHeight * devicePixelRatio);
 
-			// Only update if dimensions actually changed to avoid unnecessary work
-			const dimensionsChanged = canvas.width !== canvasWidth || canvas.height !== canvasHeight;
-
-			const newTransform = `translate(${margin.left}px, ${margin.top}px)`;
-			const positionChanged = lastTransform !== newTransform;
-
-			// Only proceed if there's an actual change
-			if (!dimensionsChanged && !positionChanged) return;
-
-			if (dimensionsChanged) {
+			if (canvas.width !== canvasWidth || canvas.height !== canvasHeight) {
 				canvas.width = canvasWidth;
 				canvas.height = canvasHeight;
-				canvas.style.width = width + 'px';
-				canvas.style.height = height + 'px';
+				canvas.style.width = cellWidth + 'px';
+				canvas.style.height = cellHeight + 'px';
+				chartControl?.invalidate();
 			}
 
-			if (positionChanged) {
-				canvas.style.transform = newTransform;
-				lastTransform = newTransform;
-			}
-
-			if (chartControl) {
-				chartControl.invalidate();
-			}
+			// A margin change moves the plot without resizing the canvas. Its own
+			// check: no change, no work.
+			chartControl?.setPlotRect(plotRect());
 		} catch (error) {
 			console.error(`❌ Canvas setup failed for ${chartId}:`, error);
 			initializationError = `Canvas setup failed: ${(error as Error).message}`;
@@ -180,6 +173,7 @@
 
 	// Enhanced context with better state management and error handling
 	setContext<WebGPUCanvasContext>('webgpu-canvas', {
+		/** The plot area's size, not the canvas's: the canvas covers the whole cell. */
 		getCanvasDimensions() {
 			const currentDPR = window.devicePixelRatio || 1;
 			return {
@@ -276,6 +270,8 @@
 		void width;
 		void height;
 		void margin;
+		void cellWidth;
+		void cellHeight;
 
 		// Only run if the canvas and context are fully ready
 		if (canvas && contextConfigured) {
