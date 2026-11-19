@@ -28,6 +28,8 @@ export interface RendererOptions {
 	yScaleType?: string;
 	/** False for a mark whose shader never reads the chart's x and y scales. */
 	readsChartScales?: boolean;
+	/** Where the layer draws: the plot (default) or the whole cell (axes). */
+	space?: 'plot' | 'cell';
 }
 
 export interface InitConfig {
@@ -206,6 +208,7 @@ export class BaseGPURenderer {
 
 	#zIndex: number;
 	#readsChartScales: boolean;
+	#space: 'plot' | 'cell';
 	#xScaleType: string;
 	#yScaleType: string;
 	/** The last config passed to `initialize`, so it can be re-run. */
@@ -265,6 +268,7 @@ export class BaseGPURenderer {
 		this.#rendererId = `${markType}-${crypto.randomUUID()}`;
 		this.#zIndex = options.zIndex || 0;
 		this.#readsChartScales = options.readsChartScales ?? true;
+		this.#space = options.space ?? 'plot';
 		this.#xScaleType = options.xScaleType || 'linear';
 		this.#yScaleType = options.yScaleType || 'linear';
 	}
@@ -1356,7 +1360,8 @@ export class BaseGPURenderer {
 			renderer: this,
 			componentId: this.#rendererId,
 			zIndex: this.#zIndex,
-			readsChartScales: this.#readsChartScales
+			readsChartScales: this.#readsChartScales,
+			space: this.#space
 		});
 		this.#registerPlacement([chartId]);
 		return this.#ownedResources.layerControl;
@@ -1384,7 +1389,8 @@ export class BaseGPURenderer {
 				renderer: this,
 				componentId: this.#rendererId,
 				zIndex: this.#zIndex,
-				readsChartScales: this.#readsChartScales
+				readsChartScales: this.#readsChartScales,
+				space: this.#space
 			});
 			this.#facetLayerControls.push({ chartId, control });
 			this.#facetChartIds.push(chartId);

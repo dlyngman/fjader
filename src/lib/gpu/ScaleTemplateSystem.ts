@@ -472,8 +472,21 @@ export class ScaleTemplateSystem {
 				activeFacetIdx: u32,          // bytes 40-44 (facet cell index for shader filtering)
 				_pad3: u32,                   // bytes 44-48
 				nullColor: vec4<f32>,         // bytes 48-64
+				plotOrigin: vec2<f32>,        // bytes 64-72: the plot's top left on the canvas, device px
+				cellSize: vec2<f32>,          // bytes 72-80: the canvas (the whole chart cell), device px
 			};
 			@group(0) @binding(0) var<uniform> frameUniforms: FrameUniforms;
+
+			// A point in plot pixels (where the scales put it) on the whole canvas:
+			// for layers that draw in the margins (axes), whose viewport is the cell.
+			fn plotToCell(p: vec2<f32>) -> vec2<f32> {
+				return p + frameUniforms.plotOrigin;
+			}
+			// Cell pixels to clip space, under a cell-space layer's viewport.
+			fn cellToClip(p: vec2<f32>) -> vec4<f32> {
+				let ndc = (p / frameUniforms.cellSize) * 2.0 - 1.0;
+				return vec4<f32>(ndc.x, -ndc.y, 0.0, 1.0);
+			}
       
       // Color scale bindings (@group(2) bindings 1-3)
       ${COLOR_SCALE_BINDINGS}
