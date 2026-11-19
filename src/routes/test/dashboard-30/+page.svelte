@@ -231,9 +231,12 @@
 	const charts = ALL_CHARTS.slice(0, CHART_COUNT);
 
 	/** An x label: the field, unique per chart unless the chart shares x. */
-	const xLabelOf = (c) => (c.shared ? 'time' : `${c.x ?? c.cat} #${c.id}`);
-	const yLabelOf = (c) =>
-		`${c.measure ? `mean ${c.measure}` : c.y ? `mean ${c.y}` : 'count'} #${c.id}`;
+	/** The measure an axis shows: a mean, or a count. */
+	const measureTitle = (c) => (c.measure ? `mean ${c.measure}` : c.y ? `mean ${c.y}` : 'count');
+	// Horizontal bars put the category on y and the measure on x.
+	const xLabelOf = (c) =>
+		c.shared ? 'time' : `${c.kind === 'barX' ? measureTitle(c) : (c.x ?? c.cat)} #${c.id}`;
+	const yLabelOf = (c) => `${c.kind === 'barX' ? c.cat : measureTitle(c)} #${c.id}`;
 	const measureOf = (c) => (c.measure ? avg(c.measure) : count());
 	const transformsOf = (c) => (c.top ? [topN(c.top)] : []);
 	const fmtMean = (v) => Number(v).toFixed(0);
@@ -584,7 +587,11 @@
 						<th>work max</th>
 						<th>gpu p50</th>
 						<th>gpu p95</th>
+						<th>pass p50</th>
+						<th>pass p95</th>
+						<th>passes</th>
 						{#if MUTATIONS}<th>mut p50</th><th>mut max</th>{/if}
+						<th>atlas</th>
 						<th>LoAF</th>
 					</tr>
 				</thead>
@@ -603,7 +610,11 @@
 							<td>{fmt(p.workMax)}</td>
 							<td>{fmt(p.gpuP50)}</td>
 							<td>{fmt(p.gpuP95)}</td>
+							<td>{fmt(p.passMsP50)}</td>
+							<td>{fmt(p.passMsP95)}</td>
+							<td>{fmt(p.passesP50, 0)} (max {fmt(p.passesMax, 0)})</td>
 							{#if MUTATIONS}<td>{fmt(p.mutationsP50, 0)}</td><td>{fmt(p.mutationsMax, 0)}</td>{/if}
+							<td>{p.elementDraws} (max {p.elementDrawsMax})</td>
 							<td>{p.loafs}</td>
 						</tr>
 					{/each}
@@ -611,7 +622,8 @@
 			</table>
 			<p class="note">
 				ms. Cadence {fmt(summary.cadence, 2)} ms (≈{Math.round(1000 / summary.cadence)} Hz, the idle
-				median). work = main thread from frame start to the end of rendering; gpu = submit to work done.
+				median). work = main thread from frame start to the end of rendering; gpu = submit to work done;
+				pass = GPU time of our passes (timestamps), and passes per submit.
 			</p>
 		{/if}
 
