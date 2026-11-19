@@ -198,6 +198,10 @@
         return textQuad(slot, origin, corner, t.y, false);
       }
 
+      // A tick mark waits for its label: a tick entering during a pan would
+      // otherwise show its mark a frame or two before the atlas paints its string.
+      if (t.z >= 0.0 && textAtlasEntries.rects[u32(t.z)].z <= 0.0) { return nothing(); }
+
       // A tick mark: a thin quad pointing out of the plot.
       let w = axisConstants.lineWidth * dpr;
       ${

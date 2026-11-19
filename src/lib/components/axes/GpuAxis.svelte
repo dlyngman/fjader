@@ -39,8 +39,16 @@
 
 	const axis = untrack(() => (spec.side === 'bottom' ? 'x' : 'y'));
 	const STYLE: TextStyle = { fontSize: 10, fontWeight: 'normal', fontFamily: null };
-	/** The axes' colour, as the SVG axes drew them. */
-	const color = canvas.getCssColor('--fjader-text-secondary', '#6b7280');
+	/**
+	 * The axes' colour, as the SVG axes drew them, and following it: a theme
+	 * switch or a changed custom property reaches the GPU through the atlas's
+	 * swatch for it (TextAtlas.watchColor).
+	 */
+	const AXIS_COLOR = 'var(--fjader-text-secondary, #6b7280)';
+	const colorWatch = atlas.watchColor(
+		AXIS_COLOR,
+		canvas.getCssColor('--fjader-text-secondary', '#6b7280')
+	);
 
 	const scale = $derived(axis === 'x' ? c.xScaleState : c.yScaleState);
 	const band = $derived(c.scaleTypes?.[axis] === 'band');
@@ -109,81 +117,112 @@
 
 	// --- Per tick, whenever the axis changes ---
 
-	let ticks = $state(new Float32Array(4));
-
 	/**
-	 * Replace the tick data only when it differs: while a domain animates the
-	 * tick frame is a new array every frame with the same values (they are data
-	 * values, placed by the scale on the GPU), and an upload per frame of the
-	 * same numbers is work for nothing.
+	 * The tick data the renderer has, and a second buffer each pass writes into:
+	 * swapped in only when it differs. While a domain animates, the tick frame
+	 * is the same values every frame (data values, placed by the scale on the
+	 * GPU): no upload, and no allocation per frame. Grown, never shrunk.
 	 */
-	function setTicks(out: Float32Array<ArrayBuffer>, n: number, plot: boolean): void {
-		const same =
-			n === count &&
-			plot === plotSpace &&
-			out.length === ticks.length &&
-			out.every((v, i) => v === ticks[i] || (v !== v && ticks[i] !== ticks[i]));
+	let ticks = $state(new Float32Array(64));
+	let back = new Float32Array(64);
+	let count = $state(0);
+	let plotSpace = $state(false);
+
+	function ensureBack(n: number): Float32Array<ArrayBuffer> {
+		if (back.length < n * 4) back = new Float32Array(Math.max(n * 4, back.length * 2));
+		return back;
+	}
+
+	/** Swap in `back` (its first n ticks) when it differs from what is drawn. */
+	function commitTicks(n: number, plot: boolean): void {
+		let same = n === count && plot === plotSpace && back.length === ticks.length;
+		for (let i = 0; same && i < n * 4; i++) {
+			const a = back[i];
+			const b = ticks[i];
+			if (a !== b && !(a !== a && b !== b)) same = false;
+		}
 		if (same) return;
-		ticks = out;
+		const drawn = ticks;
+		ticks = back;
+		back = drawn.length >= ticks.length ? drawn : new Float32Array(ticks.length);
 		count = n;
 		plotSpace = plot;
 	}
-	let count = $state(0);
-	let plotSpace = $state(false);
-	/** The ticks the title offset was last measured from, and the widest label seen. */
-	let widest = 0;
+
+	/**
+	 * The widest label the title has to clear (titleOffset 'auto'): of the
+	 * current scale, reset when the scale changes, as the SVG axis measured it.
+	 */
+	let widest = $state(0);
+	let widestScale: unknown = null;
+	function measure(text: string, scaleNow: unknown): void {
+		if (scaleNow !== widestScale) {
+			widestScale = scaleNow;
+			widest = 0;
+		}
+		const w = textWidth(text);
+		if (w > widest) widest = w;
+	}
 
 	$effect(() => {
 		const s = scale;
 		const isBand = band;
 		const n = spec.ticksNumber;
 		void formatter;
-		if (!s || !c.scaleTypes) return;
+		// No scale yet, or not entered: no ticks. Cleared, not left: ticks of the
+		// scale before (a band axis switched to a numeric one) would otherwise be
+		// drawn through the new one.
+		if (!s || !c.scaleTypes || (!isBand && (!hasEntered(s) || !('tickFrame' in s)))) {
+			untrack(() => {
+				sweep();
+				commitTicks(0, false);
+			});
+			return;
+		}
 		if (isBand) {
 			const b = s as BandScaleState;
 			const list = b.bandTicks();
 			const key = b.identityKey ?? b.sourceField;
 			const gs = groups;
 			// Tracked: a selection's fade moves label opacities with no change to
-			// the ticks. Only writing the results is untracked.
-			{
-				const out = new Float32Array(Math.max(4, list.length * 4));
+			// the ticks. Only the bookkeeping and the write are untracked.
+			const out = ensureBack(list.length);
+			for (let i = 0; i < list.length; i++) {
+				const tick = list[i];
+				const selected = !filterGroups
+					? 1
+					: b.hasIdentity
+						? filterGroups.opacityOfId(key, gs, tick.key)
+						: filterGroups.opacityOfValue(key, gs, tick.value);
+				out[i * 4] = tick.key;
+				out[i * 4 + 1] = b.tickOpacity(tick.key) * selected;
+			}
+			untrack(() => {
 				for (let i = 0; i < list.length; i++) {
-					const tick = list[i];
-					const selected = !filterGroups
-						? 1
-						: b.hasIdentity
-							? filterGroups.opacityOfId(key, gs, tick.key)
-							: filterGroups.opacityOfValue(key, gs, tick.value);
-					const text = labelOf(tick.value, true);
-					widest = Math.max(widest, textWidth(text));
-					out[i * 4] = tick.key;
-					out[i * 4 + 1] = b.tickOpacity(tick.key) * selected;
+					const text = labelOf(list[i].value, true);
+					measure(text, s);
 					out[i * 4 + 2] = slotOf(text);
 				}
-				untrack(() => {
-					sweep();
-					setTicks(out, list.length, false);
-				});
-			}
+				sweep();
+				commitTicks(list.length, false);
+			});
 			return;
 		}
-		if (!hasEntered(s) || !('tickFrame' in s)) return;
 		const cs = s as ContinuousScaleState;
 		const frame = cs.tickFrame(n);
 		const crossfading = cs.crossfading;
 		untrack(() => {
-			const out = new Float32Array(Math.max(4, frame.length * 4));
+			const out = ensureBack(frame.length);
 			for (let i = 0; i < frame.length; i++) {
 				const t = frame[i];
 				const text = labelOf(t.value, false);
-				if (t.target) widest = Math.max(widest, textWidth(text));
+				if (t.target) measure(text, s);
 				out[i * 4] = crossfading ? t.position : t.value;
 				out[i * 4 + 1] = t.alpha;
 				out[i * 4 + 2] = slotOf(text);
 			}
 			sweep();
-			setTicks(out, frame.length, crossfading);
+			commitTicks(frame.length, crossfading);
 		});
 	});
 
@@ -211,7 +250,6 @@
 			return { slot, mode, offset: 20 };
 		}
 		if (spec.titlePlacement === 'top') return { slot, mode: 4, offset: 10 };
-		void count;
 		const offset =
 			spec.titleOffset === 'auto' ? clearTitleOffset(widest, c.margin.left) : spec.titleOffset;
 		return { slot, mode: 3, offset };
@@ -221,9 +259,10 @@
 		for (const entry of held.values()) atlas.release(entry.slot);
 		held.clear();
 		if (titleSlot >= 0) atlas.release(titleSlot);
+		atlas.unwatchColor(colorWatch);
 	});
 </script>
 
 {#if c.isReady && c.scaleTypes}
-	<AxisRenderer {axis} {ticks} {count} {plotSpace} {title} {color} />
+	<AxisRenderer {axis} {ticks} {count} {plotSpace} {title} color={colorWatch.rgba} />
 {/if}

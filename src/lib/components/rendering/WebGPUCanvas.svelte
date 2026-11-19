@@ -336,7 +336,7 @@
 		request. Its one child is the text atlas.
 	-->
 	<canvas bind:this={canvas} content="drawable" layoutsubtree onpaint={handlePaint}>
-		{#if textAtlas.items.length > 0}
+		{#if textAtlas.items.length > 0 || textAtlas.swatches.length > 0}
 			<div
 				class="fjader-text-atlas"
 				drawable
@@ -346,6 +346,9 @@
 			>
 				{#each textAtlas.items as item (item.slot)}
 					<span data-slot={item.slot} style={item.css}>{item.text}</span>
+				{/each}
+				{#each textAtlas.swatches as swatch (swatch.css)}
+					<span class="fjader-swatch" data-swatch={swatch.css} style:background={swatch.css}></span>
 				{/each}
 			</div>
 		{/if}
@@ -382,12 +385,25 @@
 		flex-wrap: wrap;
 		align-items: flex-start;
 		gap: 2px 3px;
-		color: #fff;
 		line-height: 1.2;
 	}
 
+	/* Strings white, so shaders tint them; the container keeps the page's colour for swatches. */
 	.fjader-text-atlas span {
 		white-space: pre;
+		color: #fff;
+	}
+
+	/*
+	 * A colour the GPU follows (TextAtlas.watchColor): one pixel, read on paint.
+	 * Inherits the page's colour, not the strings' white, so currentColor means
+	 * the page's text colour.
+	 */
+	.fjader-text-atlas .fjader-swatch {
+		color: inherit;
+		display: inline-block;
+		width: 1px;
+		height: 1px;
 	}
 
 	.webgpu-error,
