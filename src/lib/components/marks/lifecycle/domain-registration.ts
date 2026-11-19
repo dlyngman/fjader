@@ -181,7 +181,12 @@ export function registerDataDerivedDomains(
 	 * catch-up result on a scale no other visible chart draws. Null: animate.
 	 */
 	instantFor: ((scale: object) => boolean) | null,
-	colorScaleState?: ColorScaleState | null
+	colorScaleState?: ColorScaleState | null,
+	/**
+	 * The mark keeps its own subset of the band axis's categories (a topN), so
+	 * the axis checks it agrees with the other such marks (reduced-sets-check.ts).
+	 */
+	reducesCategories = false
 ): RegisterDomainsResult {
 	if (!data || data.length === 0) {
 		return { dataDerivedDomainsSet: false, skipDomainUpdateForAxis };
@@ -300,7 +305,7 @@ export function registerDataDerivedDomains(
 				// order (the assembler orders by alignment, then series), so it is
 				// not claimed as one — and a mark whose sort was removed thereby
 				// withdraws the ranking it registered before.
-				bandScale.addMarkIds(ids, markId, { sorted: ranked });
+				bandScale.addMarkIds(ids, markId, { sorted: ranked, reduced: reducesCategories });
 			} else {
 				// No dim yet, or an empty one. The channel carries a display
 				// position, so its raw values are what the scale stores.
@@ -310,7 +315,7 @@ export function registerDataDerivedDomains(
 				// so reaching here means the dim has not arrived or has no values.
 				const categories = extractCategoriesFromData(data, axis);
 				if (categories.length === 0) continue;
-				bandScale.addMark(categories, markId);
+				bandScale.addMark(categories, markId, { reduced: reducesCategories });
 			}
 			bandScale.updateDomainFromExtents({ instant: instantFor?.(bandScale) ?? false });
 		}

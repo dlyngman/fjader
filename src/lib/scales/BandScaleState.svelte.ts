@@ -1,5 +1,6 @@
 // src/lib/scales/BandScaleState.svelte.ts
 
+import { ReducedSetsCheck } from './reduced-sets-check';
 import { scaleBand } from 'd3-scale';
 import type { ScaleBand } from 'd3-scale';
 import type { DimValue, FieldIdentity, SyntheticId } from '$lib/query-engine/categorical-identity';
@@ -196,7 +197,11 @@ export class BandScaleState {
 	destroy(): void {
 		this.#destroyed = true;
 		this.#slots.clock.stop();
+		this.#reducedSets.destroy();
 	}
+
+	/** Whether the marks that each keep their own top N here agree (reduced-sets-check.ts). */
+	readonly #reducedSets = new ReducedSetsCheck(() => this.sourceField);
 
 	/**
 	 * True once the registry has torn this scale down. Use-after-destroy is
@@ -579,20 +584,40 @@ export class BandScaleState {
 	addMark(
 		categories: DimValue[],
 		identifier: string,
-		options: { sorted?: boolean; explicit?: boolean } = {}
+		options: { sorted?: boolean; explicit?: boolean; reduced?: boolean } = {}
 	): this {
 		this.#warnIfDestroyed('addMark');
 		this.#resolver.addMark(categories, identifier, options);
+		this.#noteReduced(identifier, 'values', categories, options.reduced);
 		this.#afterRegistration();
 		return this;
 	}
 
-	/** Register a mark's categories, as dim ids. See `addMark`. */
-	addMarkIds(ids: number[], identifier: string, options: { sorted?: boolean } = {}): this {
+	/**
+	 * Register a mark's categories, as dim ids. See `addMark`. `reduced`: the
+	 * mark keeps its own subset of the categories (a topN), checked against the
+	 * other such marks on this axis.
+	 */
+	addMarkIds(
+		ids: number[],
+		identifier: string,
+		options: { sorted?: boolean; reduced?: boolean } = {}
+	): this {
 		this.#warnIfDestroyed('addMarkIds');
 		this.#resolver.addMarkIds(ids, identifier, options);
+		this.#noteReduced(identifier, 'ids', ids, options.reduced);
 		this.#afterRegistration();
 		return this;
+	}
+
+	#noteReduced(
+		identifier: string,
+		space: 'ids' | 'values',
+		values: readonly unknown[],
+		reduced: boolean | undefined
+	): void {
+		if (reduced) this.#reducedSets.note(identifier, space, values);
+		else this.#reducedSets.remove(identifier);
 	}
 
 	/** Both registration paths schedule the same way. */
@@ -606,6 +631,7 @@ export class BandScaleState {
 	 * Remove a mark's categories from domain calculation
 	 */
 	removeMark(identifier: string): this {
+		this.#reducedSets.remove(identifier);
 		if (this.#resolver.removeMark(identifier) && this.#enableUpdates) {
 			this.#scheduleDomainUpdate();
 		}
