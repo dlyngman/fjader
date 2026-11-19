@@ -350,15 +350,20 @@ function _scaleFunctionName(scaleType: string, axis: string): string {
 }
 
 /**
- * Bytes of immediate data every render pipeline declares: the chart's x and y
- * `ScaleParam`, 16 bytes each, and its entrance, a vec4. Every layout declares the same size because a
- * draw requires every declared byte to have been set, and the pass sets them
- * once, before its first draw.
+ * Bytes of immediate data every render pipeline and every placement kernel
+ * declares: the chart's x and y `ScaleParam`, 16 bytes each, its entrance (a
+ * vec4), and the rows a placement dispatch covers (a vec4<u32>). Every layout
+ * declares the same size because a draw or dispatch requires every declared
+ * byte to have been set; a render pass sets them once, before its first draw.
  *
- * Immediates carry state shared across the pass and read by several marks: the
- * chart's scales and settings. 64 bytes are available on M-series Macs.
+ * 64 bytes is WebGPU's default maxImmediateSize, and the most any device
+ * offers today (`/test/gpu-limits`): nothing more fits here.
+ *
+ * The kernels and the draws read one struct, the same bytes written by the
+ * coordinator once per chart per frame, so they cannot disagree about where a
+ * mark is. A draw ignores `rows`.
  */
-export const CHART_SCALE_IMMEDIATE_SIZE = 48;
+export const CHART_SCALE_IMMEDIATE_SIZE = 64;
 
 /**
  * Main template system class
@@ -525,6 +530,9 @@ export class ScaleTemplateSystem {
         // x = how far a growing mark has grown, y = a growing mark's opacity,
         // z = a fading mark's opacity. All 1 once the chart has entered.
         entrance: vec4<f32>,
+        // A placement dispatch's rows: x = how many, y = the first. Zero in a
+        // render pass, which does not read them.
+        rows: vec4<u32>,
       };
       var<immediate> chartScales: ChartScales;
 
