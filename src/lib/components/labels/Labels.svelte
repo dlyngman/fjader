@@ -31,9 +31,10 @@
 
 	interface Props {
 		/**
-		 * The text: a column or expression, added to the mark's query (a category
-		 * by its column: `text="carrier"`), or one of the mark's measure channels
-		 * (`'y'`, `'y1'`, `'y2'`, `'x1'`, `'x2'`). Default: each row's own measure
+		 * The text: one of the mark's channels by name (its measure, `'y'` on
+		 * vertical bars and `'x'` on horizontal ones; its category channel, which
+		 * shows the category's name), or any column or expression, added to the
+		 * mark's query. Default: each row's own measure
 		 * (a stacked segment's, not the stack's); on an Other bar, the part a
 		 * selection holds, where the label then sits.
 		 *
@@ -91,32 +92,44 @@
 	}
 	if (chartContext.fx) console.warn('[fjader] <Labels> does not draw in faceted charts yet.');
 
-	/** This layer's slot channel on the host renderer: written there, so holds carry it. */
+	/**
+	 * This layer's channels on the host renderer, one f32 per row each: its
+	 * atlas slots, and whether a label takes the whole bar. Written there, so
+	 * rebin holds and cuts carry them as any host channel.
+	 */
 	const slotBinding = rendererHost.allocateSlotChannel();
+	const wholeBinding = rendererHost.allocateSlotChannel();
 
 	// --- The text column ---
 
 	/**
-	 * The mark's measure channels: read from its rows as they are. Not its band
-	 * or colour channels, which carry category ids rather than names: a
-	 * category is named by its column, which joins the query.
+	 * What the text names: the mark's measure (the default, or a measure
+	 * channel's name), a field of the mark's own (its band channel: the category
+	 * names, where its column holds ids), or a column or expression.
 	 */
-	const MARK_CHANNELS = new Set(['y', 'x1', 'x2', 'y1', 'y2', 'r']);
-	const labelId = Math.random().toString(36).slice(2, 10);
-
-	/** The column the text is read from, or null for the measure. */
-	const textColumn = $derived.by((): string | null => {
-		if (text === undefined) return null;
-		if (typeof text === 'string' && MARK_CHANNELS.has(text)) return text;
-		return `__label_${labelId}`;
+	const source = $derived.by((): { kind: 'measure' } | { kind: 'field'; field: FieldRef } => {
+		if (text === undefined) return { kind: 'measure' };
+		const channel = typeof text === 'string' ? markHost.channel(text) : null;
+		return channel ?? { kind: 'field', field: text };
 	});
+	/**
+	 * The field's identity, as SQL: an inline expression is a new object on each
+	 * render of the parent, and adding it to the mark's query each time would
+	 * re-query the mark each time.
+	 */
+	const fieldKey = $derived(source.kind === 'field' ? String(source.field) : null);
+	const labelId = Math.random().toString(36).slice(2, 10);
+	const textColumn = $derived(fieldKey === null ? null : `__label_${labelId}`);
 
-	// A column the mark does not select joins its query (once per change of `text`).
+	// The field joins the mark's query, once per change of what it is.
 	$effect(() => {
 		const column = textColumn;
-		const field = text;
-		if (!column?.startsWith('__label_') || field === undefined) return;
-		return untrack(() => markHost.addSelect(column, field));
+		void fieldKey;
+		if (!column) return;
+		return untrack(() => {
+			const s = source;
+			return s.kind === 'field' ? markHost.addSelect(column, s.field) : undefined;
+		});
 	});
 
 	// --- Strings, per data change ---
@@ -176,24 +189,16 @@
 		const rows = labelled;
 		const s = style;
 		untrack(() => {
-			textSlots.stage(rows?.strings ?? null, s);
+			// Rows that are another bar now hide at once; the rest keep their
+			// string until the new one is painted.
+			const interim = textSlots.stage(rows?.strings ?? null, s, markHost.rowKeys());
 			stagedWhole = rows?.whole ?? null;
+			const renderer = rendererHost.renderer();
+			if (interim && renderer?.resourcesCreated) renderer.writeAttribute(slotBinding, interim);
 			staged++;
 		});
 	});
 
-	/**
-	 * The layer's channel: two floats per row, its atlas slot and whether it
-	 * takes the whole bar. One buffer, so text and position switch together.
-	 */
-	function channel(slots: Float32Array, whole: Float32Array | null): Float32Array {
-		const out = new Float32Array(slots.length * 2);
-		for (let i = 0; i < slots.length; i++) {
-			out[i * 2] = slots[i];
-			out[i * 2 + 1] = whole ? whole[i] : 1;
-		}
-		return out;
-	}
 	let writtenTo: unknown = null;
 	$effect(() => {
 		void staged;
@@ -205,7 +210,12 @@
 			if (committed) committedWhole = stagedWhole;
 			const slots = committed ?? (writtenTo !== renderer ? textSlots.current : null);
 			if (!slots) return;
-			renderer.writeAttribute(slotBinding, channel(slots, committedWhole));
+			// Slots and flags in one effect: text and position switch together.
+			renderer.writeAttribute(slotBinding, slots);
+			renderer.writeAttribute(
+				wholeBinding,
+				committedWhole ?? new Float32Array(slots.length).fill(1)
+			);
 			writtenTo = renderer;
 			version++;
 		});
@@ -227,12 +237,14 @@
 	onDestroy(() => {
 		textSlots.destroy();
 		rendererHost.releaseSlotChannel(slotBinding);
+		rendererHost.releaseSlotChannel(wholeBinding);
 	});
 </script>
 
 {#if !chartContext.fx && rendererHost.attached}
 	<BoxLabels
 		{slotBinding}
+		{wholeBinding}
 		{anchor}
 		{fillMode}
 		{color}

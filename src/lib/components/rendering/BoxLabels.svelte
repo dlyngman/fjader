@@ -45,12 +45,13 @@
 	};
 	const FILLS: Record<LabelFillMode, number> = { color: 0, inherit: 1, contrast: 2 };
 
-	const BINDINGS = { RECORDS: 0, SLOTS: 1, CONSTANTS: 2 };
+	const BINDINGS = { RECORDS: 0, SLOTS: 1, CONSTANTS: 2, WHOLE: 3 };
 	const LABEL_Z_INDEX = 1000;
 
 	interface Props {
-		/** The host's slot channel for this layer. */
+		/** The host's channels for this layer: atlas slots, and whether a label takes the whole bar. */
 		slotBinding: number;
+		wholeBinding: number;
 		anchor?: LabelAnchor;
 		fillMode?: LabelFillMode;
 		/** `color` fill, and an outside label's colour under `contrast`. */
@@ -67,6 +68,7 @@
 
 	let {
 		slotBinding,
+		wholeBinding,
 		anchor = 'end',
 		fillMode = 'contrast',
 		color,
@@ -113,9 +115,11 @@
     };
     @group(1) @binding(${BINDINGS.CONSTANTS}) var<uniform> labelConstants: LabelConstants;
     @group(1) @binding(${BINDINGS.RECORDS}) var<storage, read> records: array<Record>;
-    // Per row: x = its atlas slot, y = 1 when it takes the whole bar (0: an
-    // Other bar's label on the part a selection holds).
-    @group(1) @binding(${BINDINGS.SLOTS}) var<storage, read> slots: array<vec2<f32>>;
+    // Per row: its atlas slot; and 1 when it takes the whole bar (0: an Other
+    // bar's label on the part a selection holds). Two columns of the host, one
+    // f32 per row each, so rebin holds and cuts carry them as any channel.
+    @group(1) @binding(${BINDINGS.SLOTS}) var<storage, read> slots: array<f32>;
+    @group(1) @binding(${BINDINGS.WHOLE}) var<storage, read> wholes: array<f32>;
 
     struct VertexOutput {
       @builtin(position) position: vec4<f32>,
@@ -137,9 +141,9 @@
       @builtin(instance_index) i: u32,
     ) -> VertexOutput {
       if (i >= arrayLength(&slots)) { return nothing(); }
-      let row = slots[i];
-      let slot = row.x;
+      let slot = slots[i];
       if (slot < 0.0) { return nothing(); }
+      let whole = select(1.0, wholes[i], i < arrayLength(&wholes));
       let rect = textAtlasEntries.rects[u32(slot)];
       if (rect.z <= 0.0 || rect.w <= 0.0) { return nothing(); }
       let r = records[i];
@@ -156,7 +160,7 @@
       // An Other bar's label sits on the part a selection holds (share 1 + s,
       // morphing with the bar): on the measure axis its end is that part's end.
       // The cross axis keeps the bar's full width.
-      let held = select(1.0, clamp(r.share - 1.0, 0.0, 1.0), r.share > 0.5 && row.y < 0.5);
+      let held = select(1.0, clamp(r.share - 1.0, 0.0, 1.0), r.share > 0.5 && whole < 0.5);
       var end = r.box.zw;
       end[m] = base[m] + (end[m] - base[m]) * held;
       let size = rect.zw;
@@ -231,6 +235,7 @@
 	const dataBindingConfig = [
 		{ binding: BINDINGS.RECORDS, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
 		{ binding: BINDINGS.SLOTS, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
+		{ binding: BINDINGS.WHOLE, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
 		{
 			binding: BINDINGS.CONSTANTS,
 			type: 'uniform',
@@ -252,10 +257,12 @@
 		const r = renderer;
 		if (!r?.resourcesCreated) return;
 		const binding = slotBinding;
+		const wholeAt = wholeBinding;
 		r.setExternalBinding(BINDINGS.RECORDS, () =>
 			labelHost.renderer()?.bufferFor(labelHost.recordBinding)
 		);
 		r.setExternalBinding(BINDINGS.SLOTS, () => labelHost.renderer()?.bufferFor(binding));
+		r.setExternalBinding(BINDINGS.WHOLE, () => labelHost.renderer()?.bufferFor(wholeAt));
 		hostBound = true;
 	});
 

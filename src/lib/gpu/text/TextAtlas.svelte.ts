@@ -73,6 +73,18 @@ interface DrawableQueue extends GPUQueue {
 	): void;
 }
 
+/**
+ * What to say when HTML-in-Canvas is missing: every chart's text (axes,
+ * labels, TextMark) is rasterized through it, so without it charts would
+ * draw with no text at all.
+ */
+export const HTML_IN_CANVAS_MISSING_MESSAGE =
+	`This browser cannot draw HTML into WebGPU textures (HTML-in-Canvas, ` +
+	`GPUQueue.drawElementImageToTexture), which fjader requires: every chart's ` +
+	`text, its axes' labels included, is rasterized through it. Chrome 157 or ` +
+	`later supports it. Without it charts would draw no text, so this fails ` +
+	`here instead.`;
+
 /** Whether this browser can draw elements into WebGPU textures (Chrome 157+). */
 export function htmlInCanvasSupported(): boolean {
 	return (
@@ -217,7 +229,10 @@ export class TextAtlas {
 		let maxSlot = -1;
 		for (const child of container.children) {
 			const slot = Number((child as HTMLElement).dataset.slot);
-			if (!(slot >= 0) || !this.#entries[slot]) continue;
+			const entry = slot >= 0 ? this.#entries[slot] : null;
+			// A span still showing a slot's previous string (a reuse the DOM has
+			// not caught up with) is not this entry's: it is painted next time.
+			if (!entry || child.textContent !== entry.item.text) continue;
 			const r = child.getBoundingClientRect();
 			// Outward to whole texels: quads snap to device pixels, so a whole-texel
 			// rectangle maps texels to pixels one to one. The container's gap keeps

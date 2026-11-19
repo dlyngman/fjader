@@ -27,6 +27,7 @@ import {
 } from './identity-slot-packing';
 import { frameUniformIsStale } from './frame-uniform-sync';
 import { immediatesSupported, IMMEDIATES_MISSING_MESSAGE } from './immediates';
+import { htmlInCanvasSupported, HTML_IN_CANVAS_MISSING_MESSAGE } from './text/TextAtlas.svelte';
 import {
 	COLOR_CONFIG_BYTES,
 	COLOR_CONFIG_SLOT_BASE_OFFSET,
@@ -703,6 +704,11 @@ export class GPUCoordinator {
 		// on. See immediates.ts for why the floor is deliberate.
 		if (!immediatesSupported()) {
 			throw new Error(IMMEDIATES_MISSING_MESSAGE);
+		}
+		// Every chart's text is rasterized through HTML-in-Canvas: without it
+		// charts would draw with no text, axes included, and nothing would say why.
+		if (!htmlInCanvasSupported()) {
+			throw new Error(HTML_IN_CANVAS_MISSING_MESSAGE);
 		}
 
 		this.#device = await adapter.requestDevice({

@@ -84,6 +84,38 @@ describe('TextSlots', () => {
 		expect(Array.from(slots.commit()!)).toEqual([-1, 0]);
 	});
 
+	it('hides at once a row that became another bar, keeps one that is the same bar', () => {
+		const atlas = fakeAtlas();
+		const slots = new TextSlots(atlas);
+		slots.stage(['10', '20', '30'], style, [7, 8, 9]);
+		atlas.paint();
+		slots.commit();
+		// Row 0 is still category 7 (new value); row 1 is now category 5 (a topN
+		// change); row 2 is still 9 with the same value.
+		const interim = slots.stage(['11', '40', '30'], style, [7, 5, 9]);
+		expect(Array.from(interim!)).toEqual([0, -1, 2]);
+		atlas.paint();
+		expect(Array.from(slots.commit()!)).toEqual([3, 4, 2]);
+	});
+
+	it('gives no interim when every row is the same bar', () => {
+		const atlas = fakeAtlas();
+		const slots = new TextSlots(atlas);
+		slots.stage(['a', 'b'], style, [1, 2]);
+		atlas.paint();
+		slots.commit();
+		expect(slots.stage(['c', 'd'], style, [1, 2])).toBeNull();
+	});
+
+	it('hides rows past the old count when rows are added', () => {
+		const atlas = fakeAtlas();
+		const slots = new TextSlots(atlas);
+		slots.stage(['a'], style, [1]);
+		atlas.paint();
+		slots.commit();
+		expect(Array.from(slots.stage(['a', 'b'], style, [1, 2])!)).toEqual([0, -1]);
+	});
+
 	it('releases everything on destroy', () => {
 		const atlas = fakeAtlas();
 		const slots = new TextSlots(atlas);

@@ -15,7 +15,6 @@
 	} from './utils';
 	import { buildReactiveConfig } from './utils/reactive-config';
 	import Texts from '../rendering/Texts.svelte';
-	import { htmlInCanvasSupported } from '$lib/gpu/text/TextAtlas.svelte';
 	import { TextSlots } from '$lib/gpu/text/TextSlots';
 	import type { TextAtlas, TextStyle } from '$lib/gpu/text/TextAtlas.svelte';
 	import type {
@@ -94,11 +93,6 @@
 	if (!webGPUContext || !textAtlas) {
 		throw new Error(
 			"TextMark draws on the GPU: place it in a WebGPUCanvas (the chart's `canvasComponents` snippet), next to the marks it labels, not in `foreground`."
-		);
-	}
-	if (!htmlInCanvasSupported()) {
-		throw new Error(
-			'TextMark needs HTML-in-Canvas (GPUQueue.drawElementImageToTexture), which Chrome ships from version 157.'
 		);
 	}
 
@@ -267,8 +261,12 @@
 	$effect(() => {
 		const rows = labels;
 		const s = style;
+		// A row's key: its category's id on the band axis it is aligned on, if any.
+		const band = setup?.alignedBand;
+		const keys = band === 'x' ? xData : band === 'y' ? yData : null;
 		untrack(() => {
-			textSlots.stage(rows, s);
+			const interim = textSlots.stage(rows, s, keys);
+			if (interim) slotData = interim;
 			staged++;
 		});
 	});

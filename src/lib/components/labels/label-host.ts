@@ -57,7 +57,24 @@ export interface LabelMarkHost {
 	 * select. Returns the removal. Changes the query, so the mark re-runs it.
 	 */
 	addSelect(alias: string, field: FieldRef): () => void;
+	/**
+	 * What a `text` naming one of the mark's channels means, or null for a name
+	 * that is not one (a column): its measure (`y` on vertical bars, `x` on
+	 * horizontal ones, and their bounds, whatever the stack renamed them to),
+	 * or the field a channel draws (a category's NAME, where its column holds
+	 * ids). Asked of the mark because only it knows its orientation.
+	 */
+	channel(name: string): LabelChannel | null;
+	/**
+	 * Each row's key: its category's id on the band axis, or null. A label row
+	 * whose key changed between results is another bar, and must not show the
+	 * old bar's string while its own is painted (TextSlots).
+	 */
+	rowKeys(): ArrayLike<number> | null;
 }
+
+/** A mark channel as label text: the measure, or a field of the mark's own. */
+export type LabelChannel = { kind: 'measure' } | { kind: 'field'; field: FieldRef };
 
 /** How the host colours its rows: what `inherit` and `contrast` read. */
 export interface LabelHostColor {

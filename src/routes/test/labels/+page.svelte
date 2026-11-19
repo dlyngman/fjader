@@ -7,8 +7,8 @@
 	 *    flip reorders bars and labels together. Carrier labels below the plot
 	 *    toggle a selection that dims the bars of charts 2 and 3, and their
 	 *    labels with them.
-	 * 2. Horizontal bars, text from a column the bars do not select (`text`
-	 *    names the origin, added to the bars' query).
+	 * 2. Horizontal bars, with a second label layer naming each bar's category
+	 *    (`text="y"`: the band channel, read as names through its field).
 	 * 3. Stacked bars: each segment's own value, centred.
 	 * 4. Bars below zero: `end` outside the bar's end, which is below its base.
 	 * 5. All 12 origins, labelled.
@@ -150,7 +150,7 @@
 									selection="brush"
 								>
 									<Labels {anchor} {fill} />
-									<Labels text="origin" anchor="inside-start" fill="contrast" fontWeight="600" />
+									<Labels text="y" anchor="inside-start" fill="contrast" fontWeight="600" />
 								</BarMarkX>
 							{/snippet}
 						</WebGPUCanvas>

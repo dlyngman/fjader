@@ -324,6 +324,14 @@
 			const split = setup?.otherRows.split;
 			return split ? { split: split.data, flat: split.flat } : null;
 		},
+		channel(name) {
+			if (['y', 'y1', 'y2'].includes(name)) return { kind: 'measure' };
+			if (name === 'x') return { kind: 'field', field: entry.x };
+			if (name === 'fill' && typeof entry.fill === 'string')
+				return { kind: 'field', field: entry.fill };
+			return null;
+		},
+		rowKeys: () => x0Data ?? null,
 		addSelect(alias, field) {
 			labelFields = { ...labelFields, [alias]: field };
 			return () => {
