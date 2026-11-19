@@ -1638,7 +1638,8 @@ export class MarkLifecycleV2 {
 					this.#bandScaleForDomain('y'),
 					this.#markId,
 					instantFor,
-					this.#colorScaleState
+					this.#colorScaleState,
+					this.#transformCompiler.hasCategoryReducingTransforms()
 				);
 			};
 			// A change of unit: inside `discrete()` the value axis tweens its
