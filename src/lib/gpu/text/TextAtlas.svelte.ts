@@ -101,6 +101,16 @@ export class TextAtlas {
 	/** The spans WebGPUCanvas renders, keyed by slot. Replaced, never mutated, when entries change. */
 	items = $state<AtlasItem[]>([]);
 
+	/**
+	 * Bumped after each upload: a string acquired before it may be drawable
+	 * now (`isRasterized`). What a text layer waits on before switching to new
+	 * strings, so a label never shows an entry not painted yet.
+	 */
+	paintVersion = $state(0);
+
+	/** Whether each slot's string is in the texture. */
+	readonly #rasterized = new Uint8Array(ATLAS_MAX_ENTRIES);
+
 	readonly #entries: (Entry | null)[] = [];
 	readonly #byKey = new Map<string, number>();
 	readonly #free: number[] = [];
@@ -139,6 +149,7 @@ export class TextAtlas {
 			return -1;
 		}
 		this.#entries[slot] = { key, refs: 1, item: { slot, text, css: styleCss(style) } };
+		this.#rasterized[slot] = 0;
 		this.#byKey.set(key, slot);
 		this.#scheduleItems();
 		return slot;
@@ -151,6 +162,7 @@ export class TextAtlas {
 		this.#entries[slot] = null;
 		this.#byKey.delete(entry.key);
 		this.#free.push(slot);
+		this.#rasterized[slot] = 0;
 		this.#table.fill(0, slot * 4, slot * 4 + 4);
 		if (this.#entriesBuffer && this.#device) {
 			this.#device.queue.writeBuffer(this.#entriesBuffer, slot * ATLAS_ENTRY_BYTES, this.#zeroRow);
@@ -219,12 +231,19 @@ export class TextAtlas {
 			table[o + 1] = y0;
 			table[o + 2] = Math.min(x1, texture.width) - x0;
 			table[o + 3] = Math.min(y1, texture.height) - y0;
+			this.#rasterized[slot] = 1;
 			if (slot > maxSlot) maxSlot = slot;
 		}
 		if (maxSlot >= 0) {
 			device.queue.writeBuffer(this.#entriesBuffer!, 0, table, 0, (maxSlot + 1) * 4);
 		}
+		this.paintVersion++;
 		this.#coordinator.invalidateChart(this.#chartId);
+	}
+
+	/** Whether `slot`'s string has been painted into the texture (and not released since). */
+	isRasterized(slot: number): boolean {
+		return slot >= 0 && this.#rasterized[slot] === 1;
 	}
 
 	/** The texture at least `width` × `height` texels, and the entry table; rebinds on growth. */
