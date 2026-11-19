@@ -3,6 +3,7 @@
 	import type { ChartVisibility } from './ChartVisibility.svelte';
 	import type { ChartHover } from './ChartHover.svelte';
 	import { setContext, getContext, onMount } from 'svelte';
+	import { AXIS_REGISTRY, AxisRegistry } from '../axes/axis-registry.svelte';
 	import type { Snippet } from 'svelte';
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
 	import type { Margin } from '$lib/types';
@@ -463,6 +464,8 @@
 	};
 
 	setContext('chart', chartContext);
+	// The axes this cell draws, as AxisLeft/AxisBottom declare them (GPU-drawn by WebGPUCanvas).
+	setContext(AXIS_REGISTRY, new AxisRegistry());
 
 	// --- Pointer event handling ---
 	const pointerBuffer = { x: 0, y: 0 };

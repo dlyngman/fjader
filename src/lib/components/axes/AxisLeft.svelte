@@ -1,14 +1,14 @@
 <script lang="ts">
-	import { hasEntered } from '$lib/scales/entered';
-	import { getContext } from 'svelte';
-	import type { ChartContext } from '$lib/types';
-	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
-	import BandAxisTicks from './BandAxisTicks.svelte';
-	import type { ContinuousScaleState } from '$lib/types';
-	import type { TickEntry } from '$lib/scales/LinearScaleState.svelte';
-	import { categoryLabel } from '$lib/query-engine/categorical-identity';
-	import { clearTitleOffset, sameTicks, textWidth } from './axis-title';
+	import { getContext, onDestroy } from 'svelte';
+	import type { ChartContext, ContinuousScaleState } from '$lib/types';
+	import { AXIS_REGISTRY, type AxisRegistry, type AxisSpec } from './axis-registry.svelte';
 
+	/**
+	 * The y axis, at the plot's left: its ticks, their labels, and the scale's
+	 * label as its title. Drawn on the GPU in the chart's margins: this component
+	 * declares the axis (axis-registry), wherever it is placed, and the chart's
+	 * canvas draws it (GpuAxis).
+	 */
 	interface Props {
 		ticksNumber?: number;
 		tickFormat?: ((value: unknown) => string) | null;
@@ -47,129 +47,27 @@
 			(s as ContinuousScaleState).setCustomFormat(tickFormat);
 	});
 
-	// Continuous scales: the scale's tick frame, each tick with its place along
-	// the plot and its opacity (at rest the live ticks, fully drawn; through a
-	// discrete change, the old and new sets crossfading in place). None until
-	// the scale has entered: before that its domain is a placeholder.
-	const continuousTicks: readonly TickEntry[] = $derived.by(() => {
-		const s = c.yScaleState;
-		if (!s || c.scaleTypes?.y === 'band' || !hasEntered(s) || !('tickFrame' in s)) return [];
-		return (s as ContinuousScaleState).tickFrame(ticksNumber);
-	});
-	/**
-	 * Where a tick sits, in px: its fraction of the plot, straight to pixels (0
-	 * at the bottom). No domain in between, so a crossfading set stays put.
-	 */
-	const tickPx = (t: TickEntry) => c.innerHeight * (1 - t.position);
-
-	/**
-	 * A tick's key: the incoming (or, at rest, the live) set by value, so a pan
-	 * keeps each label's element; an outgoing set's by value and its frozen
-	 * position, which does not move, and tells apart one value in two sets.
-	 */
-	const tickKey = (t: TickEntry) => (t.target ? `${t.value}` : `${t.value}@${t.position}`);
-
-	// Band scales: the categories on screen NOW, at their current fractional slots,
-	// rather than the domain. Mid-transition a label travels with its bar, and a
-	// leaving category keeps its label, fading, until its bar is gone.
-	const bandTicks = $derived(
-		c.scaleTypes?.y === 'band' && c.yScaleState ? (c.yScaleState as BandScaleState).bandTicks() : []
-	);
-
-	// Unified formatter interface - all scale states have tickFormat()
-	const tickFormatter = $derived(c.yScaleState?.tickFormat ? c.yScaleState.tickFormat() : String);
-
-	// The title's distance from the axis. Measured only for 'auto', from the labels
-	// drawn (each distinct string once, then cached). It follows the widest label
-	// seen on this scale and never moves back in: pan and zoom change the ticks
-	// all the time, and a title that followed them would jitter. Taking the
-	// maximum is idempotent, so re-evaluating this changes nothing.
-	let widestSeen = 0;
-	let widestScale: unknown = null;
-	// The ticks and formatter the widest was last taken from: a pan that only moves
-	// the same ticks measures (and formats) nothing.
-	let measuredTicks: ArrayLike<unknown> | null = null;
-	let measuredFormatter: unknown = null;
-	const titleX = $derived.by(() => {
-		if (titleOffset !== 'auto') return titleOffset;
-		const scale = c.yScaleState;
-		if (scale !== widestScale) {
-			widestScale = scale;
-			widestSeen = 0;
-			measuredTicks = null;
+	const registry = getContext<AxisRegistry | undefined>(AXIS_REGISTRY);
+	const spec: AxisSpec = {
+		id: `axis-left-${crypto.randomUUID().slice(0, 8)}`,
+		side: 'left',
+		get ticksNumber() {
+			return ticksNumber;
+		},
+		get tickFormat() {
+			return tickFormat;
+		},
+		get title() {
+			return title;
+		},
+		titleAnchor: 'center',
+		get titleOffset() {
+			return titleOffset;
+		},
+		get titlePlacement() {
+			return titlePlacement;
 		}
-		const band = c.scaleTypes?.y === 'band';
-		// The incoming set's values: numbers compare by value, so a pan that keeps
-		// the same ticks measures nothing, and a label on its way out never counts.
-		const ticks: ArrayLike<unknown> = band
-			? bandTicks
-			: continuousTicks.filter((t) => t.target).map((t) => t.value);
-		if (!sameTicks(measuredTicks, ticks) || (!band && measuredFormatter !== tickFormatter)) {
-			if (band) {
-				for (const tick of bandTicks) {
-					widestSeen = Math.max(widestSeen, textWidth(String(categoryLabel(tick.value))));
-				}
-			} else {
-				for (const value of ticks as number[]) {
-					widestSeen = Math.max(widestSeen, textWidth(String(tickFormatter(value))));
-				}
-			}
-			measuredTicks = ticks;
-			measuredFormatter = tickFormatter;
-		}
-		return clearTitleOffset(widestSeen, c.margin.left);
-	});
+	};
+	const unregister = registry?.register(spec);
+	onDestroy(() => unregister?.());
 </script>
-
-{#if c.isReady && c.scaleTypes}
-	<g class="axis">
-		{#if c.scaleTypes.y !== 'band' && c.yScale}
-			<!-- Continuous scales: direct positioning -->
-			{#each continuousTicks as tick (tickKey(tick))}
-				{@const y = tickPx(tick)}
-				<g opacity={tick.alpha}>
-					<line x1={0} x2={-6} y1={y} y2={y} />
-					<text text-anchor="end" dominant-baseline="middle" x={-9} {y}>
-						{tickFormatter(tick.value)}
-					</text>
-				</g>
-			{/each}
-		{:else if c.scaleTypes.y === 'band' && c.yScale}
-			<BandAxisTicks
-				scale={c.yScaleState as BandScaleState}
-				ticks={bandTicks}
-				rangeSize={c.innerHeight}
-				axis="y"
-				dir={-1}
-				textAnchor="end"
-			/>
-		{/if}
-
-		{#if title && c.yScale}
-			{#if titlePlacement === 'top'}
-				<text text-anchor="start" x={0} y={-18}>
-					{c.yLabel}
-				</text>
-			{:else}
-				<text
-					text-anchor="middle"
-					transform={`translate(${-titleX}, ${c.innerHeight / 2}) rotate(-90)`}
-				>
-					{c.yLabel}
-				</text>
-			{/if}
-		{/if}
-	</g>
-{/if}
-
-<style>
-	line {
-		stroke: var(--fjader-text-secondary, #6b7280);
-	}
-
-	text {
-		fill: var(--fjader-text-secondary, #6b7280);
-		font-family: var(--fjader-font, system-ui, sans-serif);
-		font-size: 10px;
-	}
-</style>

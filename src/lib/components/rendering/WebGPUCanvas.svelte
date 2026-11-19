@@ -7,6 +7,8 @@
 	import type { FacetScaleRef } from '$lib/gpu/GPUCoordinator.svelte';
 	import { TextAtlas, ATLAS_CSS_WIDTH } from '$lib/gpu/text/TextAtlas.svelte';
 	import { parseColorToRGBA } from '$lib/scales/color-utils';
+	import GpuAxis from '../axes/GpuAxis.svelte';
+	import { AXIS_REGISTRY, type AxisRegistry } from '../axes/axis-registry.svelte';
 
 	interface Props {
 		canvasComponents?: Snippet | undefined;
@@ -36,6 +38,8 @@
 	 * them to the GPU (gpu/text/TextAtlas.svelte.ts).
 	 */
 	const textAtlas = new TextAtlas();
+	/** The cell's declared axes (AxisLeft, AxisBottom), drawn here, on the GPU. */
+	const axisRegistry = getContext<AxisRegistry | undefined>(AXIS_REGISTRY);
 	setContext('text-atlas', textAtlas);
 
 	function handlePaint() {
@@ -220,6 +224,12 @@
 			chartControl?.invalidate();
 		},
 
+		getCssColor(property: string, fallback: string) {
+			const css = canvas ? getComputedStyle(canvas).getPropertyValue(property).trim() : '';
+			const [r, g, b, a] = parseColorToRGBA(css || fallback);
+			return [r, g, b, a];
+		},
+
 		getTextColor() {
 			const css = canvas ? getComputedStyle(canvas).color : '';
 			const [r, g, b, a] = parseColorToRGBA(css || '#000');
@@ -342,6 +352,9 @@
 	</canvas>
 	{#if contextConfigured}
 		{@render canvasComponents?.()}
+		{#each axisRegistry?.axes ?? [] as spec (spec.id)}
+			<GpuAxis {spec} />
+		{/each}
 	{:else}
 		<div class="webgpu-loading">
 			<p>Initializing WebGPU context for chart {chartId}...</p>

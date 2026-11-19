@@ -1,12 +1,14 @@
 <script lang="ts">
-	import { hasEntered } from '$lib/scales/entered';
-	import { getContext } from 'svelte';
-	import type { ChartContext } from '$lib/types';
-	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
-	import BandAxisTicks from './BandAxisTicks.svelte';
-	import type { ContinuousScaleState } from '$lib/types';
-	import type { TickEntry } from '$lib/scales/LinearScaleState.svelte';
+	import { getContext, onDestroy } from 'svelte';
+	import type { ChartContext, ContinuousScaleState } from '$lib/types';
+	import { AXIS_REGISTRY, type AxisRegistry, type AxisSpec } from './axis-registry.svelte';
 
+	/**
+	 * The x axis, below the plot: its ticks, their labels, and the scale's label
+	 * as its title. Drawn on the GPU in the chart's margins: this component
+	 * declares the axis (axis-registry), wherever it is placed, and the chart's
+	 * canvas draws it (GpuAxis).
+	 */
 	interface Props {
 		ticksNumber?: number;
 		tickFormat?: ((value: unknown) => string) | null;
@@ -37,83 +39,25 @@
 			(s as ContinuousScaleState).setCustomFormat(tickFormat);
 	});
 
-	// Continuous scales: the scale's tick frame, each tick with its place along
-	// the plot and its opacity (at rest the live ticks, fully drawn; through a
-	// discrete change, the old and new sets crossfading in place). None until
-	// the scale has entered: before that its domain is a placeholder.
-	const continuousTicks: readonly TickEntry[] = $derived.by(() => {
-		const s = c.xScaleState;
-		if (!s || c.scaleTypes?.x === 'band' || !hasEntered(s) || !('tickFrame' in s)) return [];
-		return (s as ContinuousScaleState).tickFrame(ticksNumber);
-	});
-	/**
-	 * Where a tick sits, in px: its fraction of the plot, straight to pixels.
-	 * No domain in between, so a crossfading set stays put.
-	 */
-	const tickPx = (t: TickEntry) => c.innerWidth * t.position;
-
-	/**
-	 * A tick's key: the incoming (or, at rest, the live) set by value, so a pan
-	 * keeps each label's element; an outgoing set's by value and its frozen
-	 * position, which does not move, and tells apart one value in two sets.
-	 */
-	const tickKey = (t: TickEntry) => (t.target ? `${t.value}` : `${t.value}@${t.position}`);
-
-	// Band scales: the categories on screen NOW, at their current fractional slots,
-	// rather than the domain. Mid-transition a label travels with its bar, and a
-	// leaving category keeps its label, fading, until its bar is gone.
-	const bandTicks = $derived(
-		c.scaleTypes?.x === 'band' && c.xScaleState ? (c.xScaleState as BandScaleState).bandTicks() : []
-	);
-
-	// Unified formatter interface - all scale states have tickFormat()
-	const tickFormatter = $derived(c.xScaleState?.tickFormat ? c.xScaleState.tickFormat() : String);
+	const registry = getContext<AxisRegistry | undefined>(AXIS_REGISTRY);
+	const spec: AxisSpec = {
+		id: `axis-bottom-${crypto.randomUUID().slice(0, 8)}`,
+		side: 'bottom',
+		get ticksNumber() {
+			return ticksNumber;
+		},
+		get tickFormat() {
+			return tickFormat;
+		},
+		get title() {
+			return title;
+		},
+		get titleAnchor() {
+			return titleAnchor;
+		},
+		titleOffset: 32,
+		titlePlacement: 'side'
+	};
+	const unregister = registry?.register(spec);
+	onDestroy(() => unregister?.());
 </script>
-
-{#if c.isReady && c.scaleTypes}
-	<g class="axis" transform="translate(0 , {c.innerHeight})">
-		{#if c.scaleTypes.x !== 'band' && c.xScale}
-			<!-- Continuous scales: direct positioning -->
-			{#each continuousTicks as tick (tickKey(tick))}
-				{@const x = tickPx(tick)}
-				<g opacity={tick.alpha}>
-					<line x1={x} x2={x} y1={0} y2={5} />
-					<text text-anchor="middle" {x} y={16}>
-						{tickFormatter(tick.value)}
-					</text>
-				</g>
-			{/each}
-		{:else if c.scaleTypes.x === 'band' && c.xScale}
-			<BandAxisTicks
-				scale={c.xScaleState as BandScaleState}
-				ticks={bandTicks}
-				rangeSize={c.innerWidth}
-				axis="x"
-				tickLength={5}
-				labelGap={16}
-			/>
-		{/if}
-
-		{#if title && c.xScale}
-			<text
-				text-anchor={titleAnchor === 'start' ? 'start' : titleAnchor === 'end' ? 'end' : 'middle'}
-				x={titleAnchor === 'start' ? 0 : titleAnchor === 'end' ? c.innerWidth : c.innerWidth / 2}
-				y={28}
-			>
-				{c.xLabel}
-			</text>
-		{/if}
-	</g>
-{/if}
-
-<style>
-	line {
-		stroke: var(--fjader-text-secondary, #6b7280);
-	}
-
-	text {
-		fill: var(--fjader-text-secondary, #6b7280);
-		font-family: var(--fjader-font, system-ui, sans-serif);
-		font-size: 10px;
-	}
-</style>
