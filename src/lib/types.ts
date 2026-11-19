@@ -793,5 +793,11 @@ export interface WebGPUCanvasContext {
 	getPresentationFormat(): GPUTextureFormat | undefined;
 	isInitialized(): boolean;
 	invalidate(): void;
+	/**
+	 * The page's text colour at the canvas (its inherited CSS `color`), as
+	 * RGBA in 0-1: what text draws in when it has no fill, as SVG text with
+	 * `currentColor` did. Read when asked, not tracked.
+	 */
+	getTextColor(): [number, number, number, number];
 	getDebugInfo(): Record<string, unknown>;
 }

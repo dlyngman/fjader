@@ -15,6 +15,10 @@
  *   frame (opt-in: observing has a cost of its own).
  * - `phase`: the scripted phase the frame belongs to.
  *
+ * - `elementDraws`: `drawElementImageToTexture` calls (text atlas uploads)
+ *   since the previous frame. An upload is change-time work: outside a data
+ *   change this should stay 0.
+ *
  * And per `queue.submit`, the time until the GPU reports that work done
  * (`onSubmittedWorkDone`): an upper bound on GPU time per frame, since it
  * includes any queueing behind earlier work.
@@ -60,8 +64,17 @@ export interface PhaseSummary {
 	workMax: number;
 	gpuP50: number | null;
 	gpuP95: number | null;
+	/** GPU time of our passes per submit (timestamp queries), when the device has them. */
+	passMsP50: number | null;
+	passMsP95: number | null;
+	/** Passes per submit: about one per chart drawn, plus compute work. */
+	passesP50: number | null;
+	passesMax: number | null;
 	mutationsP50: number | null;
 	mutationsMax: number | null;
+	/** Text atlas uploads in the phase, and the most in one frame. */
+	elementDraws: number;
+	elementDrawsMax: number;
 	loafs: number;
 }
 
@@ -71,16 +84,186 @@ function quantile(sorted: Float64Array, q: number): number {
 	return sorted[i];
 }
 
+/**
+ * GPU time per submit, from timestamp queries: each render and compute pass
+ * the coordinator encodes gets begin/end timestamps, resolved into a readback
+ * buffer when its encoder finishes. A submit's time is its last pass's end
+ * minus its first pass's begin, so it counts the GPU executing our passes and
+ * nothing else: not the queue waiting behind other work, and not the
+ * compositor. Set beside the submit-to-done latency, the difference is time
+ * spent outside our passes.
+ *
+ * Needs the device's 'timestamp-query' feature (the coordinator asks for it
+ * when the adapter has it). Chrome quantizes the timestamps (to 100 µs by
+ * default), which is plenty at frame scale.
+ */
+interface SubmitTiming {
+	/** First pass's begin to last pass's end: includes any gaps between passes. */
+	spanMs: number;
+	/** The passes' own durations, summed. */
+	sumMs: number;
+	maxMs: number;
+	/** The slowest pass's position in the submit, and its kind ('r' render, 'c' compute). */
+	maxIndex: number;
+	maxKind: string;
+	/** Each pass's kind, in order. */
+	kinds: string;
+	/** Each pass's duration, in order. */
+	each: number[];
+}
+
+class PassTimer {
+	static readonly QUERIES = 512;
+	static readonly RING = 8;
+	readonly #querySet: GPUQuerySet;
+	readonly #resolve: GPUBuffer;
+	readonly #ring: { buffer: GPUBuffer; busy: boolean }[] = [];
+	/** The readback the last finished encoder copied into, its query count and pass kinds. */
+	#pending: { slot: number; count: number; kinds: string } | null = null;
+	readonly #restore: () => void;
+
+	constructor(device: GPUDevice) {
+		const n = PassTimer.QUERIES;
+		this.#querySet = device.createQuerySet({ type: 'timestamp', count: n });
+		this.#resolve = device.createBuffer({
+			size: n * 8,
+			usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC
+		});
+		for (let i = 0; i < PassTimer.RING; i++) {
+			this.#ring.push({
+				buffer: device.createBuffer({
+					size: n * 8,
+					usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+				}),
+				busy: false
+			});
+		}
+		const querySet = this.#querySet;
+		const original = device.createCommandEncoder;
+		device.createCommandEncoder = (descriptor?: GPUCommandEncoderDescriptor) => {
+			const encoder = original.call(device, descriptor);
+			let used = 0;
+			let kinds = '';
+			const timed = <D extends { timestampWrites?: unknown }, R>(
+				begin: (d: D) => R,
+				kind: string
+			) => {
+				return (d?: D): R => {
+					const desc = (d ?? {}) as D;
+					if (used + 2 > n) return begin.call(encoder, desc);
+					const had = desc.timestampWrites;
+					desc.timestampWrites = {
+						querySet,
+						beginningOfPassWriteIndex: used,
+						endOfPassWriteIndex: used + 1
+					};
+					used += 2;
+					kinds += kind;
+					try {
+						return begin.call(encoder, desc);
+					} finally {
+						// The coordinator reuses its pass descriptors: leave them as found.
+						if (had === undefined) delete desc.timestampWrites;
+						else desc.timestampWrites = had;
+					}
+				};
+			};
+			encoder.beginRenderPass = timed(
+				encoder.beginRenderPass,
+				'r'
+			) as typeof encoder.beginRenderPass;
+			encoder.beginComputePass = timed(
+				encoder.beginComputePass,
+				'c'
+			) as typeof encoder.beginComputePass;
+			const finish = encoder.finish;
+			encoder.finish = (fd?: GPUCommandBufferDescriptor) => {
+				const slot = used > 0 ? this.#ring.findIndex((r) => !r.busy) : -1;
+				if (slot >= 0) {
+					encoder.resolveQuerySet(querySet, 0, used, this.#resolve, 0);
+					encoder.copyBufferToBuffer(this.#resolve, 0, this.#ring[slot].buffer, 0, used * 8);
+					this.#ring[slot].busy = true;
+					this.#pending = { slot, count: used, kinds };
+				}
+				return finish.call(encoder, fd);
+			};
+			return encoder;
+		};
+		this.#restore = () => {
+			device.createCommandEncoder = original;
+		};
+	}
+
+	/**
+	 * After a submit: its GPU time and pass count, delivered once the readback
+	 * maps. Nothing when the submit's encoder was not timed.
+	 */
+	afterSubmit(deliver: (timing: SubmitTiming) => void): void {
+		const pending = this.#pending;
+		this.#pending = null;
+		if (!pending) return;
+		const entry = this.#ring[pending.slot];
+		entry.buffer
+			.mapAsync(GPUMapMode.READ, 0, pending.count * 8)
+			.then(() => {
+				const t = new BigInt64Array(entry.buffer.getMappedRange(0, pending.count * 8));
+				let lo = t[0];
+				let hi = t[1];
+				let sum = 0;
+				let max = 0;
+				let maxAt = 0;
+				const each: number[] = [];
+				for (let k = 0; k < pending.count; k += 2) {
+					if (t[k] < lo) lo = t[k];
+					if (t[k + 1] > hi) hi = t[k + 1];
+					const ms = Number(t[k + 1] - t[k]) / 1e6;
+					each.push(ms);
+					sum += ms;
+					if (ms > max) {
+						max = ms;
+						maxAt = k / 2;
+					}
+				}
+				entry.buffer.unmap();
+				entry.busy = false;
+				deliver({
+					spanMs: Number(hi - lo) / 1e6,
+					sumMs: sum,
+					maxMs: max,
+					maxIndex: maxAt,
+					maxKind: pending.kinds[maxAt] ?? '?',
+					kinds: pending.kinds,
+					each
+				});
+			})
+			.catch(() => {
+				entry.busy = false;
+			});
+	}
+
+	destroy(): void {
+		this.#restore();
+	}
+}
+
 export class FrameProbe {
 	readonly #ts = new Float64Array(MAX_FRAMES);
 	readonly #work = new Float64Array(MAX_FRAMES);
 	readonly #mutations = new Uint32Array(MAX_FRAMES);
+	readonly #elementDraws = new Uint16Array(MAX_FRAMES);
+	#pendingElementDraws = 0;
 	readonly #phase = new Uint16Array(MAX_FRAMES);
 	#frames = 0;
 
 	readonly #submitAt = new Float64Array(MAX_SUBMITS);
 	readonly #submitDone = new Float64Array(MAX_SUBMITS);
 	readonly #submitPhase = new Uint16Array(MAX_SUBMITS);
+	/** GPU time of the submit's passes (timestamps, their durations summed), NaN when not timed. */
+	readonly #submitPassMs = new Float64Array(MAX_SUBMITS);
+	readonly #submitPasses = new Uint16Array(MAX_SUBMITS);
+	readonly #submitTimings: (SubmitTiming | null)[] = [];
+	#passTimer: PassTimer | null = null;
+	readonly passesTimed: boolean;
 	#submits = 0;
 
 	readonly #phases: string[] = ['(none)'];
@@ -104,6 +287,8 @@ export class FrameProbe {
 	constructor(options: ProbeOptions) {
 		this.mutationsObserved = !!options.mutationRoot;
 		this.gpuObserved = !!options.device;
+		this.passesTimed = !!options.device?.features.has('timestamp-query');
+		if (this.passesTimed) this.#passTimer = new PassTimer(options.device!);
 
 		if (options.mutationRoot) {
 			this.#observer = new MutationObserver((records) => {
@@ -127,13 +312,33 @@ export class FrameProbe {
 				this.#submitAt[i] = performance.now();
 				this.#submitDone[i] = NaN;
 				this.#submitPhase[i] = this.#currentPhase;
+				this.#submitPassMs[i] = NaN;
+				this.#submitPasses[i] = 0;
 				queue.onSubmittedWorkDone().then(() => {
 					this.#submitDone[i] = performance.now();
 				});
+				this.#submitTimings[i] = null;
+				this.#passTimer?.afterSubmit((timing) => {
+					this.#submitPassMs[i] = timing.sumMs;
+					this.#submitPasses[i] = timing.kinds.length;
+					this.#submitTimings[i] = timing;
+				});
 			};
 			queue.submit = submit;
+
+			// Text atlas uploads (HTML-in-Canvas), counted per frame.
+			type ElementQueue = GPUQueue & { drawElementImageToTexture?: (...args: unknown[]) => void };
+			const q = queue as ElementQueue;
+			const originalDraw = q.drawElementImageToTexture;
+			if (originalDraw) {
+				q.drawElementImageToTexture = (...args: unknown[]) => {
+					originalDraw.apply(queue, args);
+					if (this.#running) this.#pendingElementDraws++;
+				};
+			}
 			this.#restoreSubmit = () => {
 				queue.submit = original;
+				if (originalDraw) q.drawElementImageToTexture = originalDraw;
 			};
 		}
 
@@ -203,6 +408,8 @@ export class FrameProbe {
 			this.#phase[i] = this.#currentPhase;
 			this.#mutations[i] = this.#pendingMutations;
 			this.#pendingMutations = 0;
+			this.#elementDraws[i] = this.#pendingElementDraws;
+			this.#pendingElementDraws = 0;
 			this.#awaiting = i;
 			this.#awaitingTs = ts;
 			this.#channel!.port2.postMessage(0);
@@ -220,6 +427,7 @@ export class FrameProbe {
 		this.#observer?.disconnect();
 		this.#loafObserver?.disconnect();
 		this.#restoreSubmit?.();
+		this.#passTimer?.destroy();
 		this.#channel?.port1.close();
 	}
 
@@ -236,6 +444,8 @@ export class FrameProbe {
 			const dts: number[] = [];
 			const works: number[] = [];
 			const muts: number[] = [];
+			let draws = 0;
+			let drawsMax = 0;
 			// Frame 0 has no interval; a phase's first frame measures the gap
 			// since the previous phase's last, which is still a real frame.
 			for (let i = 1; i < n; i++) {
@@ -243,11 +453,15 @@ export class FrameProbe {
 				dts.push(dtOf(i));
 				if (!Number.isNaN(this.#work[i])) works.push(this.#work[i]);
 				muts.push(this.#mutations[i]);
+				draws += this.#elementDraws[i];
+				if (this.#elementDraws[i] > drawsMax) drawsMax = this.#elementDraws[i];
 			}
 			return {
 				dts: Float64Array.from(dts).sort(),
 				works: Float64Array.from(works).sort(),
-				muts: Float64Array.from(muts).sort()
+				muts: Float64Array.from(muts).sort(),
+				draws,
+				drawsMax
 			};
 		};
 
@@ -256,7 +470,7 @@ export class FrameProbe {
 
 		const phases: PhaseSummary[] = [];
 		for (let p = 1; p < this.#phases.length; p++) {
-			const { dts, works, muts } = collect(p);
+			const { dts, works, muts, draws, drawsMax } = collect(p);
 			if (dts.length === 0) continue;
 			let dropped = 0;
 			let slots = 0;
@@ -272,6 +486,16 @@ export class FrameProbe {
 				if (!Number.isNaN(done)) gpu.push(done - this.#submitAt[i]);
 			}
 			const gpuSorted = Float64Array.from(gpu).sort();
+			const passMs: number[] = [];
+			const passes: number[] = [];
+			for (let i = 0; i < this.#submits; i++) {
+				if (this.#submitPhase[i] !== p || Number.isNaN(this.#submitPassMs[i])) continue;
+				passMs.push(this.#submitPassMs[i]);
+				passes.push(this.#submitPasses[i]);
+			}
+			const passMsSorted = Float64Array.from(passMs).sort();
+			const passesSorted = Float64Array.from(passes).sort();
+			const timed = this.passesTimed && passMs.length > 0;
 			phases.push({
 				phase: this.#phases[p],
 				frames: dts.length,
@@ -286,8 +510,14 @@ export class FrameProbe {
 				workMax: works.length ? works[works.length - 1] : NaN,
 				gpuP50: this.gpuObserved && gpu.length ? quantile(gpuSorted, 0.5) : null,
 				gpuP95: this.gpuObserved && gpu.length ? quantile(gpuSorted, 0.95) : null,
+				passMsP50: timed ? quantile(passMsSorted, 0.5) : null,
+				passMsP95: timed ? quantile(passMsSorted, 0.95) : null,
+				passesP50: timed ? quantile(passesSorted, 0.5) : null,
+				passesMax: timed ? passesSorted[passesSorted.length - 1] : null,
 				mutationsP50: this.mutationsObserved ? quantile(muts, 0.5) : null,
 				mutationsMax: this.mutationsObserved ? muts[muts.length - 1] : null,
+				elementDraws: draws,
+				elementDrawsMax: drawsMax,
 				loafs: this.loafs.filter((l) => l.phase === this.#phases[p]).length
 			});
 		}
@@ -304,13 +534,17 @@ export class FrameProbe {
 				ts: Array.from(this.#ts.subarray(0, n)),
 				work: Array.from(this.#work.subarray(0, n)),
 				mutations: this.mutationsObserved ? Array.from(this.#mutations.subarray(0, n)) : null,
+				elementDraws: Array.from(this.#elementDraws.subarray(0, n)),
 				phase: Array.from(this.#phase.subarray(0, n))
 			},
 			submits: this.gpuObserved
 				? {
 						at: Array.from(this.#submitAt.subarray(0, s)),
 						done: Array.from(this.#submitDone.subarray(0, s)),
-						phase: Array.from(this.#submitPhase.subarray(0, s))
+						phase: Array.from(this.#submitPhase.subarray(0, s)),
+						passMs: Array.from(this.#submitPassMs.subarray(0, s)),
+						passes: Array.from(this.#submitPasses.subarray(0, s)),
+						timings: this.#submitTimings.slice(0, s)
 					}
 				: null,
 			loafs: this.loafs

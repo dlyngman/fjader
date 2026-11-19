@@ -5,6 +5,8 @@
 	import type { ChartContext, EntranceMode, WebGPUCanvasContext } from '$lib/types';
 	import type { GPUCoordinator, ChartRegistrationResult } from '$lib/gpu/GPUCoordinator.svelte';
 	import type { FacetScaleRef } from '$lib/gpu/GPUCoordinator.svelte';
+	import { TextAtlas, ATLAS_CSS_WIDTH } from '$lib/gpu/text/TextAtlas.svelte';
+	import { parseColorToRGBA } from '$lib/scales/color-utils';
 
 	interface Props {
 		canvasComponents?: Snippet | undefined;
@@ -27,6 +29,18 @@
 	const plotRect = () => ({ x: margin.left, y: margin.top, width, height });
 
 	let canvas = $state<HTMLCanvasElement>();
+	let atlasContainer = $state<HTMLElement>();
+	/**
+	 * The chart's text atlas: text layers acquire their strings from it, this
+	 * component renders them inside the canvas, and the canvas's `paint` hands
+	 * them to the GPU (gpu/text/TextAtlas.svelte.ts).
+	 */
+	const textAtlas = new TextAtlas();
+	setContext('text-atlas', textAtlas);
+
+	function handlePaint() {
+		if (canvas && atlasContainer) textAtlas.paint(canvas, atlasContainer);
+	}
 	let context: GPUCanvasContext | null = null;
 	let gpuCoordinator: GPUCoordinator | null | undefined = isFaceted ? getGPUContext() : undefined;
 	let chartControl: ChartRegistrationResult | null = null;
@@ -133,6 +147,7 @@
 
 			// Notify coordinator that context is ready
 			chartControl.setContextReady();
+			textAtlas.attach(gpuCoordinator.device!, gpuCoordinator, chartId);
 			console.log(`✅ Chart ${chartId} registered and ready`);
 		} catch (error) {
 			console.error(`❌ Chart registration failed for ${chartId}:`, error);
@@ -205,6 +220,12 @@
 			chartControl?.invalidate();
 		},
 
+		getTextColor() {
+			const css = canvas ? getComputedStyle(canvas).color : '';
+			const [r, g, b, a] = parseColorToRGBA(css || '#000');
+			return [r, g, b, a];
+		},
+
 		// Enhanced debugging support
 		getDebugInfo() {
 			return {
@@ -236,6 +257,8 @@
 		console.log(`🧹 Destroying WebGPUCanvas ${chartId}`);
 
 		try {
+			textAtlas.destroy();
+
 			// Clean up chart registration
 			if (chartControl) {
 				chartControl.remove();
@@ -297,7 +320,26 @@
 		</p>
 	</div>
 {:else}
-	<canvas bind:this={canvas}></canvas>
+	<!--
+		content="drawable" (and layoutsubtree, its name before Chrome 157): the
+		canvas lays out its children without painting them, and draws them on
+		request. Its one child is the text atlas.
+	-->
+	<canvas bind:this={canvas} content="drawable" layoutsubtree onpaint={handlePaint}>
+		{#if textAtlas.items.length > 0}
+			<div
+				class="fjader-text-atlas"
+				drawable
+				aria-hidden="true"
+				style:width="{ATLAS_CSS_WIDTH}px"
+				bind:this={atlasContainer}
+			>
+				{#each textAtlas.items as item (item.slot)}
+					<span data-slot={item.slot} style={item.css}>{item.text}</span>
+				{/each}
+			</div>
+		{/if}
+	</canvas>
 	{#if contextConfigured}
 		{@render canvasComponents?.()}
 	{:else}
@@ -316,6 +358,23 @@
 		contain: size;
 		will-change: transform;
 		touch-action: none;
+	}
+
+	/*
+	 * Laid out, never painted: the canvas draws it into the atlas texture.
+	 * White, so shaders tint it; gaps keep each string's texels apart.
+	 */
+	.fjader-text-atlas {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: flex-start;
+		gap: 2px 3px;
+		color: #fff;
+		line-height: 1.2;
+	}
+
+	.fjader-text-atlas span {
+		white-space: pre;
 	}
 
 	.webgpu-error,
