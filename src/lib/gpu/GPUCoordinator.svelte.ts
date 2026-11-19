@@ -49,6 +49,13 @@ import {
 	type AtlasBinding
 } from './text/atlas-bindings';
 
+/**
+ * Bytes of a chart's frame uniforms (FrameUniforms in ScaleTemplateSystem):
+ * resolution, range, DPR, facet index, null colour; the plot's origin and
+ * the cell's size for layers in the margins.
+ */
+export const FRAME_UNIFORM_BYTES = 80;
+
 /** Number of color stops per ramp slot. Shared with ColorScaleState for bakeGradient(). */
 export const COLOR_RAMP_RESOLUTION = 256;
 
@@ -142,6 +149,13 @@ interface LayerConfig {
 	 * and so draws in a chart that has no y scale at all. Unset means true.
 	 */
 	readsChartScales?: boolean;
+	/**
+	 * Where the layer draws: `plot` (default), through the plot's viewport and
+	 * scissor, as marks do; `cell`, through the whole canvas, margins included,
+	 * for what sits outside the plot (axes). Its shaders place themselves with
+	 * `plotToCell` and `cellToClip`.
+	 */
+	space?: 'plot' | 'cell';
 }
 
 /**
@@ -155,9 +169,10 @@ function layerCanDraw(layer: LayerConfig, chartScalesKnown: boolean): boolean {
 	);
 }
 
-/** A guide (a grid line) rather than data: it neither enters nor starts the entrance. */
+/** A guide (a grid line, an axis) rather than data: it neither enters nor starts the entrance. */
 function isGuideLayer(layer: LayerConfig): boolean {
-	return layer.markType.startsWith('grid-line-');
+	// Axes draw as soon as the scales exist, before any data: not the entrance.
+	return layer.markType.startsWith('grid-line-') || layer.markType.startsWith('axis-');
 }
 
 export interface DataBindingEntry {
@@ -1598,11 +1613,32 @@ export class GPUCoordinator {
 
 				let currentPipeline: GPURenderPipeline | null = null;
 				let currentPerDataBindGroup: GPUBindGroup | null = null;
+				// The pass starts in the plot's viewport (above); a margin layer
+				// switches to the whole canvas, and the next plot layer back.
+				let inCell = false;
 
 				for (let j = 0; j < planLen; j++) {
 					const layer = plan[j];
 					if (!layerCanDraw(layer, scalesKnown)) continue;
 					const renderer = layer.renderer;
+					const wantsCell = layer.space === 'cell';
+					if (wantsCell !== inCell) {
+						if (wantsCell) {
+							const w = chartConfig.canvas.width;
+							const h = chartConfig.canvas.height;
+							passEncoder.setViewport(0, 0, w, h, 0, 1);
+							passEncoder.setScissorRect(0, 0, w, h);
+						} else {
+							passEncoder.setViewport(vp.x, vp.y, vp.width, vp.height, 0, 1);
+							passEncoder.setScissorRect(
+								vp.scissorX,
+								vp.scissorY,
+								vp.scissorWidth,
+								vp.scissorHeight
+							);
+						}
+						inCell = wantsCell;
+					}
 
 					if (layer.cachedPipeline !== currentPipeline) {
 						passEncoder.setPipeline(layer.cachedPipeline!);
@@ -2580,7 +2616,7 @@ export class GPUCoordinator {
 		if (!chartConfig || chartConfig.frameUniformsBuffer) return;
 
 		chartConfig.frameUniformsBuffer = this.#device!.createBuffer({
-			size: 64,
+			size: FRAME_UNIFORM_BYTES,
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
 			label: `frame-uniforms-${chartId}`
 		});
@@ -2693,7 +2729,7 @@ export class GPUCoordinator {
 		const rangeMinY = 0; // Top of the plot (screen coords)
 		const rangeMaxY = viewport.height;
 
-		const buf = new ArrayBuffer(64);
+		const buf = new ArrayBuffer(FRAME_UNIFORM_BYTES);
 		const f32 = new Float32Array(buf);
 		const u32 = new Uint32Array(buf);
 
@@ -2725,6 +2761,11 @@ export class GPUCoordinator {
 		f32[13] = nullColor[1]; // G
 		f32[14] = nullColor[2]; // B
 		f32[15] = nullColor[3]; // A
+		// For layers in the margins: the plot's origin on the canvas, and the canvas.
+		f32[16] = viewport.x;
+		f32[17] = viewport.y;
+		f32[18] = canvas.width;
+		f32[19] = canvas.height;
 
 		this.#device!.queue.writeBuffer(chartConfig.frameUniformsBuffer!, 0, buf);
 	}

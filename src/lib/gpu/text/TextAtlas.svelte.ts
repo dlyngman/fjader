@@ -30,6 +30,7 @@
  */
 
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
+import { parseColorToRGBA } from '$lib/scales/color-utils';
 import {
 	ATLAS_ENTRY_BYTES,
 	ATLAS_FORMAT,
@@ -103,6 +104,22 @@ function styleCss(style: TextStyle): string {
 	return `font: ${style.fontWeight} ${style.fontSize}px ${style.fontFamily ?? DEFAULT_FAMILY}`;
 }
 
+/**
+ * A CSS colour followed into the GPU: `rgba` is the colour as the page
+ * computes it now, updated when it changes (a theme switch, a changed custom
+ * property). See `TextAtlas.watchColor`.
+ */
+export class AtlasColor {
+	rgba = $state<[number, number, number, number]>([0, 0, 0, 1]);
+	refs = 0;
+	constructor(
+		readonly css: string,
+		initial: [number, number, number, number]
+	) {
+		this.rgba = initial;
+	}
+}
+
 interface Entry {
 	key: string;
 	item: AtlasItem;
@@ -119,6 +136,15 @@ export class TextAtlas {
 	 * strings, so a label never shows an entry not painted yet.
 	 */
 	paintVersion = $state(0);
+
+	/**
+	 * The CSS colours text and axes are drawn in, each a one-pixel swatch in the
+	 * atlas container (WebGPUCanvas renders them). The container is drawable, so
+	 * a swatch whose colour changes is a change the canvas repaints for, and
+	 * `paint` reads it: colours follow the page's CSS as SVG did, with no
+	 * listeners for themes, media queries or style changes.
+	 */
+	swatches = $state<AtlasColor[]>([]);
 
 	/** Whether each slot's string is in the texture. */
 	readonly #rasterized = new Uint8Array(ATLAS_MAX_ENTRIES);
@@ -182,6 +208,26 @@ export class TextAtlas {
 		this.#scheduleItems();
 	}
 
+	/**
+	 * Follow CSS colour `css` (`var(--fjader-text-secondary, #6b7280)`,
+	 * `currentColor`), starting from `initial`. Counted: `unwatchColor` once per
+	 * call.
+	 */
+	watchColor(css: string, initial: [number, number, number, number]): AtlasColor {
+		let color = this.swatches.find((c) => c.css === css);
+		if (!color) {
+			color = new AtlasColor(css, initial);
+			this.swatches = [...this.swatches, color];
+		}
+		color.refs++;
+		return color;
+	}
+
+	unwatchColor(color: AtlasColor): void {
+		if (--color.refs > 0) return;
+		this.swatches = this.swatches.filter((c) => c !== color);
+	}
+
 	/** Republish `items` once per microtask, however many entries changed. */
 	#scheduleItems(): void {
 		if (this.#itemsScheduled) return;
@@ -207,6 +253,7 @@ export class TextAtlas {
 	 * would be drawn differently.
 	 */
 	paint(canvas: HTMLCanvasElement, container: HTMLElement): void {
+		this.#readSwatches(container);
 		const device = this.#device;
 		if (!device || !this.#coordinator) return;
 		const size = (canvas as DrawableCanvas).getElementImageDefaultSize(container);
@@ -254,6 +301,20 @@ export class TextAtlas {
 		}
 		this.paintVersion++;
 		this.#coordinator.invalidateChart(this.#chartId);
+	}
+
+	/** Each swatch's colour as the page computes it now, where it changed. */
+	#readSwatches(container: HTMLElement): void {
+		if (this.swatches.length === 0) return;
+		for (const child of container.children) {
+			const css = (child as HTMLElement).dataset.swatch;
+			if (css === undefined) continue;
+			const color = this.swatches.find((c) => c.css === css);
+			if (!color) continue;
+			const [r, g, b, a] = parseColorToRGBA(getComputedStyle(child).backgroundColor);
+			const now = color.rgba;
+			if (now[0] !== r || now[1] !== g || now[2] !== b || now[3] !== a) color.rgba = [r, g, b, a];
+		}
 	}
 
 	/** Whether `slot`'s string has been painted into the texture (and not released since). */

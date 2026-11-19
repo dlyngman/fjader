@@ -805,5 +805,10 @@ export interface WebGPUCanvasContext {
 	 * `currentColor` did. Read when asked, not tracked.
 	 */
 	getTextColor(): [number, number, number, number];
+	/**
+	 * A CSS custom property's colour at the canvas (`--fjader-text-secondary`),
+	 * as RGBA in 0-1, or `fallback` when it is not set.
+	 */
+	getCssColor(property: string, fallback: string): [number, number, number, number];
 	getDebugInfo(): Record<string, unknown>;
 }

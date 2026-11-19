@@ -46,6 +46,8 @@ export interface RendererHostOptions {
 	 * axis itself in a chart that registers no y scale.
 	 */
 	readsChartScales?: boolean;
+	/** Where the layer draws: the plot (default) or the whole cell (axes). */
+	space?: 'plot' | 'cell';
 	/** Named in the failure message; defaults to the mark type. */
 	label?: string;
 }
@@ -130,14 +132,16 @@ export class RendererHost {
 			zIndex,
 			xScaleType,
 			yScaleType,
-			readsChartScales
+			readsChartScales,
+			space
 		} = this.#options;
 		try {
 			const renderer = new BaseGPURenderer(markType, ctx, gpuCoordinator, chartContext, {
 				zIndex,
 				xScaleType,
 				yScaleType,
-				readsChartScales
+				readsChartScales,
+				space
 			});
 			// Published before `initialize` is awaited, as the copies did by
 			// assigning first: a component's draw callback closes over this, and

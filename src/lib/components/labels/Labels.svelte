@@ -223,6 +223,9 @@
 
 	// --- Colour ---
 
+	/** The page's text colour, followed through theme switches (TextAtlas.watchColor). */
+	const pageText = textAtlas.watchColor('currentColor', canvas.getTextColor());
+
 	const fillMode: LabelFillMode = $derived(
 		fill === 'contrast' || fill === 'inherit' ? fill : 'color'
 	);
@@ -231,11 +234,12 @@
 			const [r, g, b, a] = parseColorToRGBA(fill);
 			return [r, g, b, a];
 		}
-		return canvas.getTextColor();
+		return pageText.rgba;
 	});
 
 	onDestroy(() => {
 		textSlots.destroy();
+		textAtlas.unwatchColor(pageText);
 		rendererHost.releaseSlotChannel(slotBinding);
 		rendererHost.releaseSlotChannel(wholeBinding);
 	});

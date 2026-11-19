@@ -7,6 +7,8 @@
 	import type { FacetScaleRef } from '$lib/gpu/GPUCoordinator.svelte';
 	import { TextAtlas, ATLAS_CSS_WIDTH } from '$lib/gpu/text/TextAtlas.svelte';
 	import { parseColorToRGBA } from '$lib/scales/color-utils';
+	import GpuAxis from '../axes/GpuAxis.svelte';
+	import { AXIS_REGISTRY, type AxisRegistry } from '../axes/axis-registry.svelte';
 
 	interface Props {
 		canvasComponents?: Snippet | undefined;
@@ -36,6 +38,8 @@
 	 * them to the GPU (gpu/text/TextAtlas.svelte.ts).
 	 */
 	const textAtlas = new TextAtlas();
+	/** The cell's declared axes (AxisLeft, AxisBottom), drawn here, on the GPU. */
+	const axisRegistry = getContext<AxisRegistry | undefined>(AXIS_REGISTRY);
 	setContext('text-atlas', textAtlas);
 
 	function handlePaint() {
@@ -220,6 +224,12 @@
 			chartControl?.invalidate();
 		},
 
+		getCssColor(property: string, fallback: string) {
+			const css = canvas ? getComputedStyle(canvas).getPropertyValue(property).trim() : '';
+			const [r, g, b, a] = parseColorToRGBA(css || fallback);
+			return [r, g, b, a];
+		},
+
 		getTextColor() {
 			const css = canvas ? getComputedStyle(canvas).color : '';
 			const [r, g, b, a] = parseColorToRGBA(css || '#000');
@@ -326,7 +336,7 @@
 		request. Its one child is the text atlas.
 	-->
 	<canvas bind:this={canvas} content="drawable" layoutsubtree onpaint={handlePaint}>
-		{#if textAtlas.items.length > 0}
+		{#if textAtlas.items.length > 0 || textAtlas.swatches.length > 0}
 			<div
 				class="fjader-text-atlas"
 				drawable
@@ -337,11 +347,17 @@
 				{#each textAtlas.items as item (item.slot)}
 					<span data-slot={item.slot} style={item.css}>{item.text}</span>
 				{/each}
+				{#each textAtlas.swatches as swatch (swatch.css)}
+					<span class="fjader-swatch" data-swatch={swatch.css} style:background={swatch.css}></span>
+				{/each}
 			</div>
 		{/if}
 	</canvas>
 	{#if contextConfigured}
 		{@render canvasComponents?.()}
+		{#each axisRegistry?.axes ?? [] as spec (spec.id)}
+			<GpuAxis {spec} />
+		{/each}
 	{:else}
 		<div class="webgpu-loading">
 			<p>Initializing WebGPU context for chart {chartId}...</p>
@@ -369,12 +385,25 @@
 		flex-wrap: wrap;
 		align-items: flex-start;
 		gap: 2px 3px;
-		color: #fff;
 		line-height: 1.2;
 	}
 
+	/* Strings white, so shaders tint them; the container keeps the page's colour for swatches. */
 	.fjader-text-atlas span {
 		white-space: pre;
+		color: #fff;
+	}
+
+	/*
+	 * A colour the GPU follows (TextAtlas.watchColor): one pixel, read on paint.
+	 * Inherits the page's colour, not the strings' white, so currentColor means
+	 * the page's text colour.
+	 */
+	.fjader-text-atlas .fjader-swatch {
+		color: inherit;
+		display: inline-block;
+		width: 1px;
+		height: 1px;
 	}
 
 	.webgpu-error,

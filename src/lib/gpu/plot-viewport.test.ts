@@ -18,7 +18,7 @@ describe('computePlotViewport', () => {
 		expect(v.drawable).toBe(true);
 	});
 
-	it('rounds the scissor to pixel edges', () => {
+	it('puts the origin on a whole device pixel, keeps the size, rounds the scissor', () => {
 		const v = computePlotViewport(
 			{ x: 33, y: 7, width: 101, height: 51 },
 			1.5,
@@ -26,12 +26,18 @@ describe('computePlotViewport', () => {
 			200,
 			emptyPlotViewport()
 		);
-		// x 49.5 → 50 (round half up), right edge 49.5 + 151.5 = 201
+		// x 49.5 → 50, y 10.5 → 11: a label snapped to a whole plot pixel then
+		// sits on a whole device pixel.
+		expect(v.x).toBe(50);
+		expect(v.y).toBe(11);
+		// The size stays exact: 151.5 by 76.5.
+		expect(v.width).toBeCloseTo(151.5);
+		expect(v.height).toBeCloseTo(76.5);
+		// The scissor rounds its edges: 50 + 151.5 → 202, 11 + 76.5 → 88.
 		expect(v.scissorX).toBe(50);
-		expect(v.scissorX + v.scissorWidth).toBe(201);
-		// y 10.5 → 11, bottom 10.5 + 76.5 = 87
+		expect(v.scissorX + v.scissorWidth).toBe(202);
 		expect(v.scissorY).toBe(11);
-		expect(v.scissorY + v.scissorHeight).toBe(87);
+		expect(v.scissorY + v.scissorHeight).toBe(88);
 	});
 
 	it('never reaches past the texture', () => {

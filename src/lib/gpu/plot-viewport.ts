@@ -9,11 +9,16 @@
  * stays as it was. A SCISSOR on the same rectangle clips what the viewport
  * does not: geometry past the plot edge, such as a dot's quad at the border.
  *
- * The viewport is in floats and unrounded: `width` is the plot's width times
- * the device pixel ratio, the same number the frame uniforms carry as
- * `resolution` and `rangeMax`, so pixel p of a shader lands on device pixel
- * x + p. The scissor is integers, rounded to the nearest pixel edge and
- * clamped to the texture.
+ * The viewport's ORIGIN is rounded to a whole device pixel; its size is not:
+ * `width` is the plot's width times the device pixel ratio, the same number
+ * the frame uniforms carry as `resolution` and `rangeMax`, so pixel p of a
+ * shader lands on device pixel x + p. A whole-pixel origin is what lets text
+ * be crisp: a label snapped to a whole plot pixel then sits on a whole device
+ * pixel, one atlas texel to one pixel. A margin times the device pixel ratio
+ * is often fractional (33 px at 1.8 is 59.4), and an unrounded origin put every
+ * label between pixels, smoothed. The plot moves by under half a device pixel.
+ * The scissor is integers, rounded to the nearest pixel edge and clamped to the
+ * texture.
  */
 
 /** The plot area within the chart cell, in CSS pixels. */
@@ -64,8 +69,8 @@ export function computePlotViewport(
 	textureHeight: number,
 	out: PlotViewport
 ): PlotViewport {
-	const x = Math.max(0, rect.x * dpr);
-	const y = Math.max(0, rect.y * dpr);
+	const x = Math.max(0, Math.round(rect.x * dpr));
+	const y = Math.max(0, Math.round(rect.y * dpr));
 	// Never past the texture's edge: WebGPU rejects a viewport that is. The
 	// texture is the cell rounded up, so this only trims rounding.
 	const width = Math.max(0, Math.min(rect.width * dpr, textureWidth - x));

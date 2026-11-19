@@ -129,10 +129,10 @@
 		scaleRegistry,
 		chartContext
 	);
+	/** The page's text colour at the canvas, followed through theme switches (TextAtlas.watchColor). */
+	const pageText = textAtlas.watchColor('currentColor', webGPUContext.getTextColor());
 	/** No fill: the page's text colour at the canvas, as SVG text's currentColor was. */
-	const constantColor = $derived(
-		fill == null ? webGPUContext.getTextColor() : markColor.constantColor
-	);
+	const constantColor = $derived(fill == null ? pageText.rgba : markColor.constantColor);
 
 	// --- Config ---
 
@@ -331,6 +331,7 @@
 
 	onDestroy(() => {
 		textSlots.destroy();
+		textAtlas.unwatchColor(pageText);
 		setup?.destroy();
 		// No config entry to unregister, which is where other marks release it.
 		chartContext.config?.entrance.release(markId);
