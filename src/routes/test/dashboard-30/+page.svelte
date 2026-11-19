@@ -75,8 +75,23 @@
 	import { FrameProbe } from './frame-probe';
 
 	const params = page.url.searchParams;
-	const LABEL_MODE =
-		params.get('labels') === '0' ? 'none' : params.get('labels') === 'text' ? 'text' : 'attached';
+	/**
+	 * `?labels=`, by the names the page and its saved logs use. An unknown value
+	 * is shown, not run as the default: a run of the wrong mode is a wrong number.
+	 */
+	const LABEL_MODES = {
+		attached: 'attached',
+		text: 'text',
+		textmark: 'text',
+		0: 'none',
+		none: 'none'
+	};
+	const labelsParam = params.get('labels');
+	const LABEL_MODE = labelsParam === null ? 'attached' : (LABEL_MODES[labelsParam] ?? null);
+	const LABEL_MODE_ERROR =
+		LABEL_MODE === null
+			? `Unknown ?labels=${labelsParam}: use attached, text (or textmark), or 0 (or none).`
+			: null;
 	const LABELS = LABEL_MODE !== 'none';
 	const AXES = params.get('axes') !== '0';
 	const MUTATIONS = params.get('mutations') === '1';
@@ -104,7 +119,7 @@
 	const BUILD_WAIT_CAP_MS = 15_000;
 
 	let isLoaded = $state(false);
-	let loadError = $state(null);
+	let loadError = $state(LABEL_MODE_ERROR);
 	let running = $state(false);
 	let done = $state(false);
 	let summary = $state(null);
@@ -576,6 +591,11 @@
 		<header>
 			<strong>Dashboard {charts.length}</strong>
 			<span class="variant">{VARIANT}</span>
+			<span
+				class="note-old"
+				title="Since the bar charts' labels became <Labels> (attached, the default), logs named dash30-labels-* are from before: they measured TextMark labels. Compare them with dash30-textmark-*."
+				>dash30-labels-* logs are older TextMark runs</span
+			>
 			<button disabled={running || done || !probeReady} onclick={runSession}>
 				{running ? 'running…' : done ? 'done (reload to rerun)' : 'Run session'}
 			</button>
@@ -811,6 +831,10 @@
 	.variant {
 		font-family: ui-monospace, monospace;
 		color: #666;
+	}
+	.note-old {
+		color: #888;
+		font-size: 11px;
 	}
 	.warn {
 		color: #b45309;
