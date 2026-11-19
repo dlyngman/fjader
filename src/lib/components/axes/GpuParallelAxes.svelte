@@ -102,7 +102,8 @@
 	const dropSlot = $derived.by(() => {
 		const x = reorder?.currentX;
 		if (dragged < 0 || x == null || !ps) return -1;
-		const n = ps.columns.length;
+		// The count the shader spaces the axes by.
+		const n = axisCount;
 		const w = c.innerWidth;
 		let best = 0;
 		let bestDist = Infinity;
