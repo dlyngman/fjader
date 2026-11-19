@@ -2,6 +2,7 @@
 export * from './axes';
 export * from './charts';
 export * from './marks';
+export * from './labels';
 export * from './rendering';
 export * from './background';
 export * from './foreground';

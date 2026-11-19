@@ -38,6 +38,12 @@ export interface SplitPlan {
 export interface SplitProp {
 	/** 0 on rows that are not an Other row, `1 + share` on one. */
 	data: Float32Array;
+	/**
+	 * 1 on an Other row with no part selected (nothing selected, or none of its
+	 * members): its `data` holds the last split position, so a fade does not
+	 * jump, rather than a share. Read as the whole bar.
+	 */
+	flat: Uint8Array;
 	/** Whether the split travels with the bar's morph or lands at once. */
 	slides: boolean;
 	/** The band axis the bars are grouped on; the split runs along the other. */
@@ -160,6 +166,7 @@ export class OtherRows {
 		if (!axis || !computed) return null;
 		return {
 			data: computed.split,
+			flat: computed.flat,
 			slides: computed.slides,
 			axis,
 			colorOnBand: this.#colorOnBand(axis)

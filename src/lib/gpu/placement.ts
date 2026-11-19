@@ -69,3 +69,28 @@ export function placementLayoutEntry(b: PlacementBinding): {
 		b.source === 'record' ? 'storage' : b.source === 'uniform' ? 'uniform' : 'read-only-storage';
 	return { binding: b.binding, visibility: GPUShaderStage.COMPUTE, type };
 }
+
+/**
+ * The BOX RECORD: what a box-shaped mark (bars, rects) writes per drawn row,
+ * and what anything attached to such a mark reads (labels). One layout, so a
+ * label reads any box host the same way.
+ *
+ * - `box`: the row's two corners in plot device pixels, insets and offsets
+ *   applied. Corner (x, y) is the base on the measure axis, (z, w) the end:
+ *   not necessarily the minimum (a negative bar's end is below its base).
+ * - `alpha`: its opacity (selection dimming, entrance fade); `alphaRest`: an
+ *   Other bar's unselected part.
+ * - `colorValue`: its colour value, for a colour lookup.
+ * - `share`: its Other share (0 on other rows, 1 + share on an Other bar).
+ */
+export const BOX_RECORD_WGSL = `
+    struct Record {
+      box: vec4<f32>,
+      alpha: f32,
+      alphaRest: f32,
+      colorValue: f32,
+      share: f32,
+    };`;
+
+/** Bytes per row of the box record: a vec4 and four f32. */
+export const BOX_RECORD_STRIDE = 32;

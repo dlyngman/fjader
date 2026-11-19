@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { UNIFORM_BYTES } from './uniform-sizes';
 	import { getContext, onMount, onDestroy, untrack } from 'svelte';
+	import type { LabelRendererHolder } from '../labels/LabelRendererHolder.svelte';
 	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { DEFAULT_FILL_COLOR } from '$lib/scales/color-utils';
@@ -8,7 +9,12 @@
 	import type { SplitProp } from '../marks/lifecycle/other-rows.svelte';
 	import type { RebinSource } from '$lib/gpu/bin-remap';
 	import { activityReads, markActivityWGSL, otherRowActivityWGSL } from './activity-reads';
-	import { PLACEMENT_WORKGROUP, type PlacementConfig } from '$lib/gpu/placement';
+	import {
+		BOX_RECORD_STRIDE,
+		BOX_RECORD_WGSL,
+		PLACEMENT_WORKGROUP,
+		type PlacementConfig
+	} from '$lib/gpu/placement';
 
 	const rectRendererDefinition = {
 		x: { concept: 'extent', channels: ['x0', 'x1'] },
@@ -43,8 +49,7 @@
 		FACET: 10
 	};
 
-	/** Bytes per row of the record: RECORD_WGSL, four f32 after a vec4. */
-	const RECORD_STRIDE = 32;
+	const RECORD_STRIDE = BOX_RECORD_STRIDE;
 
 	// Facet indices: vertex slot 1. The draw reads them as an instance attribute
 	// (its facet discard); the faceted kernels bind the same buffer as storage,
@@ -129,6 +134,8 @@
 		 * rects with bounds of their own (a Gantt bar has no 0 to grow from).
 		 */
 		grow?: 'x' | 'y' | null;
+		/** The mark's label host, which this renderer fills in while ready. */
+		labelHost?: LabelRendererHolder | null;
 	}
 
 	let {
@@ -154,7 +161,8 @@
 		markId = '',
 		bandAxis = null,
 		binnedAxis = null,
-		grow = null
+		grow = null,
+		labelHost = null
 	}: Props = $props();
 
 	const splitData = $derived(share?.data ?? null);
@@ -201,21 +209,8 @@
 	/** The selection activities this shader reads; routing reads the same table. */
 	const ACTIVITY_READS = activityReads('rects');
 
-	/**
-	 * A row as placed (gpu/placement.ts): the bar's two corners in plot device
-	 * pixels, insets and offsets applied (corner 0 is the bar's base on the
-	 * measure axis, not necessarily its minimum); its opacity, and the Other
-	 * split's unselected part; its colour value for the fragment's lookup; its
-	 * Other share (0 on other rows, 1 + share on an Other bar).
-	 */
-	const RECORD_WGSL = `
-    struct Record {
-      box: vec4<f32>,
-      alpha: f32,
-      alphaRest: f32,
-      colorValue: f32,
-      share: f32,
-    };`;
+	/** A row as placed: the shared box record (gpu/placement.ts), which labels read too. */
+	const RECORD_WGSL = BOX_RECORD_WGSL;
 
 	const rectsShaderCode = `
     // MarkConstants uniform for per-mark configuration
@@ -427,6 +422,18 @@
 	const facetKernelBinding = faceted
 		? [{ binding: BINDINGS.FACET, source: 'vertex' as const, slot: FACET_VERTEX_SLOT }]
 		: [];
+	// --- What attaches to the bars (labels/LabelRendererHolder.svelte.ts) ---
+	// The mark owns the holder; this renderer fills it in while it is ready.
+	$effect(() => {
+		const holder = labelHost;
+		if (!holder || !renderer?.resourcesCreated) return;
+		return holder.attach({
+			renderer: () => renderer ?? null,
+			recordBinding: BINDINGS.RECORD,
+			color: () => ({ mode: colorMode, scaleIndex: colorScaleIndex, constant: constantColor })
+		});
+	});
+
 	const placement: PlacementConfig = {
 		recordBinding: BINDINGS.RECORD,
 		recordStride: RECORD_STRIDE,
