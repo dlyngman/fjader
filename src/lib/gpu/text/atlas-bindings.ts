@@ -39,6 +39,37 @@ export const ATLAS_WGSL = /* wgsl */ `
 @group(0) @binding(${ATLAS_SAMPLER_BINDING}) var textAtlasSampler: sampler;
 struct TextAtlasEntries { rects: array<vec4<f32>, ${ATLAS_MAX_ENTRIES}> };
 @group(0) @binding(${ATLAS_ENTRIES_BINDING}) var<uniform> textAtlasEntries: TextAtlasEntries;
+
+// The coverage of the string in atlas rectangle rect at texel p (atlas
+// texels), and 0 outside its rectangle, so a neighbour's texels never count.
+// A load, not a sample: exact texels, in any control flow.
+fn atlasCoverageAt(rect: vec4<f32>, p: vec2<f32>) -> f32 {
+  let q = floor(p);
+  if (any(q < rect.xy) || any(q >= rect.xy + rect.zw)) { return 0.0; }
+  return textureLoad(textAtlas, vec2<i32>(q), 0).a;
+}
+
+// A string's halo at texel p: the most coverage within radius texels, on two
+// rings of eight directions (half the radius and all of it, so a one-texel
+// stroke between them is not missed). Drawn under the string in the
+// background colour, it keeps text readable over lines. Its quad must reach
+// radius texels past the string.
+fn atlasHaloAt(rect: vec4<f32>, p: vec2<f32>, radius: f32) -> f32 {
+  var m = atlasCoverageAt(rect, p);
+  for (var ring = 1u; ring <= 2u; ring++) {
+    let r = radius * f32(ring) * 0.5;
+    let d = r * 0.7071;
+    m = max(m, atlasCoverageAt(rect, p + vec2<f32>(r, 0.0)));
+    m = max(m, atlasCoverageAt(rect, p + vec2<f32>(-r, 0.0)));
+    m = max(m, atlasCoverageAt(rect, p + vec2<f32>(0.0, r)));
+    m = max(m, atlasCoverageAt(rect, p + vec2<f32>(0.0, -r)));
+    m = max(m, atlasCoverageAt(rect, p + vec2<f32>(d, d)));
+    m = max(m, atlasCoverageAt(rect, p + vec2<f32>(-d, d)));
+    m = max(m, atlasCoverageAt(rect, p + vec2<f32>(d, -d)));
+    m = max(m, atlasCoverageAt(rect, p + vec2<f32>(-d, -d)));
+  }
+  return m;
+}
 `;
 
 /** What the coordinator binds for a chart's atlas. */
