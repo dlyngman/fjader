@@ -8,6 +8,7 @@
 	import { TextAtlas, ATLAS_CSS_WIDTH } from '$lib/gpu/text/TextAtlas.svelte';
 	import { parseColorToRGBA } from '$lib/scales/color-utils';
 	import GpuAxis from '../axes/GpuAxis.svelte';
+	import GpuParallelAxes from '../axes/GpuParallelAxes.svelte';
 	import { AXIS_REGISTRY, type AxisRegistry } from '../axes/axis-registry.svelte';
 
 	interface Props {
@@ -38,7 +39,7 @@
 	 * them to the GPU (gpu/text/TextAtlas.svelte.ts).
 	 */
 	const textAtlas = new TextAtlas();
-	/** The cell's declared axes (AxisLeft, AxisBottom), drawn here, on the GPU. */
+	/** The cell's declared axes (AxisLeft, AxisBottom, ParallelAxes), drawn here, on the GPU. */
 	const axisRegistry = getContext<AxisRegistry | undefined>(AXIS_REGISTRY);
 	setContext('text-atlas', textAtlas);
 
@@ -357,6 +358,9 @@
 		{@render canvasComponents?.()}
 		{#each axisRegistry?.axes ?? [] as spec (spec.id)}
 			<GpuAxis {spec} />
+		{/each}
+		{#each axisRegistry?.parallel ?? [] as spec (spec.id)}
+			<GpuParallelAxes {spec} />
 		{/each}
 	{:else}
 		<div class="webgpu-loading">

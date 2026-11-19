@@ -13,6 +13,9 @@
 /** Axes a parallel coordinates chart can hold: its axis arrays are sized for it. */
 export const PARALLEL_MAX_AXES = 16;
 
+/** Ticks a parallel axis can show at once, a crossfade's sets included. */
+export const PARALLEL_TICKS_PER_AXIS = 32;
+
 /** One ScaleParam: four f32. */
 const SCALE_PARAM_BYTES = 16;
 
@@ -28,6 +31,7 @@ export const UNIFORM_BYTES = {
 	labelConstants: 64,
 	axisConstants: 48,
 	parallelConfig: 176,
+	parallelAxisConstants: 272,
 	parallelAxisScales: PARALLEL_MAX_AXES * SCALE_PARAM_BYTES
 } as const;
 
