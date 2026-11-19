@@ -29,6 +29,7 @@ import {
 import { ColumnDataAccessor, type DataAccessor } from '$lib/data/DataAccessor';
 import { extractIdsRankedFromData } from '$lib/components/marks/lifecycle/domain-computation';
 import type { MarkConfig, SqlTransform } from '$lib/types';
+import { markValueAxis, valueAxisOf } from './value-axis';
 import type { SelectQuery } from '@uwdata/mosaic-sql';
 
 // ---------------------------------------------------------------------------
@@ -126,8 +127,9 @@ interface Scenario {
  */
 async function runSQL(db: DB, s: Scenario) {
 	const filter = s.filter ?? [];
-	const band = s.config.markType === 'barx' ? 'y' : 'x';
-	const by = s.config.markType === 'barx' ? 'x2' : 'y2';
+	const horizontal = valueAxisOf(s.config) === 'x';
+	const band = horizontal ? s.config.y! : s.config.x!;
+	const by = horizontal ? s.config.x! : s.config.y!;
 
 	const compiler = new TransformCompiler([topN(s.n)], s.config);
 	const parts = buildQueryParts(s.select, s.orderConfig, true);
@@ -160,6 +162,14 @@ async function runSQL(db: DB, s: Scenario) {
 const VERTICAL: MarkConfig = { markType: 'bary', table: 'sales', x: 'x', y: 'y2' };
 const HORIZONTAL: MarkConfig = { markType: 'barx', table: 'sales', x: 'x2', y: 'y' };
 const GROUPED: MarkConfig = { markType: 'bary', table: 'sales', x: 'x', y: 'y2', fill: 'fill' };
+/** Labels on horizontal bars: not a bar, so its scales say which axis is the value. */
+const HORIZONTAL_LABELS: MarkConfig = {
+	markType: 'text',
+	table: 'sales',
+	x: 'x',
+	y: 'y',
+	valueAxis: markValueAxis('text', 'linear', 'band')
+};
 
 const scenarios: Scenario[] = [
 	{
@@ -173,6 +183,15 @@ const scenarios: Scenario[] = [
 		name: 'horizontal bars (x2 alias, axis swap)',
 		config: HORIZONTAL,
 		select: { x2: sum('revenue'), y: column('category') },
+		n: 3,
+		expectedBand: ['Electronics', 'Clothing', 'Food']
+	},
+	{
+		// Ranked by its category (y) it kept a different top N than the bars it
+		// labels, and on their shared band axis those bars were drawn nowhere.
+		name: 'labels on horizontal bars rank by x, as the bars do',
+		config: HORIZONTAL_LABELS,
+		select: { x: sum('revenue'), y: column('category'), text: sum('revenue') },
 		n: 3,
 		expectedBand: ['Electronics', 'Clothing', 'Food']
 	},
@@ -221,7 +240,7 @@ describe('topN against a DuckDB reference', () => {
 
 			expect(sqlRows).toEqual(expectedRows);
 
-			const bandCol = s.config.markType === 'barx' ? s.config.y! : s.config.x!;
+			const bandCol = valueAxisOf(s.config) === 'x' ? s.config.y! : s.config.x!;
 			const bands = [...new Set(sqlRows.map((r) => r[bandCol]))].sort();
 			expect(bands).toEqual([...s.expectedBand].sort());
 		});

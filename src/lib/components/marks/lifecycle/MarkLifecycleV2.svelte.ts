@@ -39,6 +39,7 @@ import type { ExprNode, ExprValue, FilterExpr, GroupByExpr } from '@uwdata/mosai
 import type { ScaleRequirement } from '$lib/scales/ScalePriorities';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
 import { withDenseCategories, withoutOtherMembers, withRanking } from '$lib/transforms';
+import { markValueAxis } from '$lib/transforms/value-axis';
 import { ArrowDataAccessor } from '$lib/data/DataAccessor';
 import type { DataAccessor } from '$lib/data/DataAccessor';
 import type {
@@ -596,6 +597,12 @@ export class MarkLifecycleV2 {
 			y: this.#getFieldName('y'),
 			fill: this.#getFieldName('fill')
 		};
+		// A getter: transforms read it when they build their SQL, by when the
+		// chart has resolved its scales.
+		Object.defineProperty(this.#transformConfig, 'valueAxis', {
+			get: () => this.#valueAxis,
+			enumerable: true
+		});
 		// `dense()` is added here rather than in each of the twelve mark components
 		// that assemble transform lists, and it is added unconditionally: it
 		// refuses itself at apply time unless the mark has exactly one dimmed
@@ -2159,6 +2166,22 @@ export class MarkLifecycleV2 {
 		}
 		parts.push(`WHERE ${conditions.join(' AND ')}`);
 		return parts.join(' ');
+	}
+
+	/**
+	 * Which channel carries this mark's measure, for the transforms that rank or
+	 * divide by it (transforms/value-axis.ts). From the chart's resolved scale
+	 * types, the ones its rows are drawn on, as #categoricalChannels reads them;
+	 * the mark's declared requirements until the chart has resolved them.
+	 */
+	get #valueAxis(): 'x' | 'y' {
+		const resolved = this.#chartContext.scaleTypes;
+		const declared = this.#config.scaleRequirements;
+		return markValueAxis(
+			this.#config.markType,
+			resolved?.x ?? declared?.x?.type,
+			resolved?.y ?? declared?.y?.type
+		);
 	}
 
 	get actualXScaleType(): string {
