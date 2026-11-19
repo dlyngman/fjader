@@ -2,11 +2,18 @@
 	/**
 	 * Dashboard-30: thirty charts on one screen, all reacting to one selection,
 	 * driven by a scripted session, with a per-frame cost probe. Its variants
-	 * measure what text costs while data animates: labels (TextMark, drawn on
-	 * the GPU) and axes (SVG).
+	 * measure what text costs while data animates: labels (on the GPU) and axes
+	 * (SVG).
 	 *
-	 *   ?labels=0     no TextMark labels (default: labels on the bar charts and
-	 *                 one histogram)
+	 *   ?labels=      the bar charts' labels (charts 1-11, 29, 30):
+	 *                 attached  <Labels> on the bars, reading their placement and
+	 *                           rows (default)
+	 *                 text      a TextMark per chart: a second mark, query and
+	 *                           topN beside the bars
+	 *                 0         none
+	 *                 Chart 19's histogram labels are a TextMark in every mode
+	 *                 but 0 (RectYMark does not host <Labels> yet), so the modes
+	 *                 differ only in the bar charts.
 	 *   ?axes=0       no axes (with labels=0: the page without text)
 	 *   ?charts=N     only the first N charts (default 30)
 	 *   ?mutations=1  count DOM mutation records per frame (observing costs too,
@@ -59,6 +66,7 @@
 		AreaMarkY,
 		LineMark,
 		TextMark,
+		Labels,
 		IntervalX
 	} from '$lib/components';
 	import Toggle from '$lib/interactors/Toggle.svelte';
@@ -67,12 +75,29 @@
 	import { FrameProbe } from './frame-probe';
 
 	const params = page.url.searchParams;
-	const LABELS = params.get('labels') !== '0';
+	/**
+	 * `?labels=`, by the names the page and its saved logs use. An unknown value
+	 * is shown, not run as the default: a run of the wrong mode is a wrong number.
+	 */
+	const LABEL_MODES = {
+		attached: 'attached',
+		text: 'text',
+		textmark: 'text',
+		0: 'none',
+		none: 'none'
+	};
+	const labelsParam = params.get('labels');
+	const LABEL_MODE = labelsParam === null ? 'attached' : (LABEL_MODES[labelsParam] ?? null);
+	const LABEL_MODE_ERROR =
+		LABEL_MODE === null
+			? `Unknown ?labels=${labelsParam}: use attached, text (or textmark), or 0 (or none).`
+			: null;
+	const LABELS = LABEL_MODE !== 'none';
 	const AXES = params.get('axes') !== '0';
 	const MUTATIONS = params.get('mutations') === '1';
 	const SCALE = Math.max(1, Number(params.get('scale')) || 1);
 	const CHART_COUNT = Math.min(30, Math.max(1, Number(params.get('charts')) || 30));
-	const VARIANT = `${LABELS ? 'labels' : 'nolabels'}-${AXES ? 'axes' : 'noaxes'}${
+	const VARIANT = `${LABEL_MODE === 'none' ? 'nolabels' : LABEL_MODE === 'text' ? 'textmark' : 'attached'}-${AXES ? 'axes' : 'noaxes'}${
 		CHART_COUNT < 30 ? `-c${CHART_COUNT}` : ''
 	}${SCALE > 1 ? `-x${SCALE}` : ''}${MUTATIONS ? '-mut' : ''}`;
 
@@ -94,7 +119,7 @@
 	const BUILD_WAIT_CAP_MS = 15_000;
 
 	let isLoaded = $state(false);
-	let loadError = $state(null);
+	let loadError = $state(LABEL_MODE_ERROR);
 	let running = $state(false);
 	let done = $state(false);
 	let summary = $state(null);
@@ -244,7 +269,10 @@
 		const n = Number(v);
 		return n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : `${n}`;
 	};
-	const labelled = (c) => LABELS && (c.kind === 'barY' || c.kind === 'barX' || c.labels);
+	/** A TextMark beside the chart's mark: the bar charts in `text` mode, the labelled histogram in both. */
+	const textLabelled = (c) =>
+		LABELS && (c.labels || (LABEL_MODE === 'text' && (c.kind === 'barY' || c.kind === 'barX')));
+	const ATTACHED = LABEL_MODE === 'attached';
 
 	// --- Scripted pointer ---------------------------------------------------
 
@@ -563,6 +591,11 @@
 		<header>
 			<strong>Dashboard {charts.length}</strong>
 			<span class="variant">{VARIANT}</span>
+			<span
+				class="note-old"
+				title="Since the bar charts' labels became <Labels> (attached, the default), logs named dash30-labels-* are from before: they measured TextMark labels. Compare them with dash30-textmark-*."
+				>dash30-labels-* logs are older TextMark runs</span
+			>
 			<button disabled={running || done || !probeReady} onclick={runSession}>
 				{running ? 'running…' : done ? 'done (reload to rerun)' : 'Run session'}
 			</button>
@@ -649,7 +682,11 @@
 												transforms={transformsOf(c)}
 												sort={{ x: 'y', order }}
 												selection="brush"
-											/>
+											>
+												{#if ATTACHED}
+													<Labels fontSize={9} format={c.measure ? fmtMean : fmtCount} />
+												{/if}
+											</BarMarkY>
 										{:else if c.kind === 'barX'}
 											<BarMarkX
 												table="dash"
@@ -659,7 +696,9 @@
 												transforms={transformsOf(c)}
 												sort={{ y: 'x', order }}
 												selection="brush"
-											/>
+											>
+												{#if ATTACHED}<Labels fontSize={9} format={fmtCount} />{/if}
+											</BarMarkX>
 										{:else if c.kind === 'stackY'}
 											<BarMarkY
 												table="dash"
@@ -718,7 +757,7 @@
 												selection="brush"
 											/>
 										{/if}
-										{#if labelled(c)}
+										{#if textLabelled(c)}
 											{#if c.kind === 'barY'}
 												<TextMark
 													table="dash"
@@ -792,6 +831,10 @@
 	.variant {
 		font-family: ui-monospace, monospace;
 		color: #666;
+	}
+	.note-old {
+		color: #888;
+		font-size: 11px;
 	}
 	.warn {
 		color: #b45309;
