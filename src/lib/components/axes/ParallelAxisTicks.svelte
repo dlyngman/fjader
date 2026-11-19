@@ -34,11 +34,10 @@
 	/** What this pass writes, compared against the region before it is copied in. */
 	const next = new Float32Array(T * 4);
 
-	const formatter: (value: unknown) => string = $derived.by(() => {
-		if (tickFormat) return tickFormat;
-		const f = scale.tickFormat(ticksNumber) as (value: never) => string;
-		return (value: unknown) => f(value as never);
-	});
+	/** One formatter per set of ticks (tickFormatFor), not one per frame of a pan. */
+	const formatter: (value: unknown) => string = $derived(
+		tickFormat ?? (scale.tickFormatFor(ticksNumber) as (value: unknown) => string)
+	);
 
 	// --- Label strings → atlas slots, as GpuAxis holds them ---
 
@@ -100,11 +99,16 @@
 		upload(index);
 	}
 
+	/** The frame and formatter the region was last written from. */
+	let lastFrame: unknown = null;
+	let lastFormat: unknown = null;
+
 	$effect(() => {
 		const s = scale;
-		void formatter;
+		const format = formatter;
 		// Not entered: its domain is a placeholder. No ticks, as GpuAxis.
 		if (!hasEntered(s)) {
+			lastFrame = null;
 			untrack(() => {
 				sweep();
 				commit(0);
@@ -114,14 +118,25 @@
 		}
 		const frame = s.tickFrame(ticksNumber);
 		const crossfading = s.crossfading;
+		// At rest the same frame is the same ticks (tickFrame): a pan frame that
+		// keeps them has nothing to write. A crossfade moves opacities every frame.
+		if (!crossfading && frame === lastFrame && format === lastFormat) return;
+		lastFrame = frame;
+		lastFormat = format;
 		untrack(() => {
-			const n = Math.min(frame.length, T);
-			for (let i = 0; i < n; i++) {
-				const t = frame[i];
-				next[i * 4] = crossfading ? t.position : t.value;
-				next[i * 4 + 1] = t.alpha;
-				next[i * 4 + 2] = slotOf(labelOf(t.value));
-				next[i * 4 + 3] = 0;
+			// The incoming set first: past T ticks, the outgoing ones are dropped.
+			let n = 0;
+			for (let pass = 0; pass < 2; pass++) {
+				const target = pass === 0;
+				for (let i = 0; i < frame.length && n < T; i++) {
+					const t = frame[i];
+					if (t.target !== target) continue;
+					next[n * 4] = crossfading ? t.position : t.value;
+					next[n * 4 + 1] = t.alpha;
+					next[n * 4 + 2] = slotOf(labelOf(t.value));
+					next[n * 4 + 3] = 0;
+					n++;
+				}
 			}
 			sweep();
 			commit(n);

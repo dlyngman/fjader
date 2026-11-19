@@ -89,6 +89,58 @@ interface TickFade {
 	alpha0: Map<string, number>;
 	version: number;
 	frame: TickEntry[];
+	/** Each frame entry's opacity when the segment began, by index. */
+	a0: number[];
+	/** Whether `frame` holds this segment's entries (built once per segment). */
+	built: boolean;
+}
+
+/**
+ * One count's ticks at rest: the frame, the render domain it was positioned
+ * for, and for a plain linear scale the tick spec its values came from.
+ */
+interface RestTicks {
+	frame: TickEntry[];
+	min: number;
+	max: number;
+	/** d3's tick spec (i1, i2, inc) of `frame`, or NaN when not known. */
+	spec: Float64Array;
+}
+
+const E10 = Math.sqrt(50);
+const E5 = Math.sqrt(10);
+const E2 = Math.sqrt(2);
+
+/**
+ * d3-array's tickSpec (3.2.4), written into \`out\` instead of a new array:
+ * the ticks d3 gives for [start, stop] are exactly i1..i2 at inc, so an
+ * unchanged spec is unchanged ticks, found with no allocation. Kept verbatim
+ * so it agrees with d3 to the bit; start < stop, count > 0.
+ */
+function tickSpecInto(start: number, stop: number, count: number, out: Float64Array): void {
+	const step = (stop - start) / Math.max(0, count);
+	const power = Math.floor(Math.log10(step));
+	const error = step / Math.pow(10, power);
+	const factor = error >= E10 ? 10 : error >= E5 ? 5 : error >= E2 ? 2 : 1;
+	let i1: number, i2: number, inc: number;
+	if (power < 0) {
+		inc = Math.pow(10, -power) / factor;
+		i1 = Math.round(start * inc);
+		i2 = Math.round(stop * inc);
+		if (i1 / inc < start) ++i1;
+		if (i2 / inc > stop) --i2;
+		inc = -inc;
+	} else {
+		inc = Math.pow(10, power) * factor;
+		i1 = Math.round(start / inc);
+		i2 = Math.round(stop / inc);
+		if (i1 * inc < start) ++i1;
+		if (i2 * inc > stop) --i2;
+	}
+	if (i2 < i1 && 0.5 <= count && count < 2) return tickSpecInto(start, stop, count * 2, out);
+	out[0] = i1;
+	out[1] = i2;
+	out[2] = inc;
 }
 
 /** Two sets' ticks within this share of the plot are one tick (a value in both). */
@@ -235,6 +287,18 @@ export class LinearScaleState {
 	#fadeElapsed = 0;
 	#fadeRendered = 1;
 	#tickScratch = new Float64Array(2);
+	/** The ticks at rest, per count (tickFrame): rebuilt only when their values change. */
+	#restTicks = new Map<number, RestTicks>();
+	#specScratch = new Float64Array(3);
+	/** Bumped whenever a count's ticks at rest change values: what tickFormatFor keys on. */
+	#tickRevision = 0;
+	/** tickFormatFor's formatter, and what it was made for. */
+	#formatCache: {
+		fn: ((value: number) => string) | null;
+		count: number;
+		revision: number;
+		custom: unknown;
+	} = { fn: null, count: -1, revision: -1, custom: null };
 
 	// --- Unit-change tween ---
 	/**
@@ -794,39 +858,58 @@ export class LinearScaleState {
 	 * A value in two sets at the same place is one tick: incoming if the newest
 	 * set has it, fading from its one starting opacity (so a value in both stays
 	 * fully drawn). A set leaves once faded out. Reactive: reads the render
-	 * version. During a crossfade a new array per version (the SVG axes need
-	 * one to re-render); at rest the ticks as `getTicks` gives them.
+	 * version. No allocation per frame: a crossfade's entries are built once per
+	 * segment and only their opacities move; at rest the frame is kept while
+	 * its values are the same (#restFrame). The array is new exactly when its
+	 * entries change, so at rest an unchanged array is unchanged ticks.
 	 */
 	tickFrame(count: number = this.defaultTickCount): readonly TickEntry[] {
 		this._version;
 		if (!this.#crossfading) {
 			if (this.#tickFades.size > 0) this.#tickFades.clear();
-			const lo = this.toSpringSpace(this.#renderMin);
-			const width = this.toSpringSpace(this.#renderMax) - lo;
-			return this.getTicks(count).map((value) => ({
-				value,
-				position: width > 0 ? (this.toSpringSpace(value) - lo) / width : 0,
-				alpha: 1,
-				target: true
-			}));
+			return this.#restFrame(count);
 		}
 		let fade = this.#tickFades.get(count);
 		if (!fade) {
-			fade = { segment: -1, sets: [], alpha0: new Map(), version: -1, frame: [] };
+			fade = {
+				segment: -1,
+				sets: [],
+				alpha0: new Map(),
+				version: -1,
+				frame: [],
+				a0: [],
+				built: false
+			};
 			this.#tickFades.set(count, fade);
 		}
 		const segment = this.#published.segment;
 		if (fade.segment !== segment) this.#freezeTicks(fade, count, segment);
 		if (fade.version === this._version) return fade.frame;
+		if (!fade.built) this.#buildFade(fade);
 
-		const f = this.#published.f;
-		// On the fade's own clock (FADE_SECONDS), not the tween's f.
+		// On the fade's own clock (FADE_SECONDS), not the tween's f. Within a
+		// segment only the opacities move: written into the segment's entries.
 		const into = fadeProgress(this.#fadeRendered);
 		const out = into;
-		// Each tick by where it is drawn, once whichever sets it is in: its
-		// opacity when the segment began, and whether the incoming set has it.
-		// Incoming ticks fade in from there, the rest fade out; a value in both
-		// at the same pixel was fully drawn and stays so.
+		const frame = fade.frame;
+		for (let i = 0; i < frame.length; i++) {
+			const e = frame[i];
+			const a0 = fade.a0[i];
+			e.alpha = e.target ? a0 + (1 - a0) * into : a0 * (1 - out);
+		}
+		fade.version = this._version;
+		return frame;
+	}
+
+	/**
+	 * A segment's entries, once: each tick by where it is drawn, once whichever
+	 * sets it is in, with its opacity when the segment began and whether the
+	 * incoming set has it. Incoming ticks fade in from there, the rest fade
+	 * out; a value in both at the same pixel was fully drawn and stays so. An
+	 * outgoing tick not drawn when the segment began never is, so it is left
+	 * out here. A new array, so a consumer sees the change of entries.
+	 */
+	#buildFade(fade: TickFade): void {
 		// "The same tick" is one test, tickId, here and where opacities carry
 		// over (#freezeTicks): a distance test here and a bucket there could split
 		// one tick in two at a retarget, its α₀ lost.
@@ -848,16 +931,71 @@ export class LinearScaleState {
 				}
 			}
 		}
+		const a0s: number[] = [];
 		let shown = 0;
 		for (const e of frame) {
 			const a0 = fade.alpha0.get(tickId(e.value, e.position)) ?? 0;
-			e.alpha = e.target ? a0 + (1 - a0) * into : a0 * (1 - out);
-			// An outgoing tick that was not drawn when the segment began never is.
-			if (e.target || a0 > 0) frame[shown++] = e;
+			if (e.target || a0 > 0) {
+				frame[shown++] = e;
+				a0s.push(a0);
+			}
 		}
 		frame.length = shown;
-		fade.version = this._version;
 		fade.frame = frame;
+		fade.a0 = a0s;
+		fade.built = true;
+	}
+
+	/**
+	 * The ticks at rest (and during a gesture), at opacity 1, positioned through
+	 * the render domain. Kept per count while they are the same values: the
+	 * same domain is the same frame, untouched; a moved domain with the same
+	 * ticks updates the positions in place. A plain linear scale tells whether
+	 * its ticks changed from d3's tick spec, with no allocation; the others
+	 * compare their ticks. A new array only when the values change, so a
+	 * consumer can tell a change by identity.
+	 */
+	#restFrame(count: number): TickEntry[] {
+		const min = this.#renderMin;
+		const max = this.#renderMax;
+		let rest = this.#restTicks.get(count);
+		if (rest && rest.min === min && rest.max === max) return rest.frame;
+		if (!rest) {
+			rest = { frame: [], min: NaN, max: NaN, spec: new Float64Array(3).fill(NaN) };
+			this.#restTicks.set(count, rest);
+		}
+		rest.min = min;
+		rest.max = max;
+
+		let same = false;
+		const plain = this.ticksFor === LinearScaleState.prototype.ticksFor;
+		const spec = this.#specScratch;
+		const specKnown =
+			plain && count > 0 && min < max && Number.isFinite(min) && Number.isFinite(max);
+		if (specKnown) {
+			tickSpecInto(min, max, count, spec);
+			same = spec[0] === rest.spec[0] && spec[1] === rest.spec[1] && spec[2] === rest.spec[2];
+		}
+		if (!same) {
+			const values = this.ticksFor(min, max, count);
+			if (!specKnown) {
+				same = values.length === rest.frame.length;
+				for (let i = 0; same && i < values.length; i++) same = values[i] === rest.frame[i].value;
+			}
+			if (!same) {
+				rest.frame = values.map((value) => ({ value, position: 0, alpha: 1, target: true }));
+				this.#tickRevision++;
+			}
+			if (specKnown) rest.spec.set(spec);
+			else rest.spec.fill(NaN);
+		}
+
+		const lo = this.toSpringSpace(min);
+		const width = this.toSpringSpace(max) - lo;
+		const frame = rest.frame;
+		for (let i = 0; i < frame.length; i++) {
+			frame[i].position = width > 0 ? (this.toSpringSpace(frame[i].value) - lo) / width : 0;
+		}
 		return frame;
 	}
 
@@ -892,6 +1030,7 @@ export class LinearScaleState {
 		fade.alpha0 = alpha0;
 		fade.segment = segment;
 		fade.version = -1;
+		fade.built = false;
 	}
 
 	#tickSet(lo: number, hi: number, count: number): TickSet {
@@ -951,6 +1090,32 @@ export class LinearScaleState {
 		return this.#sharedScale.tickFormat(count, this.#customFormat ?? undefined) as (
 			value: number
 		) => string;
+	}
+
+	/**
+	 * `tickFormat(count)`, made again only when the ticks change values (or the
+	 * custom format does): the formatter for every frame of a pan, without a new
+	 * closure per frame. d3 picks a format's precision from the tick step, which
+	 * the ticks fix. Reactive like `tickFormat`; a consumer comparing formatters
+	 * by identity sees one per set of ticks.
+	 */
+	tickFormatFor(count: number = this.defaultTickCount): (value: number) => string {
+		this._version;
+		const custom = this.#customFormat;
+		this.#restFrame(count);
+		const cache = this.#formatCache;
+		if (
+			cache.fn &&
+			cache.count === count &&
+			cache.revision === this.#tickRevision &&
+			cache.custom === custom
+		)
+			return cache.fn;
+		cache.fn = this.tickFormat(count);
+		cache.count = count;
+		cache.revision = this.#tickRevision;
+		cache.custom = custom;
+		return cache.fn;
 	}
 
 	/**
