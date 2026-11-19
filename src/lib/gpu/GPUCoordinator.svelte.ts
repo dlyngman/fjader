@@ -751,10 +751,10 @@ export class GPUCoordinator {
 					//
 					// Uniform, and visible to the VERTEX stage as well: selection
 					// dimming reads a colour scale's slotBase per vertex. As storage
-					// it would take the last of the vertex stage's default 8 storage
-					// buffers on Rects, which uses 7; as a uniform it counts against
-					// the separate uniform limit and leaves that slot free. Same move
-					// as binding 4.
+					// it would count against the default 8 storage buffers of every
+					// stage that sees it, the placement kernels' included, which
+					// sit at 7-8; as a uniform it counts against the separate
+					// uniform limit. Same move as binding 4.
 					// COMPUTE too: the appearance kernels dim by ordinal colour.
 					binding: 1,
 					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
@@ -792,10 +792,10 @@ export class GPUCoordinator {
 					// `from`, `to` and each block's `t`; the render stages read this one
 					// buffer and do no interpolation.
 					//
-					// Storage, where it used to be two uniforms. It costs the vertex
-					// stage one binding where the pair cost none — Rects lands at 7 of
-					// the default maxStorageBuffersPerShaderStage of 8, its six channels
-					// and this — and in exchange
+					// Storage, where it used to be two uniforms. It costs each stage
+					// that sees it one of the default 8 storage buffers (a Rects
+					// draw's vertex stage holds 2, this and its record; its placement
+					// kernels 7-8) — and in exchange
 					// the vec4 packing, the 64 KB uniform binding cap and the
 					// 16384-float global ceiling all go away with the address space.
 					//

@@ -8,6 +8,7 @@
 	import type { SplitProp } from '../marks/lifecycle/other-rows.svelte';
 	import type { RebinSource } from '$lib/gpu/bin-remap';
 	import { activityReads, markActivityWGSL, otherRowActivityWGSL } from './activity-reads';
+	import { PLACEMENT_WORKGROUP, type PlacementConfig } from '$lib/gpu/placement';
 
 	const rectRendererDefinition = {
 		x: { concept: 'extent', channels: ['x0', 'x1'] },
@@ -28,14 +29,22 @@
 		 * An Other bar's selected share, per row: 0 on rows that are not an Other
 		 * (so the zero-filled stand-in buffer means "no split anywhere"), `1 +
 		 * share` on one. Morphed with the bar's length.
-		 *
-		 * The vertex stage's 8th storage buffer: six channels, the identity slot
-		 * table and this fill WebGPU's default maxStorageBuffersPerShaderStage. A
-		 * further per-row channel needs another container (an instance vertex
-		 * attribute) or a raised device limit.
 		 */
-		SHARE: 7
+		SHARE: 7,
+		/**
+		 * Each drawn row's placed geometry and appearance (RECORD_WGSL), written
+		 * by the placement kernels and read by the draw. The draw binds only this
+		 * and the constants: its vertex stage holds 2 storage buffers (this and
+		 * the shared slot table), where it held all 8 when it placed rows itself.
+		 */
+		RECORD: 8,
+		/** The kernels' seams (from their vertex slot) and facet indices. */
+		SEAMS: 9,
+		FACET: 10
 	};
+
+	/** Bytes per row of the record: RECORD_WGSL, four f32 after a vec4. */
+	const RECORD_STRIDE = 32;
 
 	// Facet uses vertex buffer slot 1 (not a storage binding)
 	const FACET_VERTEX_SLOT = 1;
@@ -190,6 +199,22 @@
 	/** The selection activities this shader reads; routing reads the same table. */
 	const ACTIVITY_READS = activityReads('rects');
 
+	/**
+	 * A row as placed (gpu/placement.ts): the bar's two corners in plot device
+	 * pixels, insets and offsets applied (corner 0 is the bar's base on the
+	 * measure axis, not necessarily its minimum); its opacity, and the Other
+	 * split's unselected part; its colour value for the fragment's lookup; its
+	 * Other share (0 on other rows, 1 + share on an Other bar).
+	 */
+	const RECORD_WGSL = `
+    struct Record {
+      box: vec4<f32>,
+      alpha: f32,
+      alphaRest: f32,
+      colorValue: f32,
+      share: f32,
+    };`;
+
 	const rectsShaderCode = `
     // MarkConstants uniform for per-mark configuration
     struct MarkConstants {
@@ -222,93 +247,32 @@
       @location(4) alphaRest: f32,
     };
 
-    @group(1) @binding(0) var<storage, read> x0Values: array<f32>;
-    @group(1) @binding(1) var<storage, read> x1Values: array<f32>;
-    @group(1) @binding(2) var<storage, read> y0Values: array<f32>;
-    @group(1) @binding(3) var<storage, read> y1Values: array<f32>;
-    @group(1) @binding(4) var<storage, read> colorValues: array<f32>;
-    @group(1) @binding(5) var<storage, read> alphaValues: array<f32>;
-    @group(1) @binding(7) var<storage, read> splitValues: array<f32>;
+    ${RECORD_WGSL}
+    @group(1) @binding(8) var<storage, read> records: array<Record>;
 
+    // The row as the placement kernels left it this frame: corners only here.
     @vertex
     fn vertexMain(
       @location(0) rectCorner: vec2<f32>,
       @builtin(instance_index) instanceIdx: u32,
       {{FACET_PARAM}}
-      {{SEAM_PARAM}}
     ) -> VertexOutput {
       {{FACET_DISCARD}}
-      let x0 = x0Values[instanceIdx];
-      let x1 = x1Values[instanceIdx];
-      let y0 = y0Values[instanceIdx];
-      let y1 = y1Values[instanceIdx];
-      let alpha = alphaValues[instanceIdx];
-      let colorValue = colorValues[instanceIdx];
-
-      // X axis scaling (generated based on scale type)
-      {{X_AXIS_LOGIC}}
-
-      // Y axis scaling (generated based on scale type)
-      {{Y_AXIS_LOGIC}}
-
-      // The chart's entrance: both edges pulled toward 0 on the measure axis,
-      // so a stack grows as one block rather than its segments floating up.
-      let p0 = entrancePosition(vec2<f32>(scaledX0, scaledY0), markConstants.entranceAxis);
-      let p1 = entrancePosition(vec2<f32>(scaledX1, scaledY1), markConstants.entranceAxis);
-
-      // Apply inset (shrink rect inward on all sides)
-      let ix = markConstants.inset * sign(p1.x - p0.x);
-      let iy = markConstants.inset * sign(p1.y - p0.y);
-      {{SEAM_INSETS}}
-
-      // Interpolate rectangle corners and apply pixel offsets
-      let finalX = mix(p0.x + ix0, p1.x - ix1, rectCorner.x) + markConstants.dx;
-      let finalY = mix(p0.y + iy0, p1.y - iy1, rectCorner.y) + markConstants.dy;
-      let enterAlpha = entranceAlpha(markConstants.entranceAxis);
-
-      // Convert to normalized device coordinates
-      let worldPos = vec2<f32>(finalX, finalY);
-      let normalizedPos = (worldPos / frameUniforms.resolution) * 2.0 - 1.0;
+      let r = records[instanceIdx];
+      let worldPos = vec2<f32>(mix(r.box.x, r.box.z, rectCorner.x), mix(r.box.y, r.box.w, rectCorner.y));
 
       var output: VertexOutput;
-      output.position = vec4<f32>(normalizedPos.x, -normalizedPos.y, 0.0, 1.0);
-      output.colorValue = colorValue;
-      // An Other row (split > 0) is drawn in two parts, mixed in the fragment at
-      // its share. Below: as any bar, by its full activity, its own field's
-      // included, so it dims and lights with the bucket's lit state (#23). Above:
-      // by the other fields' activity and the field's free slot, so it is lit
-      // only while nothing is selected. Both fade on the selection clock, and the
-      // split only moves when the share moves between two parts that differ.
-      let split = splitValues[instanceIdx];
-      let isOther = split > 0.5;
-      output.share = select(-1.0, split - 1.0, isOther);
+      output.position = pixelsToClip(worldPos);
+      output.colorValue = r.colorValue;
+      output.alpha = r.alpha;
+      output.alphaRest = r.alphaRest;
+      // An Other row (share > 0) is drawn in two parts, mixed in the fragment
+      // at its share; every other row is -1, one part.
+      output.share = select(-1.0, r.share - 1.0, r.share > 0.5);
       output.along = select(rectCorner.y, rectCorner.x, markConstants.splitAlongX == 1u);
-      let activity = ${markActivityWGSL(ACTIVITY_READS, {
-				color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValue',
-				x: 'x0',
-				y: 'y0',
-				group: 'markConstants.groupIndex'
-			})};
-      output.alpha = alpha * selectionDim(activity) * enterAlpha;
-      // The unselected part is drawn only on an Other row: every other bar skips
-      // its activity reads.
-      output.alphaRest = output.alpha;
-      if (isOther) {
-        let otherActivity = ${otherRowActivityWGSL(ACTIVITY_READS, {
-					color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValue',
-					group: 'markConstants.groupIndex',
-					skipColor: 'markConstants.otherColorOnBand == 1u'
-				})};
-        let free = select(
-          bandFreeActivityX(markConstants.groupIndex),
-          bandFreeActivityY(markConstants.groupIndex),
-          markConstants.splitAlongX == 1u
-        );
-        output.alphaRest = alpha * selectionDim(min(otherActivity, free)) * enterAlpha;
-      }
       return output;
     }
-  
+
     @fragment
     fn fragmentMain(input: VertexOutput) -> @location(0) vec4<f32> {
       // Before any branch: a derivative must be taken in uniform control flow.
@@ -340,9 +304,163 @@
     }
   `
 		.replace('{{FACET_PARAM}}', faceted ? '@location(1) facetIdx: f32,' : '')
-		.replace('{{SEAM_PARAM}}', seamAxis ? '@location(2) seam: u32,' : '')
-		.replace('{{SEAM_INSETS}}', seamInsetsWGSL(seamAxis))
 		.replace('{{FACET_DISCARD}}', faceted ? FACET_DISCARD_WGSL : '');
+
+	// --- Placement kernels (gpu/placement.ts) ---
+	//
+	// Two, because one would bind 9-10 storage buffers and the default is 8.
+	// Each covers the drawn rows; a faceted mark's dispatch per cell places
+	// only that cell's rows, with that cell's frame uniforms.
+
+	const MARK_CONSTANTS_WGSL = rectsShaderCode.slice(
+		rectsShaderCode.indexOf('struct MarkConstants'),
+		rectsShaderCode.indexOf('struct VertexOutput')
+	);
+
+	/** A faceted kernel's facet indices, and the skip for another cell's rows. */
+	const FACET_KERNEL_BINDING = faceted
+		? `@group(1) @binding(${BINDINGS.FACET}) var<storage, read> facets: array<f32>;`
+		: '';
+	const FACET_KERNEL_SKIP = faceted
+		? `if (i >= arrayLength(&facets) || u32(facets[i]) != frameUniforms.activeFacetIdx) { return; }`
+		: '';
+	const KERNEL_HEAD = `
+    @compute @workgroup_size(${PLACEMENT_WORKGROUP})
+    fn placeMain(@builtin(global_invocation_id) gid: vec3<u32>) {
+      if (gid.x >= chartScales.rows.x) { return; }
+      let i = gid.x + chartScales.rows.y;
+      ${FACET_KERNEL_SKIP}`;
+
+	/** Where each bar is: the box, as the vertex stage used to compute it per corner. */
+	const geometryKernelCode = `
+    ${MARK_CONSTANTS_WGSL}
+    ${RECORD_WGSL}
+    @group(1) @binding(${BINDINGS.X0}) var<storage, read> x0Values: array<f32>;
+    @group(1) @binding(${BINDINGS.X1}) var<storage, read> x1Values: array<f32>;
+    @group(1) @binding(${BINDINGS.Y0}) var<storage, read> y0Values: array<f32>;
+    @group(1) @binding(${BINDINGS.Y1}) var<storage, read> y1Values: array<f32>;
+    @group(1) @binding(${BINDINGS.RECORD}) var<storage, read_write> records: array<Record>;
+    ${seamAxis ? `@group(1) @binding(${BINDINGS.SEAMS}) var<storage, read> seams: array<u32>;` : ''}
+    ${FACET_KERNEL_BINDING}
+    ${KERNEL_HEAD}
+      let x0 = x0Values[i];
+      let x1 = x1Values[i];
+      let y0 = y0Values[i];
+      let y1 = y1Values[i];
+
+      {{X_AXIS_LOGIC}}
+      {{Y_AXIS_LOGIC}}
+
+      // The chart's entrance: both edges pulled toward 0 on the measure axis,
+      // so a stack grows as one block rather than its segments floating up.
+      let p0 = entrancePosition(vec2<f32>(scaledX0, scaledY0), markConstants.entranceAxis);
+      let p1 = entrancePosition(vec2<f32>(scaledX1, scaledY1), markConstants.entranceAxis);
+
+      // Inset, shrinking the rect inward on all sides; a rebin's seams adjust it.
+      let ix = markConstants.inset * sign(p1.x - p0.x);
+      let iy = markConstants.inset * sign(p1.y - p0.y);
+      ${seamAxis ? 'let seam = select(0u, seams[i], i < arrayLength(&seams));' : ''}
+      ${seamInsetsWGSL(seamAxis)}
+
+      let d = vec2<f32>(markConstants.dx, markConstants.dy);
+      records[i].box = vec4<f32>(
+        p0.x + ix0 + d.x, p0.y + iy0 + d.y,
+        p1.x - ix1 + d.x, p1.y - iy1 + d.y
+      );
+    }`;
+
+	/**
+	 * How opaque each bar is, and what colours it: selection dimming, the
+	 * entrance fade, and an Other bar's two parts. Below its share, as any bar,
+	 * by its full activity, its own field's included, so it dims and lights
+	 * with the bucket's lit state (#23). Above, by the other fields' activity
+	 * and the field's free slot, so it is lit only while nothing is selected.
+	 */
+	const appearanceKernelCode = `
+    ${MARK_CONSTANTS_WGSL}
+    ${RECORD_WGSL}
+    @group(1) @binding(${BINDINGS.X0}) var<storage, read> x0Values: array<f32>;
+    @group(1) @binding(${BINDINGS.Y0}) var<storage, read> y0Values: array<f32>;
+    @group(1) @binding(${BINDINGS.COLOR}) var<storage, read> colorValues: array<f32>;
+    @group(1) @binding(${BINDINGS.ALPHA}) var<storage, read> alphaValues: array<f32>;
+    @group(1) @binding(${BINDINGS.SHARE}) var<storage, read> splitValues: array<f32>;
+    @group(1) @binding(${BINDINGS.RECORD}) var<storage, read_write> records: array<Record>;
+    ${FACET_KERNEL_BINDING}
+    ${KERNEL_HEAD}
+      let x0 = x0Values[i];
+      let y0 = y0Values[i];
+      let alpha = alphaValues[i];
+      let colorValue = colorValues[i];
+      let split = splitValues[i];
+      let enterAlpha = entranceAlpha(markConstants.entranceAxis);
+      let activity = ${markActivityWGSL(ACTIVITY_READS, {
+				color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValue',
+				x: 'x0',
+				y: 'y0',
+				group: 'markConstants.groupIndex'
+			})};
+      let a = alpha * selectionDim(activity) * enterAlpha;
+      // The unselected part is computed only on an Other row: every other bar
+      // skips its activity reads.
+      var rest = a;
+      if (split > 0.5) {
+        let otherActivity = ${otherRowActivityWGSL(ACTIVITY_READS, {
+					color: 'markConstants.colorMode, markConstants.colorScaleIndex, colorValue',
+					group: 'markConstants.groupIndex',
+					skipColor: 'markConstants.otherColorOnBand == 1u'
+				})};
+        let free = select(
+          bandFreeActivityX(markConstants.groupIndex),
+          bandFreeActivityY(markConstants.groupIndex),
+          markConstants.splitAlongX == 1u
+        );
+        rest = alpha * selectionDim(min(otherActivity, free)) * enterAlpha;
+      }
+      records[i].alpha = a;
+      records[i].alphaRest = rest;
+      records[i].colorValue = colorValue;
+      records[i].share = split;
+    }`;
+
+	const facetKernelBinding = faceted
+		? [{ binding: BINDINGS.FACET, source: 'vertex' as const, slot: FACET_VERTEX_SLOT }]
+		: [];
+	const placement: PlacementConfig = {
+		recordBinding: BINDINGS.RECORD,
+		recordStride: RECORD_STRIDE,
+		kernels: [
+			{
+				name: 'geometry',
+				code: geometryKernelCode,
+				bindings: [
+					{ binding: BINDINGS.X0, source: 'channel', channel: BINDINGS.X0 },
+					{ binding: BINDINGS.X1, source: 'channel', channel: BINDINGS.X1 },
+					{ binding: BINDINGS.Y0, source: 'channel', channel: BINDINGS.Y0 },
+					{ binding: BINDINGS.Y1, source: 'channel', channel: BINDINGS.Y1 },
+					{ binding: BINDINGS.CONSTANTS, source: 'uniform', channel: BINDINGS.CONSTANTS },
+					{ binding: BINDINGS.RECORD, source: 'record' },
+					...(seamAxis
+						? [{ binding: BINDINGS.SEAMS, source: 'vertex' as const, slot: SEAM_VERTEX_SLOT }]
+						: []),
+					...facetKernelBinding
+				]
+			},
+			{
+				name: 'appearance',
+				code: appearanceKernelCode,
+				bindings: [
+					{ binding: BINDINGS.X0, source: 'channel', channel: BINDINGS.X0 },
+					{ binding: BINDINGS.Y0, source: 'channel', channel: BINDINGS.Y0 },
+					{ binding: BINDINGS.COLOR, source: 'channel', channel: BINDINGS.COLOR },
+					{ binding: BINDINGS.ALPHA, source: 'channel', channel: BINDINGS.ALPHA },
+					{ binding: BINDINGS.SHARE, source: 'channel', channel: BINDINGS.SHARE },
+					{ binding: BINDINGS.CONSTANTS, source: 'uniform', channel: BINDINGS.CONSTANTS },
+					{ binding: BINDINGS.RECORD, source: 'record' },
+					...facetKernelBinding
+				]
+			}
+		]
+	};
 
 	/**
 	 * Each side's inset. On the binned axis of a binned mark (p0 is the lower
@@ -374,27 +492,14 @@
 						attributes: [{ shaderLocation: 1, offset: 0, format: 'float32' as GPUVertexFormat }]
 					}
 				]
-			: []),
-		// A binned mark's seams: per-instance u32, in the slot after the facet's.
-		...(seamAxis
-			? [
-					{
-						arrayStride: 4,
-						stepMode: 'instance' as GPUVertexStepMode,
-						attributes: [{ shaderLocation: 2, offset: 0, format: 'uint32' as GPUVertexFormat }]
-					}
-				]
 			: [])
+		// A binned mark's seams are written to a vertex slot (SEAM_VERTEX_SLOT)
+		// that the geometry kernel reads as storage: the draw does not bind them.
 	];
 
+	// The draw binds the record and the constants; the channels go to the kernels.
 	const dataBindingConfig = [
-		{ binding: BINDINGS.X0, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
-		{ binding: BINDINGS.X1, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
-		{ binding: BINDINGS.Y0, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
-		{ binding: BINDINGS.Y1, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
-		{ binding: BINDINGS.COLOR, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
-		{ binding: BINDINGS.ALPHA, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
-		{ binding: BINDINGS.SHARE, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
+		{ binding: BINDINGS.RECORD, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
 		{
 			binding: BINDINGS.CONSTANTS,
 			type: 'uniform',
@@ -589,37 +694,7 @@
 			if (!facetBuffer) return;
 			passEncoder.setVertexBuffer(1, facetBuffer);
 		}
-		if (seamAxis) {
-			// Seams while a rebin has some, zeros (no seams) otherwise. Zeros too
-			// for seams shorter than the rows: a vertex buffer short of the
-			// instance count fails the whole command buffer, every chart with it.
-			const written = renderer.getVertexBuffer(SEAM_VERTEX_SLOT);
-			const seams =
-				written && written.size >= renderer.instanceCount * 4
-					? written
-					: noSeams(renderer.instanceCount);
-			passEncoder.setVertexBuffer(SEAM_VERTEX_SLOT, seams);
-		}
 		passEncoder.draw(rectVertexCount, renderer.instanceCount);
-	}
-
-	/**
-	 * Zeros for the seam slot, at least `count` rows: a binned mark draws with
-	 * no seams most of the time. Grown with headroom and zero-filled at
-	 * creation (WebGPU's guarantee), so a frame only compares a size.
-	 */
-	let seamZeros: GPUBuffer | null = null;
-	function noSeams(count: number): GPUBuffer {
-		const bytes = Math.max(16, count * 4);
-		if (!seamZeros || seamZeros.size < bytes) {
-			seamZeros?.destroy();
-			seamZeros = webGPUContext.getDevice().createBuffer({
-				size: Math.ceil((bytes * 1.5) / 4) * 4,
-				usage: GPUBufferUsage.VERTEX,
-				label: 'rects-no-seams'
-			});
-		}
-		return seamZeros;
 	}
 
 	onMount(() =>
@@ -628,7 +703,8 @@
 				markShaderCode: rectsShaderCode,
 				vertexBufferLayout,
 				dataBindingConfig,
-				rendererDefinition: rectRendererDefinition
+				rendererDefinition: rectRendererDefinition,
+				placement
 			},
 			async ready(r) {
 				await initializeRectGeometry();
@@ -656,14 +732,11 @@
 			gpuCoordinator?.retainRenderer(markId, {
 				destroy() {
 					rgb?.destroy();
-					// Read at destroy: a retained renderer still draws, and may grow it.
-					seamZeros?.destroy();
 					r.destroy();
 				}
 			});
 		if (retained) return;
 		if (rgb) rgb.destroy();
-		seamZeros?.destroy();
 		if (r) r.destroy();
 	});
 </script>

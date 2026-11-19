@@ -31,10 +31,11 @@ export const MAX_SIZE_SLOTS = 64;
  * changes rather than per frame. Every property that makes a uniform buffer the
  * right container was already true of it.
  *
- * What it buys: a slot in the vertex stage's storage budget, the default
- * maxStorageBuffersPerShaderStage of 8, of which Rects uses 7 (six mark
- * channels and the identity slot table). Uniform buffers are nowhere near
- * their own default of 12.
+ * What it buys: a slot in a stage's storage budget, the default
+ * maxStorageBuffersPerShaderStage of 8. It mattered most when Rects placed
+ * its rows in the vertex stage and used all 8; its placement kernels now
+ * hold the per-row channels, each within 8, and its draw binds 2. Uniform
+ * buffers are nowhere near their own default of 12.
  *
  * Dynamic indexing — `sizeConfigs[scaleIndex]` — is permitted on uniform arrays
  * in WGSL, and the shared slot table already relies on the same thing.

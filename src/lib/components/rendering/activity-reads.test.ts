@@ -176,11 +176,13 @@ describe('an Other row reads no activity on its own field', () => {
 		const { readFileSync } = await import('node:fs');
 		const { fileURLToPath } = await import('node:url');
 		const source = readFileSync(fileURLToPath(new URL('./Rects.svelte', import.meta.url)), 'utf8');
-		expect(source).toContain('@group(1) @binding(7) var<storage, read> splitValues');
+		// The appearance kernel computes both parts into the record.
+		expect(source).toContain('var<storage, read> splitValues');
 		// Below the split: as any bar. Above it: the other fields' activity and
 		// the field's free slot, so it fades in when the selection is cleared.
-		expect(source).toContain('output.alpha = alpha * selectionDim(activity)');
-		expect(source).toContain('output.alphaRest = alpha * selectionDim(min(otherActivity, free))');
+		expect(source).toContain('let a = alpha * selectionDim(activity)');
+		expect(source).toContain('rest = alpha * selectionDim(min(otherActivity, free))');
+		expect(source).toContain('records[i].alphaRest = rest');
 		expect(source).toContain('bandFreeActivityX(markConstants.groupIndex)');
 		const fragment = source.slice(source.indexOf('fn fragmentMain'));
 		expect(fragment.indexOf('fwidth(input.along)')).toBeGreaterThan(-1);
