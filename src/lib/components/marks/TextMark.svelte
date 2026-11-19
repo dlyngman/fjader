@@ -62,6 +62,7 @@
 		selectionResponse = undefined,
 		nulls = undefined,
 		holdsEntrance = undefined,
+		contributeDomain = undefined,
 		x,
 		y,
 		text,
@@ -182,6 +183,9 @@
 		},
 		get holdsEntrance() {
 			return holdsEntrance;
+		},
+		get contributeDomain() {
+			return contributeDomain;
 		},
 		get limit() {
 			return limit;
