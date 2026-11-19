@@ -23,6 +23,7 @@ import type {
 } from '$lib/types';
 import type { DataAccessor } from '$lib/data/DataAccessor';
 import { numericBinEdgeSQL } from '$lib/sql/bin';
+import { valueAxisOf } from './value-axis';
 
 // =============================================================================
 // SQL TRANSFORMS (Query Modifiers)
@@ -133,7 +134,8 @@ function passthroughSelect(aliases: string[]): Record<string, ExprNode> {
 /**
  * Resolve the value/band aliases for a channel-aware SQL transform from the
  * mark config, validated against the query's own select list. Mirrors the
- * JS path: value axis is y for vertical marks, x for horizontal (barx); the
+ * JS path: the value axis is the mark's (value-axis.ts): y for vertical
+ * marks, x for horizontal ones, bars by type and other marks by scale; the
  * mark lifecycle has already resolved y → y2 etc. for extent-based marks.
  * Shared by topN and normalize — the two transforms that need "which
  * channel is the measure, which is the group".
@@ -144,7 +146,7 @@ function resolveValueAndBand(
 	config: MarkConfig | undefined,
 	transformName: string
 ): { by: string; band: string } {
-	const isHorizontal = config?.markType === 'barx';
+	const isHorizontal = valueAxisOf(config) === 'x';
 	const by = options.by ?? (isHorizontal ? config?.x : config?.y);
 	const band = isHorizontal ? config?.y : config?.x;
 
@@ -1575,8 +1577,8 @@ function normalizeJS(_options: NormalizeOptions): JsTransform {
 			if (data.length === 0) return data;
 
 			const n = data.length;
-			// barx swaps value/band axes, same convention as topN.
-			const isHorizontal = config.markType === 'barx';
+			// A horizontal mark swaps value/band axes, same convention as topN.
+			const isHorizontal = valueAxisOf(config) === 'x';
 			const groupField = (isHorizontal ? config.y : config.x)!;
 			const valueField = (isHorizontal ? config.x : config.y)!;
 

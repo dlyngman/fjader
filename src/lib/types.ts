@@ -223,6 +223,12 @@ export interface MarkConfig {
 	x?: string;
 	y?: string;
 	color?: string;
+	/**
+	 * The channel carrying the measure: what topN ranks by and normalize
+	 * divides (transforms/value-axis.ts). Set by the lifecycle from the mark's
+	 * type and scales; absent, transforms decide by mark type.
+	 */
+	valueAxis?: 'x' | 'y';
 	/** Every channel carrying category ids, keyed by channel. Absent until identity setup. */
 	identity?: Record<string, ChannelIdentity>;
 	/** The query's GROUP BY channels, or null when it does not aggregate. Per query. */
