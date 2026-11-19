@@ -96,6 +96,16 @@ interface ChartConfig {
 	viewport: PlotViewport;
 	/** The chart's text atlas, bound in its frame bind group; null binds the stand-ins. */
 	textAtlas: AtlasBinding | null;
+	/**
+	 * This frame's immediates: the chart's scales, entrance and (for a
+	 * placement dispatch) rows. Written once per frame before any compute
+	 * work, read by the placement kernels and then the render pass.
+	 */
+	immediates: Float32Array<ArrayBuffer>;
+	/** `immediates` as u32, for the rows. */
+	immediateRows: Uint32Array<ArrayBuffer>;
+	/** Whether both scales were known when `immediates` was written this frame. */
+	scalesKnown: boolean;
 	_lastRenderFrame: number;
 	_isDirty: boolean;
 	/** The entrance this chart makes, with reduced motion already applied. */
@@ -202,6 +212,24 @@ interface ScaleBlockEntry extends ScaleBlock {
 }
 
 type ComputeWorkFn = (commandEncoder: GPUCommandEncoder) => void;
+
+/**
+ * A renderer's placement work for one chart: encode its kernels into the
+ * frame's one placement pass. Groups 0 (the chart's frame bind group) and 2
+ * (scale resources) are set; the work sets its pipelines, its group 1 and the
+ * immediates. `immediates` is the chart's for this frame; the work writes its
+ * rows into `rows` (x = count, y = first row) and pushes the whole array.
+ */
+export type PlacementWorkFn = (
+	pass: GPUComputePassEncoder,
+	immediates: Float32Array<ArrayBuffer>,
+	rows: Uint32Array<ArrayBuffer>
+) => void;
+
+interface PlacementWork {
+	fn: PlacementWorkFn;
+	chartId: string;
+}
 
 interface ComputeWork {
 	fn: ComputeWorkFn;
@@ -396,7 +424,8 @@ export class GPUCoordinator {
 			string,
 			{ module: GPUShaderModule; refCount: number; createdAt: number }
 		>(), // key -> { module, refCount }
-		bindGroupLayouts: new Map<string, { layout: GPUBindGroupLayout; refCount: number }>() // key -> { layout, refCount }
+		bindGroupLayouts: new Map<string, { layout: GPUBindGroupLayout; refCount: number }>(), // key -> { layout, refCount }
+		computePipelines: new Map<string, { pipeline: GPUComputePipeline; refCount: number }>()
 	};
 
 	// =========================================================================
@@ -722,12 +751,13 @@ export class GPUCoordinator {
 					//
 					// Uniform, and visible to the VERTEX stage as well: selection
 					// dimming reads a colour scale's slotBase per vertex. As storage
-					// it would take the last of the vertex stage's default 8 storage
-					// buffers on Rects, which uses 7; as a uniform it counts against
-					// the separate uniform limit and leaves that slot free. Same move
-					// as binding 4.
+					// it would count against the default 8 storage buffers of every
+					// stage that sees it, the placement kernels' included, which
+					// sit at 7-8; as a uniform it counts against the separate
+					// uniform limit. Same move as binding 4.
+					// COMPUTE too: the appearance kernels dim by ordinal colour.
 					binding: 1,
-					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
 					buffer: { type: 'uniform' }
 				},
 				{
@@ -751,8 +781,9 @@ export class GPUCoordinator {
 					// at the default 8 and has to fit a `from` and a `to` per animated
 					// value channel.
 					//
+					// COMPUTE too: a placement kernel sizes a dot by its size scale.
 					binding: 4,
-					visibility: GPUShaderStage.VERTEX,
+					visibility: GPUShaderStage.VERTEX | GPUShaderStage.COMPUTE,
 					buffer: { type: 'uniform' }
 				},
 				{
@@ -761,10 +792,10 @@ export class GPUCoordinator {
 					// `from`, `to` and each block's `t`; the render stages read this one
 					// buffer and do no interpolation.
 					//
-					// Storage, where it used to be two uniforms. It costs the vertex
-					// stage one binding where the pair cost none — Rects lands at 7 of
-					// the default maxStorageBuffersPerShaderStage of 8, its six channels
-					// and this — and in exchange
+					// Storage, where it used to be two uniforms. It costs each stage
+					// that sees it one of the default 8 storage buffers (a Rects
+					// draw's vertex stage holds 2, this and its record; its placement
+					// kernels 7-8) — and in exchange
 					// the vec4 packing, the 64 KB uniform binding cap and the
 					// 16384-float global ceiling all go away with the address space.
 					//
@@ -775,8 +806,9 @@ export class GPUCoordinator {
 					// vertex stage, and ordinal colour resolves its palette rank in
 					// the fragment stage. Both read their selection activity, the
 					// second half of each block, in the vertex stage.
+					// COMPUTE too: placement resolves band slots and reads activity.
 					binding: 5,
-					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+					visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
 					buffer: { type: 'read-only-storage' }
 				}
 			]
@@ -1128,9 +1160,6 @@ export class GPUCoordinator {
 		last.set(view);
 	}
 
-	/** Reused per pass: the chart's x and y ScaleParam and entrance, pushed as immediates. */
-	#chartScaleImmediates = new Float32Array(CHART_SCALE_IMMEDIATE_SIZE / 4);
-
 	/** Debug listeners for chart entrances (observeEntrances). */
 	#entranceObservers = new Set<(entrance: ChartEntrance) => void>();
 
@@ -1479,6 +1508,23 @@ export class GPUCoordinator {
 			if (blocks) for (const block of blocks) this.#refreshScaleBlock(block);
 		}
 
+		// PHASE 2b: EACH CHART'S IMMEDIATES, before any compute work.
+		// The placement kernels read the chart's scales and entrance, and so does
+		// its render pass, from the same bytes. Starting the entrance happens
+		// here too, once per chart: it decides from the render plan whether the
+		// chart is drawing data yet, so the plan is built first.
+		for (let i = 0; i < numCharts; i++) {
+			const chart = chartsNeedingRender[i];
+			if (chart.needsPlanRebuild) this.#buildRenderPlanForChart(chart);
+			const known = this.#writeChartScales(chart, chart.immediates);
+			if (!chart.entranceStarted) this.#startEntranceIfDrawing(chart, known);
+			this.#writeEntrance(chart, chart.immediates);
+			// A render pass reads no rows.
+			chart.immediateRows[12] = 0;
+			chart.immediateRows[13] = 0;
+			chart.scalesKnown = known;
+		}
+
 		// PHASE 3: GPU COMMAND ENCODING
 		const commandEncoder = this.#device!.createCommandEncoder(this.#encoderDescriptor);
 
@@ -1501,15 +1547,15 @@ export class GPUCoordinator {
 			}
 		}
 
+		// PHASE 3b: PLACEMENT. After every resolve above (slots, morphs), which
+		// placement reads, and before the render passes, which read its records.
+		this.#encodePlacement(commandEncoder, chartsNeedingRender);
+
 		const capture = this.#captureRequest;
 
 		for (let i = 0; i < numCharts; i++) {
 			const chartConfig = chartsNeedingRender[i];
 			const view = views[i]!;
-
-			if (chartConfig.needsPlanRebuild) {
-				this.#buildRenderPlanForChart(chartConfig);
-			}
 
 			const passEncoder = commandEncoder.beginRenderPass(
 				this.#createRenderPassDescriptor(view, chartConfig)
@@ -1523,18 +1569,19 @@ export class GPUCoordinator {
 				passEncoder.setScissorRect(vp.scissorX, vp.scissorY, vp.scissorWidth, vp.scissorHeight);
 			}
 
-			// The chart's scales, written once for the whole pass and before the
-			// first draw. Every pipeline declares the same
+			// The chart's immediates (written in phase 2b), once for the whole pass
+			// and before the first draw. Every pipeline declares the same
 			// CHART_SCALE_IMMEDIATE_SIZE and a draw requires every declared byte to
 			// have been set, so this is the whole range, every pass. Immediate data
 			// survives setPipeline between layouts of the same size, which is what
 			// makes once enough. Pushed even when the chart's scales are not both
 			// known: a layer that does not read them still needs every byte set
-			// before it may draw.
-			const scalesKnown = this.#writeChartScales(chartConfig, this.#chartScaleImmediates);
-			if (!chartConfig.entranceStarted) this.#startEntranceIfDrawing(chartConfig, scalesKnown);
-			this.#writeEntrance(chartConfig, this.#chartScaleImmediates);
-			passEncoder.setImmediates(0, this.#chartScaleImmediates);
+			// before it may draw. A placement dispatch may have left its rows in
+			// the array; they are cleared, so the pass sees the bytes phase 2b wrote.
+			const scalesKnown = chartConfig.scalesKnown;
+			chartConfig.immediateRows[12] = 0;
+			chartConfig.immediateRows[13] = 0;
+			passEncoder.setImmediates(0, chartConfig.immediates);
 
 			if (chartConfig.perFrameBindGroup && vp.drawable) {
 				passEncoder.setBindGroup(0, chartConfig.perFrameBindGroup);
@@ -1736,6 +1783,76 @@ export class GPUCoordinator {
 	}
 
 	/**
+	 * Acquire a placement kernel's compute pipeline: its WGSL through the same
+	 * scale templates as the renderer's draw (`generateShader`, the same
+	 * definition and scale types), so the kernel places rows with exactly the
+	 * code the draw used to. Groups 0 and 2 are the render pipelines' own
+	 * layouts; group 1 is the kernel's. Immediates are the chart's, the same
+	 * size as every render pipeline's. Shared and refcounted like render
+	 * pipelines, released with the renderer.
+	 */
+	async acquireComputePipeline(
+		rendererId: string,
+		kernelType: string,
+		scaleTypes: { x: string; y: string },
+		kernelCode: string,
+		dataBindingConfig: DataBindingEntry[],
+		rendererDefinition: RendererDefinition,
+		entryPoint = 'placeMain'
+	): Promise<{ pipeline: GPUComputePipeline; dataLayout: GPUBindGroupLayout }> {
+		if (!rendererId) throw new Error('acquireComputePipeline requires a rendererId');
+		const defSuffix = `-${rendererDefinition.x?.concept || 'none'}-${rendererDefinition.y?.concept || 'none'}`;
+		const resourceKey = `${kernelType}-${scaleTypes.x}-${scaleTypes.y}${defSuffix}`;
+		if (!this.#rendererRegistry.has(rendererId)) this.#rendererRegistry.set(rendererId, new Map());
+		const localRegistry = this.#rendererRegistry.get(rendererId)!;
+		const dataLayout = this.#getOrCreateDataLayout(kernelType, dataBindingConfig);
+
+		const lookupKey = `compute:${resourceKey}`;
+		const owned = localRegistry.has(lookupKey)
+			? this.#sharedResources.computePipelines.get(resourceKey)
+			: undefined;
+		if (owned) return { pipeline: owned.pipeline, dataLayout };
+
+		let entry = this.#sharedResources.computePipelines.get(resourceKey);
+		if (entry) {
+			entry.refCount++;
+		} else {
+			const { shaderCode } = scaleTemplateSystem.generateShader(
+				scaleTypes,
+				kernelCode,
+				rendererDefinition,
+				kernelType
+			);
+			const module = this.#device!.createShaderModule({ label: resourceKey, code: shaderCode });
+			const layout = this.#device!.createPipelineLayout({
+				label: `${resourceKey}-layout`,
+				bindGroupLayouts: [this.#getOrCreateFrameLayout(), dataLayout, this.#scaleResourcesLayout!],
+				immediateSize: CHART_SCALE_IMMEDIATE_SIZE
+			});
+			const pipeline = await this.#device!.createComputePipelineAsync({
+				label: resourceKey,
+				layout,
+				compute: { module, entryPoint }
+			});
+			// The renderer may have been released while this awaited (a mark that
+			// mounted and unmounted): its registry is gone, nothing would release
+			// a count taken now, so take none. Its caller drops the result.
+			if (this.#rendererRegistry.get(rendererId) !== localRegistry) {
+				return { pipeline, dataLayout };
+			}
+			// Another acquire may have finished while this one awaited.
+			entry = this.#sharedResources.computePipelines.get(resourceKey);
+			if (entry) entry.refCount++;
+			else {
+				entry = { pipeline, refCount: 1 };
+				this.#sharedResources.computePipelines.set(resourceKey, entry);
+			}
+		}
+		localRegistry.set(lookupKey, { type: 'computePipeline', key: resourceKey });
+		return { pipeline: entry.pipeline, dataLayout };
+	}
+
+	/**
 	 * Release all resources tracked for a specific renderer ID.
 	 * Called by BaseGPURenderer.destroy()
 	 */
@@ -1744,7 +1861,10 @@ export class GPUCoordinator {
 		if (!localRegistry) return;
 
 		for (const res of localRegistry.values()) {
-			if (res.type === 'pipeline') {
+			if (res.type === 'computePipeline') {
+				const entry = this.#sharedResources.computePipelines.get(res.key);
+				if (entry && --entry.refCount <= 0) this.#sharedResources.computePipelines.delete(res.key);
+			} else if (res.type === 'pipeline') {
 				this.#releaseSharedPipeline(res.key);
 			} else if (res.type === 'shader') {
 				this.#releaseSharedShader(res.key);
@@ -2135,6 +2255,9 @@ export class GPUCoordinator {
 			plotRect: { ...config.plotRect },
 			viewport: emptyPlotViewport(),
 			textAtlas: null,
+			immediates: new Float32Array(CHART_SCALE_IMMEDIATE_SIZE / 4),
+			immediateRows: new Uint32Array(0),
+			scalesKnown: false,
 			_lastRenderFrame: -1,
 			_isDirty: false,
 			entranceMode: resolveEntrance(config.entrance),
@@ -2145,6 +2268,7 @@ export class GPUCoordinator {
 			entranceGate: config.entranceGate ?? null,
 			entranceGateOff: null
 		};
+		chartConfig.immediateRows = new Uint32Array(chartConfig.immediates.buffer);
 		// The gate opens on a mark's data or a timeout, neither of which need
 		// redraw this chart. Without a frame the entrance would wait for one.
 		chartConfig.entranceGateOff =
@@ -2391,8 +2515,10 @@ export class GPUCoordinator {
 				label: 'shared-frame-layout',
 				entries: [
 					{
+						// COMPUTE too: the placement kernels' scale code reads the
+						// chart's range from here, as its draws do.
 						binding: 0,
-						visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+						visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
 						buffer: { type: 'uniform' }
 					},
 					// The chart's text atlas (text/atlas-bindings.ts). In every
@@ -2997,6 +3123,65 @@ export class GPUCoordinator {
 
 	removeComputeWork(key: string): void {
 		this.#computeWork.delete(key);
+	}
+
+	#placementWork = new Map<string, PlacementWork>();
+	/**
+	 * The same, per chart: what #encodePlacement walks, by index, every frame.
+	 * Kept beside the keyed map so registering stays a lookup and encoding
+	 * allocates nothing (no iterator per chart, no scan of every chart's work).
+	 */
+	#placementByChart = new Map<string, PlacementWork[]>();
+	#placementPassDescriptor: GPUComputePassDescriptor = { label: 'placement' };
+
+	/**
+	 * Register a renderer's placement for one chart: its kernels, encoded into
+	 * the frame's one placement pass on frames that chart draws, after the
+	 * slot and morph resolves and before the render passes. A faceted mark
+	 * registers once per cell chart, each with its own key.
+	 */
+	registerPlacement(key: string, chartId: string, fn: PlacementWorkFn): void {
+		this.removePlacement(key);
+		const work = { fn, chartId };
+		this.#placementWork.set(key, work);
+		let list = this.#placementByChart.get(chartId);
+		if (!list) this.#placementByChart.set(chartId, (list = []));
+		list.push(work);
+	}
+
+	removePlacement(key: string): void {
+		const work = this.#placementWork.get(key);
+		if (!work) return;
+		this.#placementWork.delete(key);
+		const list = this.#placementByChart.get(work.chartId);
+		if (!list) return;
+		const at = list.indexOf(work);
+		if (at >= 0) list.splice(at, 1);
+		if (list.length === 0) this.#placementByChart.delete(work.chartId);
+	}
+
+	/**
+	 * One compute pass for every placement this frame, as the slot resolve is
+	 * one pass for every block: a pass per mark would cost a pass's overhead per
+	 * mark on a dashboard. Per chart, groups 0 and 2 are set here, so a kernel
+	 * reads the same frame uniforms and scale resources as the chart's draws.
+	 */
+	#encodePlacement(encoder: GPUCommandEncoder, charts: ChartConfig[]): void {
+		if (this.#placementWork.size === 0) return;
+		let pass: GPUComputePassEncoder | null = null;
+		for (let i = 0; i < charts.length; i++) {
+			const chart = charts[i];
+			const list = this.#placementByChart.get(chart.chartId);
+			if (!list || list.length === 0) continue;
+			if (!chart.perFrameBindGroup || !chart.viewport.drawable || !chart.scalesKnown) continue;
+			if (!pass) pass = encoder.beginComputePass(this.#placementPassDescriptor);
+			pass.setBindGroup(0, chart.perFrameBindGroup);
+			pass.setBindGroup(2, this.#scaleResourcesBindGroup!);
+			for (let j = 0; j < list.length; j++) {
+				list[j].fn(pass, chart.immediates, chart.immediateRows);
+			}
+		}
+		pass?.end();
 	}
 
 	// =========================================================================

@@ -15,6 +15,12 @@ import {
 	type RebinSource
 } from '$lib/gpu/bin-remap';
 import { noteTransition, transitionsObserved } from '$lib/animation/transition-log';
+import {
+	PLACEMENT_WORKGROUP,
+	placementLayoutEntry,
+	type PlacementBinding,
+	type PlacementConfig
+} from '$lib/gpu/placement';
 
 export interface RendererOptions {
 	zIndex?: number;
@@ -29,6 +35,17 @@ export interface InitConfig {
 	markShaderCode: string;
 	vertexBufferLayout: GPUVertexBufferLayout[];
 	rendererDefinition: object;
+	/** Placement kernels and the record they write (gpu/placement.ts); absent: none. */
+	placement?: PlacementConfig;
+}
+
+/** One placement kernel, compiled, and the buffers its bind group was last built from. */
+interface KernelState {
+	pipeline: GPUComputePipeline;
+	layout: GPUBindGroupLayout;
+	bindings: PlacementBinding[];
+	bindGroup: GPUBindGroup | null;
+	bound: (GPUBuffer | null)[];
 }
 
 /** Warned once per page, not per mark. */
@@ -207,6 +224,13 @@ export class BaseGPURenderer {
 	 */
 	#builtScaleTypes: { x: string; y: string } | null = null;
 
+	// Placement (gpu/placement.ts): kernels writing the record the draw reads.
+	#placement: PlacementConfig | null = null;
+	#kernels: KernelState[] = [];
+	#record: GPUBuffer | null = null;
+	/** The placement registrations, one per chart the renderer draws in. */
+	#placementKeys: string[] = [];
+
 	// Facet support: one renderer registered across multiple facet cell charts
 	#facetLayerControls: { chartId: string; control: LayerRegistrationResult }[] = [];
 	#facetChartIds: string[] = [];
@@ -286,10 +310,38 @@ export class BaseGPURenderer {
 				return;
 			}
 
+			const kernels: KernelState[] = [];
+			if (config.placement) {
+				for (const kernel of config.placement.kernels) {
+					const compiled = await this.#gpuCoordinator.acquireComputePipeline(
+						this.#rendererId,
+						`${this.#markType}-place-${kernel.name}`,
+						scaleTypes,
+						kernel.code,
+						kernel.bindings.map(placementLayoutEntry),
+						rendererDefinition as never
+					);
+					kernels.push({
+						pipeline: compiled.pipeline,
+						layout: compiled.dataLayout,
+						bindings: kernel.bindings,
+						bindGroup: null,
+						bound: kernel.bindings.map(() => null)
+					});
+				}
+				if (this.#isDestroyed || this.#initGeneration !== currentGen) {
+					this.#gpuCoordinator.releaseRenderer(this.#rendererId);
+					return;
+				}
+			}
+
 			this.#pipeline = result.pipeline;
 			this.#perDataLayout = result.dataLayout;
 			this.#initConfig = config;
 			this.#builtScaleTypes = scaleTypes;
+			this.#placement = config.placement ?? null;
+			this.#kernels = kernels;
+			if (this.#placement) this.#ensureRecord(this.#instanceCount);
 			this.#resourcesCreated = true;
 
 			// Initial empty bind group
@@ -599,7 +651,9 @@ export class BaseGPURenderer {
 
 			buffer = this.#device.createBuffer({
 				size,
-				usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+				// STORAGE too: a placement kernel reads seams and facet indices as
+				// storage, having no vertex input.
+				usage: GPUBufferUsage.VERTEX | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
 				label: `${this.#markType}-vertex-slot-${slot}`
 			});
 
@@ -624,6 +678,145 @@ export class BaseGPURenderer {
 	 */
 	getBuffer(binding: number): GPUBuffer | undefined {
 		return this.#morphed?.resolved(binding) ?? this.#ownedResources.buffers.get(binding);
+	}
+
+	/**
+	 * The buffer `binding` reads right now: what anything binding this
+	 * renderer's data should bind (the record, for a label), looked up when it
+	 * binds rather than kept. "Right now", not "owned": the morph's resolved
+	 * buffer while one runs, and later perhaps a buffer shared across marks.
+	 * A consumer compares it with the one it last bound and rebinds when it
+	 * differs, at the moment it is about to draw or dispatch, so it never binds
+	 * a buffer that has been reallocated or destroyed.
+	 */
+	bufferFor(binding: number): GPUBuffer | undefined {
+		return this.getBuffer(binding);
+	}
+
+	// ===== PLACEMENT =====
+
+	/** Whether this renderer places its rows in kernels (its draw reads the record). */
+	get placed(): boolean {
+		return this.#placement !== null;
+	}
+
+	/**
+	 * A record buffer for at least `count` rows. Sized to the DRAWN count, which
+	 * a rebin hold keeps while new data waits (#setCountNow), so a held layout
+	 * is placed as drawn. A new buffer rebuilds the draw's bind group at once:
+	 * the draw binds the record, and a frame can run before a microtask.
+	 */
+	#ensureRecord(count: number): void {
+		const placement = this.#placement;
+		if (!placement || !this.#device) return;
+		const needed = Math.max(1, count) * placement.recordStride;
+		if (this.#record && this.#record.size >= needed) return;
+		const size = Math.ceil((needed * 1.5) / 256) * 256;
+		// WebGPU keeps a buffer alive for work already submitted.
+		this.#record?.destroy();
+		this.#record = this.#device.createBuffer({
+			size,
+			usage: GPUBufferUsage.STORAGE,
+			label: `${this.#markType}-record`
+		});
+		this.#ownedResources.buffers.set(placement.recordBinding, this.#record);
+		this.#rebuildBindGroup();
+	}
+
+	/**
+	 * A kernel's bind group, from each binding's buffer as it is now. Looked up
+	 * at every dispatch and rebuilt only when one changed: a few map reads per
+	 * kernel per frame, no allocation. Built from the same lookup the draw's
+	 * bind group uses (getBuffer: the morph's resolved buffer while one runs),
+	 * so a kernel never reads raw values mid-morph, and never binds a buffer
+	 * freed elsewhere (seams are dropped with their layout, buffers grow).
+	 */
+	#kernelBindGroup(kernel: KernelState, count: number): GPUBindGroup | null {
+		const device = this.#device;
+		if (!device) return null;
+		let changed = kernel.bindGroup === null;
+		const { bindings, bound } = kernel;
+		for (let i = 0; i < bindings.length; i++) {
+			const buffer = this.#placementSource(bindings[i], count);
+			if (!buffer) return null;
+			if (bound[i] !== buffer) {
+				bound[i] = buffer;
+				changed = true;
+			}
+		}
+		if (changed) {
+			kernel.bindGroup = device.createBindGroup({
+				label: `${this.#markType}-placement`,
+				layout: kernel.layout,
+				entries: bindings.map((b, i) => ({ binding: b.binding, resource: { buffer: bound[i]! } }))
+			});
+		}
+		return kernel.bindGroup;
+	}
+
+	#placementSource(b: PlacementBinding, count: number): GPUBuffer | null {
+		switch (b.source) {
+			case 'channel':
+			case 'uniform':
+				return this.getBuffer(b.channel) ?? this.#sharedDummyBuffer;
+			case 'vertex': {
+				const buffer = this.#vertexBuffers.get(b.slot);
+				// Whole or nothing: a buffer short of the drawn rows was written for
+				// another layout (see PlacementBinding).
+				if (!buffer || (b.rowBytes && buffer.size < count * b.rowBytes)) {
+					return this.#sharedDummyBuffer;
+				}
+				return buffer;
+			}
+			case 'record':
+				return this.#record;
+		}
+	}
+
+	/**
+	 * This renderer's placement for one chart: its kernels over the drawn rows,
+	 * in the coordinator's placement pass (groups 0 and 2 already set). The
+	 * row count is read here, at encode time, as the draw reads it.
+	 */
+	#place = (
+		pass: GPUComputePassEncoder,
+		immediates: Float32Array<ArrayBuffer>,
+		rows: Uint32Array<ArrayBuffer>
+	): void => {
+		const count = this.#instanceCount;
+		const record = this.#record;
+		const placement = this.#placement;
+		if (count === 0 || !record || !placement || record.size < count * placement.recordStride)
+			return;
+		// Every kernel's bind group before any dispatch: all of them run or none
+		// does. One running alone writes half a record: after the record grows,
+		// a box with zeroed opacity, every bar invisible for a frame.
+		const kernels = this.#kernels;
+		for (let i = 0; i < kernels.length; i++) {
+			if (!this.#kernelBindGroup(kernels[i], count)) return;
+		}
+		rows[12] = count;
+		rows[13] = 0;
+		const groups = Math.ceil(count / PLACEMENT_WORKGROUP);
+		for (let i = 0; i < kernels.length; i++) {
+			const kernel = kernels[i];
+			pass.setPipeline(kernel.pipeline);
+			pass.setBindGroup(1, kernel.bindGroup!);
+			pass.setImmediates(0, immediates);
+			pass.dispatchWorkgroups(groups);
+		}
+	};
+
+	/** Register #place for `chartIds` (replacing earlier registrations). */
+	#registerPlacement(chartIds: readonly string[]): void {
+		for (const key of this.#placementKeys) this.#gpuCoordinator.removePlacement(key);
+		this.#placementKeys = [];
+		if (!this.#placement) return;
+		for (const chartId of chartIds) {
+			const key = `${this.#rendererId}@${chartId}`;
+			this.#gpuCoordinator.registerPlacement(key, chartId, this.#place);
+			this.#placementKeys.push(key);
+		}
 	}
 
 	// ===== REBINS =====
@@ -1036,6 +1229,7 @@ export class BaseGPURenderer {
 
 	/** The instance count, whatever a hold defers. */
 	#setCountNow(count: number): void {
+		this.#ensureRecord(count);
 		this.#instanceCount = count;
 		this.invalidateLayer();
 	}
@@ -1108,6 +1302,7 @@ export class BaseGPURenderer {
 			zIndex: this.#zIndex,
 			readsChartScales: this.#readsChartScales
 		});
+		this.#registerPlacement([chartId]);
 		return this.#ownedResources.layerControl;
 	}
 
@@ -1138,6 +1333,9 @@ export class BaseGPURenderer {
 			this.#facetLayerControls.push({ chartId, control });
 			this.#facetChartIds.push(chartId);
 		}
+		// One placement per cell: each cell's dispatch places that cell's rows
+		// with its own frame uniforms (a faceted kernel skips the other cells').
+		this.#registerPlacement(chartIds);
 
 		// Trigger initial render — data was likely written before facet IDs resolved,
 		// so earlier invalidateLayer() calls went to the parent chartId (no canvas).
@@ -1181,6 +1379,10 @@ export class BaseGPURenderer {
 		this.#vertexBuffers.clear();
 
 		if (this.#dummyBuffer) this.#dummyBuffer.destroy();
+		for (const key of this.#placementKeys) this.#gpuCoordinator?.removePlacement(key);
+		this.#placementKeys = [];
+		this.#kernels = [];
+		this.#record = null;
 		if (this.#ownedResources.layerControl) this.#ownedResources.layerControl.remove();
 		for (const { control } of this.#facetLayerControls) control.remove();
 		this.#facetLayerControls = [];
