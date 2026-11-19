@@ -46,7 +46,9 @@
 	/** Bytes per row of the record: RECORD_WGSL, four f32 after a vec4. */
 	const RECORD_STRIDE = 32;
 
-	// Facet uses vertex buffer slot 1 (not a storage binding)
+	// Facet indices: vertex slot 1. The draw reads them as an instance attribute
+	// (its facet discard); the faceted kernels bind the same buffer as storage,
+	// which is why vertex-slot buffers are created with STORAGE usage too.
 	const FACET_VERTEX_SLOT = 1;
 
 	// Uniform struct offsets (matching WGSL MarkConstants layout)
@@ -440,7 +442,15 @@
 					{ binding: BINDINGS.CONSTANTS, source: 'uniform', channel: BINDINGS.CONSTANTS },
 					{ binding: BINDINGS.RECORD, source: 'record' },
 					...(seamAxis
-						? [{ binding: BINDINGS.SEAMS, source: 'vertex' as const, slot: SEAM_VERTEX_SLOT }]
+						? [
+								{
+									binding: BINDINGS.SEAMS,
+									source: 'vertex' as const,
+									slot: SEAM_VERTEX_SLOT,
+									// Seams cover every drawn row or none apply (u32 each).
+									rowBytes: 4
+								}
+							]
 						: []),
 					...facetKernelBinding
 				]

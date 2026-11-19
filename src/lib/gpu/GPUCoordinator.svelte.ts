@@ -1834,6 +1834,12 @@ export class GPUCoordinator {
 				layout,
 				compute: { module, entryPoint }
 			});
+			// The renderer may have been released while this awaited (a mark that
+			// mounted and unmounted): its registry is gone, nothing would release
+			// a count taken now, so take none. Its caller drops the result.
+			if (this.#rendererRegistry.get(rendererId) !== localRegistry) {
+				return { pipeline, dataLayout };
+			}
 			// Another acquire may have finished while this one awaited.
 			entry = this.#sharedResources.computePipelines.get(resourceKey);
 			if (entry) entry.refCount++;
@@ -3120,6 +3126,12 @@ export class GPUCoordinator {
 	}
 
 	#placementWork = new Map<string, PlacementWork>();
+	/**
+	 * The same, per chart: what #encodePlacement walks, by index, every frame.
+	 * Kept beside the keyed map so registering stays a lookup and encoding
+	 * allocates nothing (no iterator per chart, no scan of every chart's work).
+	 */
+	#placementByChart = new Map<string, PlacementWork[]>();
 	#placementPassDescriptor: GPUComputePassDescriptor = { label: 'placement' };
 
 	/**
@@ -3129,11 +3141,23 @@ export class GPUCoordinator {
 	 * registers once per cell chart, each with its own key.
 	 */
 	registerPlacement(key: string, chartId: string, fn: PlacementWorkFn): void {
-		this.#placementWork.set(key, { fn, chartId });
+		this.removePlacement(key);
+		const work = { fn, chartId };
+		this.#placementWork.set(key, work);
+		let list = this.#placementByChart.get(chartId);
+		if (!list) this.#placementByChart.set(chartId, (list = []));
+		list.push(work);
 	}
 
 	removePlacement(key: string): void {
+		const work = this.#placementWork.get(key);
+		if (!work) return;
 		this.#placementWork.delete(key);
+		const list = this.#placementByChart.get(work.chartId);
+		if (!list) return;
+		const at = list.indexOf(work);
+		if (at >= 0) list.splice(at, 1);
+		if (list.length === 0) this.#placementByChart.delete(work.chartId);
 	}
 
 	/**
@@ -3147,17 +3171,14 @@ export class GPUCoordinator {
 		let pass: GPUComputePassEncoder | null = null;
 		for (let i = 0; i < charts.length; i++) {
 			const chart = charts[i];
+			const list = this.#placementByChart.get(chart.chartId);
+			if (!list || list.length === 0) continue;
 			if (!chart.perFrameBindGroup || !chart.viewport.drawable || !chart.scalesKnown) continue;
-			let chartBound = false;
-			for (const work of this.#placementWork.values()) {
-				if (work.chartId !== chart.chartId) continue;
-				if (!pass) pass = encoder.beginComputePass(this.#placementPassDescriptor);
-				if (!chartBound) {
-					pass.setBindGroup(0, chart.perFrameBindGroup);
-					pass.setBindGroup(2, this.#scaleResourcesBindGroup!);
-					chartBound = true;
-				}
-				work.fn(pass, chart.immediates, chart.immediateRows);
+			if (!pass) pass = encoder.beginComputePass(this.#placementPassDescriptor);
+			pass.setBindGroup(0, chart.perFrameBindGroup);
+			pass.setBindGroup(2, this.#scaleResourcesBindGroup!);
+			for (let j = 0; j < list.length; j++) {
+				list[j].fn(pass, chart.immediates, chart.immediateRows);
 			}
 		}
 		pass?.end();

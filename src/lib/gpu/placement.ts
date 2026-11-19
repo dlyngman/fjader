@@ -26,8 +26,14 @@ export const PLACEMENT_WORKGROUP = 64;
 export type PlacementBinding =
 	/** A per-row channel: the morph's resolved buffer while one runs, else the uploaded one. */
 	| { binding: number; source: 'channel'; channel: number }
-	/** A vertex slot's buffer (seams, facet index); a zero-filled stand-in when absent. */
-	| { binding: number; source: 'vertex'; slot: number }
+	/**
+	 * A vertex slot's buffer (seams, facet index); a zero-filled stand-in when
+	 * absent. With `rowBytes`, also the stand-in when the buffer does not cover
+	 * every drawn row: all of the slot's values or none, never the first rows
+	 * of a layout over rows of another (a rebin's seams, against a drawn count
+	 * they were not written for).
+	 */
+	| { binding: number; source: 'vertex'; slot: number; rowBytes?: number }
 	/** A uniform the renderer writes (its mark constants). */
 	| { binding: number; source: 'uniform'; channel: number }
 	/** The record, written by the kernel. */

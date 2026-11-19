@@ -731,13 +731,13 @@ export class BaseGPURenderer {
 	 * so a kernel never reads raw values mid-morph, and never binds a buffer
 	 * freed elsewhere (seams are dropped with their layout, buffers grow).
 	 */
-	#kernelBindGroup(kernel: KernelState): GPUBindGroup | null {
+	#kernelBindGroup(kernel: KernelState, count: number): GPUBindGroup | null {
 		const device = this.#device;
 		if (!device) return null;
 		let changed = kernel.bindGroup === null;
 		const { bindings, bound } = kernel;
 		for (let i = 0; i < bindings.length; i++) {
-			const buffer = this.#placementSource(bindings[i]);
+			const buffer = this.#placementSource(bindings[i], count);
 			if (!buffer) return null;
 			if (bound[i] !== buffer) {
 				bound[i] = buffer;
@@ -754,13 +754,20 @@ export class BaseGPURenderer {
 		return kernel.bindGroup;
 	}
 
-	#placementSource(b: PlacementBinding): GPUBuffer | null {
+	#placementSource(b: PlacementBinding, count: number): GPUBuffer | null {
 		switch (b.source) {
 			case 'channel':
 			case 'uniform':
 				return this.getBuffer(b.channel) ?? this.#sharedDummyBuffer;
-			case 'vertex':
-				return this.#vertexBuffers.get(b.slot) ?? this.#sharedDummyBuffer;
+			case 'vertex': {
+				const buffer = this.#vertexBuffers.get(b.slot);
+				// Whole or nothing: a buffer short of the drawn rows was written for
+				// another layout (see PlacementBinding).
+				if (!buffer || (b.rowBytes && buffer.size < count * b.rowBytes)) {
+					return this.#sharedDummyBuffer;
+				}
+				return buffer;
+			}
 			case 'record':
 				return this.#record;
 		}
@@ -781,15 +788,20 @@ export class BaseGPURenderer {
 		const placement = this.#placement;
 		if (count === 0 || !record || !placement || record.size < count * placement.recordStride)
 			return;
+		// Every kernel's bind group before any dispatch: all of them run or none
+		// does. One running alone writes half a record: after the record grows,
+		// a box with zeroed opacity, every bar invisible for a frame.
+		const kernels = this.#kernels;
+		for (let i = 0; i < kernels.length; i++) {
+			if (!this.#kernelBindGroup(kernels[i], count)) return;
+		}
 		rows[12] = count;
 		rows[13] = 0;
 		const groups = Math.ceil(count / PLACEMENT_WORKGROUP);
-		for (let i = 0; i < this.#kernels.length; i++) {
-			const kernel = this.#kernels[i];
-			const bindGroup = this.#kernelBindGroup(kernel);
-			if (!bindGroup) return;
+		for (let i = 0; i < kernels.length; i++) {
+			const kernel = kernels[i];
 			pass.setPipeline(kernel.pipeline);
-			pass.setBindGroup(1, bindGroup);
+			pass.setBindGroup(1, kernel.bindGroup!);
 			pass.setImmediates(0, immediates);
 			pass.dispatchWorkgroups(groups);
 		}
