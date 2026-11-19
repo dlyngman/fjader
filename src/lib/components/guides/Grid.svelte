@@ -45,6 +45,15 @@
 	let yFrameAlpha: Float32Array<ArrayBuffer> | null = null;
 	let xPlotSpace = false;
 	let yPlotSpace = false;
+	/**
+	 * A continuous axis's last frame at rest and the positions written from it:
+	 * the same frame is the same ticks (tickFrame), so a pan frame that keeps
+	 * them hands the line layer the same positions, and it uploads nothing.
+	 */
+	let xLastFrame: unknown = null;
+	let yLastFrame: unknown = null;
+	let xLastPositions: Float32Array | null = null;
+	let yLastPositions: Float32Array | null = null;
 
 	function grow(buffer: Float32Array<ArrayBuffer>, n: number): Float32Array<ArrayBuffer> {
 		return buffer.length >= n ? buffer : new Float32Array(Math.max(n, buffer.length * 2));
@@ -66,6 +75,8 @@
 			const frame = continuous.tickFrame();
 			if (frame.length === 0) return null;
 			const plot = continuous.crossfading;
+			const last = which === 'x' ? xLastPositions : yLastPositions;
+			if (!plot && last && frame === (which === 'x' ? xLastFrame : yLastFrame)) return last;
 			const positions = grow(which === 'x' ? xBuffer : yBuffer, frame.length);
 			const alphas = grow(which === 'x' ? xAlphaBuffer : yAlphaBuffer, frame.length);
 			for (let i = 0; i < frame.length; i++) {
@@ -75,19 +86,28 @@
 			if (which === 'x') xPlotSpace = plot;
 			else yPlotSpace = plot;
 			const alpha = alphas.subarray(0, frame.length);
+			const written = positions.subarray(0, frame.length);
+			// Kept only at rest: a crossfade writes new opacities every frame.
 			if (which === 'x') {
 				xBuffer = positions;
 				xAlphaBuffer = alphas;
 				xFrameAlpha = alpha;
+				xLastFrame = plot ? null : frame;
+				xLastPositions = plot ? null : written;
 			} else {
 				yBuffer = positions;
 				yAlphaBuffer = alphas;
 				yFrameAlpha = alpha;
+				yLastFrame = plot ? null : frame;
+				yLastPositions = plot ? null : written;
 			}
-			return positions.subarray(0, frame.length);
+			return written;
 		}
 		if (which === 'x') xPlotSpace = false;
 		else yPlotSpace = false;
+		// This path writes the same buffers: a kept frame's positions are gone.
+		if (which === 'x') xLastFrame = xLastPositions = null;
+		else yLastFrame = yLastPositions = null;
 		const ticks = scale.getTicks ? (scale.getTicks() as ArrayLike<number>) : null;
 		if (!ticks || ticks.length === 0) return null;
 		const buffer = grow(which === 'x' ? xBuffer : yBuffer, ticks.length);

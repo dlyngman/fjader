@@ -16,6 +16,7 @@
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { ParallelLines } from '../rendering';
+	import { PARALLEL_MAX_AXES } from '../rendering/uniform-sizes';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
 	import { buildSelectFromChannels, MarkColor, generateMarkId } from './utils';
 	import { buildReactiveConfig } from './utils/reactive-config';
@@ -77,8 +78,21 @@
 
 	let setup = $state<MarkLifecycleV2 | null>(null);
 
-	// Column names as strings (handles both string column names and ExprNode)
-	const columnNames = $derived((entry.columns as unknown as FieldRef[]).map(String));
+	// Column names as strings (handles both string column names and ExprNode).
+	// At most PARALLEL_MAX_AXES: the lines' and axes' per-axis arrays are sized
+	// for it; the rest are left out, with one warning.
+	let warnedTooMany = false;
+	const columnNames = $derived.by(() => {
+		const all = (entry.columns as unknown as FieldRef[]).map(String);
+		if (all.length <= PARALLEL_MAX_AXES) return all;
+		if (!warnedTooMany) {
+			warnedTooMany = true;
+			console.warn(
+				`ParallelCoordinatesMark: ${all.length} columns, drawing the first ${PARALLEL_MAX_AXES} (the most a parallel chart holds).`
+			);
+		}
+		return all.slice(0, PARALLEL_MAX_AXES);
+	});
 
 	// Color: stroke determines line color
 	const markColor = new MarkColor(

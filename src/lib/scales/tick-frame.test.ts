@@ -217,3 +217,114 @@ describe('tickFrame', () => {
 		expect(log.valueAt(2 / 3)).toBeCloseTo(100, 6);
 	});
 });
+
+describe('tickFrame without work per frame', () => {
+	/** Move the domain at once, as a pan frame does. */
+	function moveTo(s: LinearScaleState, lo: number, hi: number): void {
+		s.domain.set([lo, hi], { instant: true });
+		frames(s, 1);
+	}
+
+	it('at rest, the same domain is the same frame', () => {
+		const s = onScreen(new LinearScaleState('y'), 0, 700);
+		const a = s.tickFrame(5);
+		frames(s, 3);
+		expect(s.tickFrame(5)).toBe(a);
+	});
+
+	it('a pan keeping the same ticks keeps the frame and moves its positions', () => {
+		// 0…700 by 100 in both.
+		const s = onScreen(new LinearScaleState('y'), -50, 750);
+		const a = s.tickFrame(5);
+		moveTo(s, -40, 760);
+		const b = s.tickFrame(5);
+		expect(b).toBe(a);
+		expect(b.map((e) => e.value)).toEqual(s.getTicks(5));
+		for (const e of b) expect(e.position).toBeCloseTo((e.value + 40) / 800, 9);
+	});
+
+	it('ticks that change values are a new frame', () => {
+		const s = onScreen(new LinearScaleState('y'), 0, 700);
+		const a = s.tickFrame(5);
+		moveTo(s, 150, 850);
+		const b = s.tickFrame(5);
+		expect(b).not.toBe(a);
+		expect(b.map((e) => e.value)).toEqual(s.getTicks(5));
+	});
+
+	it('agrees with d3 through a long run of pans and zooms', () => {
+		const s = onScreen(new LinearScaleState('y'), 0, 1);
+		// A fixed walk: shifts and zooms across several powers of ten, negative too.
+		let lo = -0.37;
+		let hi = 0.81;
+		for (let i = 0; i < 2000; i++) {
+			const width = hi - lo;
+			const shift = Math.sin(i * 0.7) * width * 0.13;
+			const zoom = 1 + Math.cos(i * 0.31) * 0.09;
+			const mid = (lo + hi) / 2 + shift;
+			lo = mid - (width * zoom) / 2;
+			hi = mid + (width * zoom) / 2;
+			moveTo(s, lo, hi);
+			for (const count of [3, 5, 10]) {
+				expect(s.tickFrame(count).map((e) => e.value)).toEqual(s.getTicks(count));
+			}
+		}
+	});
+
+	it('a crossfade builds its entries once a segment; only opacities move', () => {
+		const s = onScreen(new LinearScaleState('y'), 0, 700);
+		s.discrete(() => s.domain.set([0, 100], { instant: true }));
+		frames(s, 10);
+		const a = s.tickFrame(5);
+		const before = a.map((e) => e.alpha);
+		frames(s, 10);
+		const b = s.tickFrame(5);
+		expect(b).toBe(a);
+		expect(b.map((e) => e.alpha)).not.toEqual(before);
+	});
+
+	it('tickFormatFor: one formatter while the ticks are the same', () => {
+		const s = onScreen(new LinearScaleState('y'), -50, 750);
+		const f = s.tickFormatFor(5);
+		moveTo(s, -40, 760);
+		expect(s.tickFormatFor(5)).toBe(f);
+		moveTo(s, 0, 7);
+		const g = s.tickFormatFor(5);
+		expect(g).not.toBe(f);
+		expect(g(1.5)).toBe(s.tickFormat(5)(1.5));
+	});
+
+	it('on a log scale: compares its ticks, and keeps the frame while they match', () => {
+		const s = onScreen(new LogScaleState('y'), 1, 1000);
+		frames(s, 1);
+		const a = s.tickFrame(5);
+		frames(s, 2);
+		expect(s.tickFrame(5)).toBe(a);
+		moveTo(s, 1, 100000);
+		expect(s.tickFrame(5).map((e) => e.value)).toEqual(s.getTicks(5));
+	});
+
+	it('tickFormatFor keeps one formatter per count: two counts do not replace each other', () => {
+		const s = onScreen(new LinearScaleState('y'), -50, 750);
+		const five = s.tickFormatFor(5);
+		const ten = s.tickFormatFor(10);
+		moveTo(s, -40, 760);
+		expect(s.tickFormatFor(5)).toBe(five);
+		expect(s.tickFormatFor(10)).toBe(ten);
+	});
+
+	it('invalidateTicks: a basis other than the domain changed, so the same domain re-ticks', () => {
+		// As TimeScaleState does when its t0 moves: the same offsets, other dates.
+		class Rebased extends LinearScaleState {
+			rebase() {
+				this.invalidateTicks();
+			}
+		}
+		const s = onScreen(new Rebased('y'), -50, 750);
+		const frame = s.tickFrame(5);
+		const format = s.tickFormatFor(5);
+		s.rebase();
+		expect(s.tickFrame(5)).not.toBe(frame);
+		expect(s.tickFormatFor(5)).not.toBe(format);
+	});
+});

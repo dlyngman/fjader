@@ -52,10 +52,17 @@
 
 	const scale = $derived(axis === 'x' ? c.xScaleState : c.yScaleState);
 	const band = $derived(c.scaleTypes?.[axis] === 'band');
+	/**
+	 * The labels' formatter: one per set of ticks (tickFormatFor), not a new
+	 * closure per frame of a pan, so formatted labels are kept until the ticks
+	 * change. Returned as is: wrapping it would make a new function each time.
+	 */
 	const formatter: (value: unknown) => string = $derived.by(() => {
 		if (spec.tickFormat) return spec.tickFormat;
-		const f = scale?.tickFormat ? (scale.tickFormat() as (value: never) => string) : null;
-		return f ? (value: unknown) => f(value as never) : (value: unknown) => String(value);
+		const s = scale;
+		if (s && 'tickFormatFor' in s)
+			return (s as ContinuousScaleState).tickFormatFor() as (value: unknown) => string;
+		return String;
 	});
 
 	// --- Label strings → atlas slots ---
@@ -164,6 +171,10 @@
 		if (w > widest) widest = w;
 	}
 
+	/** The continuous frame and formatter the ticks were last written from. */
+	let lastFrame: unknown = null;
+	let lastFormat: unknown = null;
+
 	$effect(() => {
 		const s = scale;
 		const isBand = band;
@@ -173,6 +184,7 @@
 		// scale before (a band axis switched to a numeric one) would otherwise be
 		// drawn through the new one.
 		if (!s || !c.scaleTypes || (!isBand && (!hasEntered(s) || !('tickFrame' in s)))) {
+			lastFrame = null;
 			untrack(() => {
 				sweep();
 				commitTicks(0, false);
@@ -180,6 +192,7 @@
 			return;
 		}
 		if (isBand) {
+			lastFrame = null;
 			const b = s as BandScaleState;
 			const list = b.bandTicks();
 			const key = b.identityKey ?? b.sourceField;
@@ -211,6 +224,12 @@
 		const cs = s as ContinuousScaleState;
 		const frame = cs.tickFrame(n);
 		const crossfading = cs.crossfading;
+		const format = formatter;
+		// At rest the same frame is the same ticks (tickFrame): nothing to do on
+		// a pan frame that keeps them. A crossfade moves opacities every frame.
+		if (!crossfading && frame === lastFrame && format === lastFormat) return;
+		lastFrame = frame;
+		lastFormat = format;
 		untrack(() => {
 			const out = ensureBack(frame.length);
 			for (let i = 0; i < frame.length; i++) {

@@ -25,65 +25,73 @@
 
 	<div class="charts-grid">
 		<div class="chart-wrapper">
-			<h3>Parallel Coordinates ({columns.length} axes)</h3>
-			<button onclick={() => (dropDepth = !dropDepth)}>
-				{dropDepth ? 'Restore bill_depth' : 'Remove bill_depth'}
-			</button>
-			<span>columns: {columns.join(', ')}</span>
-			<ChartContainer clipPadding={30}>
-				{#snippet background()}
-					<Frame />
-					<ParallelAxes />
-				{/snippet}
+			<div class="chart-header">
+				<h3>Parallel Coordinates ({columns.length} axes)</h3>
+				<button onclick={() => (dropDepth = !dropDepth)}>
+					{dropDepth ? 'Restore bill_depth' : 'Remove bill_depth'}
+				</button>
+				<span>columns: {columns.join(', ')}</span>
+			</div>
+			<div class="chart-body">
+				<ChartContainer clipPadding={30}>
+					{#snippet background()}
+						<Frame />
+						<ParallelAxes />
+					{/snippet}
 
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<ParallelCoordinatesMark
-								table="penguins"
-								{columns}
-								stroke="species"
-								opacity={0.5}
-								curve="bump-x"
-								selection="brush"
-							/>
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<ParallelCoordinatesMark
+									table="penguins"
+									{columns}
+									stroke="species"
+									opacity={0.5}
+									curve="bump-x"
+									selection="brush"
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
 
-				{#snippet interactors()}
-					<ParallelBrushes selection="brush" />
-				{/snippet}
-			</ChartContainer>
+					{#snippet interactors()}
+						<ParallelBrushes selection="brush" />
+					{/snippet}
+				</ChartContainer>
+			</div>
 		</div>
 
 		<div class="chart-wrapper">
-			<h3>Scatter Plot (bill_length x bill_depth — shared scales)</h3>
-			<ChartContainer xLabel="bill_length" yLabel="bill_depth">
-				{#snippet background()}
-					<Frame />
-				{/snippet}
+			<div class="chart-header">
+				<h3>Scatter Plot (bill_length x bill_depth — shared scales)</h3>
+			</div>
+			<div class="chart-body">
+				<ChartContainer xLabel="bill_length" yLabel="bill_depth">
+					{#snippet background()}
+						<Frame />
+					{/snippet}
 
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							<DotsMark
-								table="penguins"
-								x="bill_length"
-								y="bill_depth"
-								fill="species"
-								selection="brush"
-							/>
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+					{#snippet canvas()}
+						<WebGPUCanvas>
+							{#snippet canvasComponents()}
+								<Grid />
+								<DotsMark
+									table="penguins"
+									x="bill_length"
+									y="bill_depth"
+									fill="species"
+									selection="brush"
+								/>
+							{/snippet}
+						</WebGPUCanvas>
+					{/snippet}
 
-				{#snippet foreground()}
-					<AxisLeft />
-					<AxisBottom />
-				{/snippet}
-			</ChartContainer>
+					{#snippet foreground()}
+						<AxisLeft />
+						<AxisBottom />
+					{/snippet}
+				</ChartContainer>
+			</div>
 		</div>
 	</div>
 </div>
@@ -109,7 +117,20 @@
 		gap: 20px;
 	}
 
+	/*
+	 * Each card is two rows of the grid (subgrid): headers side by side share
+	 * the taller one's height, and the charts below them start level and keep
+	 * one size, whatever each header holds.
+	 */
 	.chart-wrapper {
+		display: grid;
+		grid-template-rows: subgrid;
+		grid-row: span 2;
+		row-gap: 0;
+		min-width: 0;
+	}
+
+	.chart-body {
 		width: 100%;
 		aspect-ratio: 4/3;
 		min-height: 300px;

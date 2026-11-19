@@ -136,6 +136,7 @@ export class TimeScaleState extends LinearScaleState {
 
 		if (this.#datetimeExtents.size === 0) {
 			this.#t0 = null;
+			this.invalidateTicks();
 		} else {
 			this.#recomputeT0();
 		}
@@ -367,6 +368,8 @@ export class TimeScaleState extends LinearScaleState {
 		if (this.#t0 && this.#t0.getTime() === newT0.getTime()) return;
 
 		this.#t0 = newT0;
+		// The same offsets are other dates now: ticks and labels kept by domain are stale.
+		this.invalidateTicks();
 
 		// t0 changed: recreate all views with updated offset expression
 		this.#viewsCreated.clear();

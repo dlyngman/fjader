@@ -1,4 +1,5 @@
 // src/lib/scales/ChartScales.svelte.ts
+import { PARALLEL_MAX_AXES } from '$lib/components/rendering/uniform-sizes';
 import { untrack } from 'svelte';
 import type { EntranceGate } from '$lib/animation/EntranceGate';
 import { resolveScaleConfiguration, SCALE_PRIORITIES } from './ScalePriorities';
@@ -525,11 +526,23 @@ export class ChartScales {
 	 * when it unmounts. A change of axes resets the axis order to column order,
 	 * dropping a manual reorder, as adding a column always has.
 	 */
+	#warnedParallelColumns = false;
+
 	setParallelColumns = (markId: string, columns: string[]): void => {
 		if (columns.length > 0) this.#parallelColumnsByMark.set(markId, [...columns]);
 		else this.#parallelColumnsByMark.delete(markId);
 
+		// At most PARALLEL_MAX_AXES across the chart's marks (parallelAxisColumns).
 		const wanted = parallelAxisColumns(this.#parallelColumnsByMark);
+		if (wanted.length === PARALLEL_MAX_AXES && !this.#warnedParallelColumns) {
+			const all = parallelAxisColumns(this.#parallelColumnsByMark, Infinity).length;
+			if (all > PARALLEL_MAX_AXES) {
+				this.#warnedParallelColumns = true;
+				console.warn(
+					`Parallel coordinates: ${all} columns across the chart's marks, drawing the first ${PARALLEL_MAX_AXES}.`
+				);
+			}
+		}
 		const current = [...this.#parallelScaleInstances.keys()];
 		if (wanted.length === current.length && wanted.every((c, i) => c === current[i])) return;
 
@@ -996,13 +1009,18 @@ export class ChartScales {
 /**
  * A parallel chart's axes: the union of its marks' column lists, each column
  * once, in mark order (the first mark's columns first, each in its own order).
+ *
+ * At most `max` (PARALLEL_MAX_AXES): the lines' and axes' per-axis arrays,
+ * and the scale block they share, are sized for it. Columns past it are left
+ * out: the ones that come last in that order.
  */
 export function parallelAxisColumns(
-	columnsByMark: ReadonlyMap<string, readonly string[]>
+	columnsByMark: ReadonlyMap<string, readonly string[]>,
+	max: number = PARALLEL_MAX_AXES
 ): string[] {
 	const axes: string[] = [];
 	for (const list of columnsByMark.values()) {
 		for (const column of list) if (!axes.includes(column)) axes.push(column);
 	}
-	return axes;
+	return axes.length > max ? axes.slice(0, max) : axes;
 }

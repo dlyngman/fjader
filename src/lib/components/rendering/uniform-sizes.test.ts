@@ -66,7 +66,8 @@ describe('uniform struct sizes', () => {
 		['textsMarkConstants', './Texts.svelte', 'MarkConstants'],
 		['labelConstants', './BoxLabels.svelte', 'LabelConstants'],
 		['axisConstants', './AxisRenderer.svelte', 'AxisConstants'],
-		['parallelConfig', './ParallelLines.svelte', 'ParallelConfig']
+		['parallelConfig', './ParallelLines.svelte', 'ParallelConfig'],
+		['parallelAxisConstants', './ParallelAxisRenderer.svelte', 'ParallelAxisConstants']
 	];
 
 	it.each(cases)('%s matches its WGSL struct', (key, file, struct) => {
@@ -97,7 +98,8 @@ describe('uniform struct sizes', () => {
 			'./GridLine.svelte',
 			'./Texts.svelte',
 			'./BoxLabels.svelte',
-			'./AxisRenderer.svelte'
+			'./AxisRenderer.svelte',
+			'./ParallelAxisRenderer.svelte'
 		]) {
 			expect(source(file)).toMatch(/new ArrayBuffer\(UNIFORM_BYTES\.\w+\)/);
 			expect(source(file)).not.toMatch(/new ArrayBuffer\(\d+\)/);

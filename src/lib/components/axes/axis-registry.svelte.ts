@@ -7,6 +7,9 @@
  * registers its settings here, and the cell's WebGPUCanvas draws whatever is
  * registered (GpuAxis). A declaration works wherever it is placed.
  *
+ * `<ParallelAxes/>` declares the same way: one axis per column of a parallel
+ * coordinates chart, drawn by GpuParallelAxes.
+ *
  * One registry per chart cell (ChartCell), so a facet grid's cells draw their
  * own axes.
  */
@@ -24,6 +27,13 @@ export interface AxisSpec {
 	readonly titleOffset: number | 'auto';
 	/** Left: beside the labels, rotated, or above the plot. */
 	readonly titlePlacement: 'side' | 'top';
+}
+
+/** A parallel coordinates chart's axes: one per column, each on its own scale. */
+export interface ParallelAxesSpec {
+	readonly id: string;
+	readonly ticksNumber: number;
+	readonly tickFormat: ((value: unknown) => string) | null;
 }
 
 export const AXIS_REGISTRY = 'axis-registry';
@@ -44,6 +54,15 @@ export class AxisRegistry {
 		this.axes = [...this.axes, spec];
 		return () => {
 			this.axes = this.axes.filter((s) => s !== spec);
+		};
+	}
+
+	parallel = $state<ParallelAxesSpec[]>([]);
+
+	registerParallel(spec: ParallelAxesSpec): () => void {
+		this.parallel = [...this.parallel, spec];
+		return () => {
+			this.parallel = this.parallel.filter((s) => s !== spec);
 		};
 	}
 }
