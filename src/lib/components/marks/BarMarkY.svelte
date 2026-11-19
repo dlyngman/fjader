@@ -1,5 +1,8 @@
 <script lang="ts">
-	import { getContext, onDestroy, untrack } from 'svelte';
+	import { getContext, setContext, onDestroy, untrack, type Snippet } from 'svelte';
+	import { LABEL_MARK_HOST, LABEL_RENDERER_HOST, type LabelMarkHost } from '../labels/label-host';
+	import { LabelRendererHolder } from '../labels/LabelRendererHolder.svelte';
+	import { BOX_RECORD_WGSL } from '$lib/gpu/placement';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { Rects } from '../rendering';
 	import { getGPUContext } from '$lib/gpu';
@@ -34,6 +37,8 @@
 		y2?: FieldRef;
 		fill?: FieldRef | null;
 		opacity?: number;
+		/** What attaches to the bars: `<Labels>`. */
+		children?: Snippet;
 	}
 
 	let {
@@ -43,6 +48,7 @@
 		nulls = undefined,
 		holdsEntrance = undefined,
 		contributeDomain = undefined,
+		children,
 		x,
 		y,
 		y1: y1Prop,
@@ -151,6 +157,10 @@
 	);
 	const resolvedTip = $derived(resolveTip(entry.tip, channelSelect));
 
+	/** Columns attached labels read that the bars do not select (LabelMarkHost.addSelect). */
+	let labelFields = $state<Record<string, FieldRef>>({});
+	const labelSelect = $derived(buildSelectFromChannels(labelFields));
+
 	const config = $derived({
 		markType: 'bary',
 		supportedScaleTypes: {
@@ -167,7 +177,7 @@
 		},
 		table: entry.table,
 		transforms: effectiveTransforms,
-		select: { ...channelSelect, ...resolvedTip.extraSelect },
+		select: { ...channelSelect, ...resolvedTip.extraSelect, ...labelSelect },
 		// Ensures SQL ORDER BY series, dimension for consistent stacking
 		...(markColor.selectField && {
 			_orderConfig: {
@@ -301,6 +311,36 @@
 		return () => tm.unregisterMark(markId);
 	});
 
+	// The renderer half, filled in by Rects while it is mounted (see the holder).
+	const labelRendererHost = new LabelRendererHolder('box', BOX_RECORD_WGSL);
+	setContext(LABEL_RENDERER_HOST, labelRendererHost);
+
+	setContext<LabelMarkHost>(LABEL_MARK_HOST, {
+		rows: () => setup?.data ?? null,
+		dataVersion: () => setup?.dataVersion ?? 0,
+		measureAxis: 'y',
+		measure: () => ({ base: y0Data ?? null, end: y1Data ?? null }),
+		share: () => {
+			const split = setup?.otherRows.split;
+			return split ? { split: split.data, flat: split.flat } : null;
+		},
+		channel(name) {
+			if (['y', 'y1', 'y2'].includes(name)) return { kind: 'measure' };
+			if (name === 'x') return { kind: 'field', field: entry.x };
+			if (name === 'fill' && typeof entry.fill === 'string')
+				return { kind: 'field', field: entry.fill };
+			return null;
+		},
+		rowKeys: () => x0Data ?? null,
+		addSelect(alias, field) {
+			labelFields = { ...labelFields, [alias]: field };
+			return () => {
+				const { [alias]: _removed, ...rest } = labelFields;
+				labelFields = rest;
+			};
+		}
+	});
+
 	onDestroy(() => {
 		setup?.destroy();
 		chartContext.config.unregisterMark(markId);
@@ -330,5 +370,9 @@
 		inset={entry.inset ?? 0}
 		dx={entry.dx ?? 0}
 		dy={entry.dy ?? 0}
+		labelHost={labelRendererHost}
 	/>
 {/if}
+<!-- Outside the data gate: a label's own column changes the query, which
+     remounts the renderer above; labels must not unmount with it. -->
+{@render children?.()}

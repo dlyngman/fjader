@@ -15,7 +15,7 @@
 	} from './utils';
 	import { buildReactiveConfig } from './utils/reactive-config';
 	import Texts from '../rendering/Texts.svelte';
-	import { htmlInCanvasSupported } from '$lib/gpu/text/TextAtlas.svelte';
+	import { TextSlots } from '$lib/gpu/text/TextSlots';
 	import type { TextAtlas, TextStyle } from '$lib/gpu/text/TextAtlas.svelte';
 	import type {
 		FieldRef,
@@ -93,11 +93,6 @@
 	if (!webGPUContext || !textAtlas) {
 		throw new Error(
 			"TextMark draws on the GPU: place it in a WebGPUCanvas (the chart's `canvasComponents` snippet), next to the marks it labels, not in `foreground`."
-		);
-	}
-	if (!htmlInCanvasSupported()) {
-		throw new Error(
-			'TextMark needs HTML-in-Canvas (GPUQueue.drawElementImageToTexture), which Chrome ships from version 157.'
 		);
 	}
 
@@ -256,30 +251,31 @@
 	const style: TextStyle = $derived({ fontSize, fontWeight, fontFamily });
 
 	/**
-	 * The rows' atlas slots. Acquired for the new strings before the old ones
-	 * are released, so a string both use keeps its slot and its texels.
+	 * The rows' atlas slots: new strings are staged, and the rows switch to
+	 * them once they are painted (gpu/text/TextSlots.ts), so no label blinks
+	 * out while its new string waits for the atlas.
 	 */
+	const textSlots = new TextSlots(textAtlas);
 	let slotData = $state<Float32Array | null>(null);
-	let heldSlots: number[] = [];
+	let staged = $state(0);
 	$effect(() => {
 		const rows = labels;
 		const s = style;
+		// A row's key: its category's id on the band axis it is aligned on, if any.
+		const band = setup?.alignedBand;
+		const keys = band === 'x' ? xData : band === 'y' ? yData : null;
 		untrack(() => {
-			const previous = heldSlots;
-			const next: number[] = [];
-			let slots: Float32Array | null = null;
-			if (rows) {
-				slots = new Float32Array(rows.length);
-				for (let i = 0; i < rows.length; i++) {
-					const label = rows[i];
-					const slot = label == null ? -1 : textAtlas.acquire(label, s);
-					slots[i] = slot;
-					if (slot >= 0) next.push(slot);
-				}
-			}
-			for (const slot of previous) textAtlas.release(slot);
-			heldSlots = next;
-			slotData = slots;
+			const interim = textSlots.stage(rows, s, keys);
+			if (interim) slotData = interim;
+			staged++;
+		});
+	});
+	$effect(() => {
+		void staged;
+		void textAtlas.paintVersion;
+		untrack(() => {
+			const committed = textSlots.commit();
+			if (committed) slotData = committed;
 		});
 	});
 
@@ -334,8 +330,7 @@
 	});
 
 	onDestroy(() => {
-		for (const slot of heldSlots) textAtlas.release(slot);
-		heldSlots = [];
+		textSlots.destroy();
 		setup?.destroy();
 		// No config entry to unregister, which is where other marks release it.
 		chartContext.config?.entrance.release(markId);

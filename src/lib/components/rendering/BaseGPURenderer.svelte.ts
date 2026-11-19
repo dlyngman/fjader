@@ -224,6 +224,13 @@ export class BaseGPURenderer {
 	 */
 	#builtScaleTypes: { x: string; y: string } | null = null;
 
+	/**
+	 * Bindings whose buffer belongs to another renderer (a label reads its
+	 * host's record), each looked up through `get` when this renderer binds,
+	 * with what it was last bound to. An array, walked by index at every draw.
+	 */
+	#external: { binding: number; get: () => GPUBuffer | undefined; bound: GPUBuffer | null }[] = [];
+
 	// Placement (gpu/placement.ts): kernels writing the record the draw reads.
 	#placement: PlacementConfig | null = null;
 	#kernels: KernelState[] = [];
@@ -428,6 +435,21 @@ export class BaseGPURenderer {
 			return;
 		}
 		this.#writeAttributeNow(binding, data);
+	}
+
+	/**
+	 * Drop `binding`'s buffer: a channel nothing reads any more (a label layer
+	 * that unmounted). Its readers stop drawing when `bufferFor` finds nothing.
+	 */
+	releaseAttribute(binding: number): void {
+		this.#hold?.attributes.delete(binding);
+		this.#lastStatic.delete(binding);
+		this.#morphed?.drop(binding);
+		const buffer = this.#ownedResources.buffers.get(binding);
+		if (!buffer) return;
+		this.#ownedResources.buffers.delete(binding);
+		buffer.destroy();
+		this.#scheduleBindGroupUpdate();
 	}
 
 	/** writeAttribute's upload, whatever a hold defers: what the GPU holds for `binding`. */
@@ -691,6 +713,36 @@ export class BaseGPURenderer {
 	 */
 	bufferFor(binding: number): GPUBuffer | undefined {
 		return this.getBuffer(binding);
+	}
+
+	/**
+	 * Bind `binding` to another renderer's buffer, looked up through `get`
+	 * (that renderer's `bufferFor`). See `syncExternal`.
+	 */
+	setExternalBinding(binding: number, get: () => GPUBuffer | undefined): void {
+		this.#external = this.#external.filter((e) => e.binding !== binding);
+		this.#external.push({ binding, get, bound: null });
+		this.#scheduleBindGroupUpdate();
+	}
+
+	/**
+	 * Before drawing with external bindings: whether every one has a buffer,
+	 * after rebinding to whatever each reads now. Rebuilt at once, here, when
+	 * one changed: the owner may have grown or replaced it this frame, and a
+	 * bind group holding the old one would bind a destroyed buffer, which fails
+	 * the whole submit, every chart's frame with it. A few reads per draw, no
+	 * allocation. The caller sets the bind group again after a true return.
+	 */
+	syncExternal(): boolean {
+		let changed = false;
+		for (let i = 0; i < this.#external.length; i++) {
+			const ext = this.#external[i];
+			const buffer = ext.get();
+			if (!buffer) return false;
+			if (buffer !== ext.bound) changed = true;
+		}
+		if (changed) this.#rebuildBindGroup();
+		return this.#perDataBindGroup !== null;
 	}
 
 	// ===== PLACEMENT =====
@@ -1252,9 +1304,13 @@ export class BaseGPURenderer {
 		if (!this.#device || !this.#perDataLayout || !this.#dataBindingConfig) return;
 
 		// Map stored buffers to config entries
+		for (const ext of this.#external) ext.bound = ext.get() ?? null;
 		const entries = this.#dataBindingConfig.map((config) => {
+			const external = this.#external.find((e) => e.binding === config.binding);
 			const buffer =
-				this.#morphed?.resolved(config.binding) ?? this.#ownedResources.buffers.get(config.binding);
+				external?.bound ??
+				this.#morphed?.resolved(config.binding) ??
+				this.#ownedResources.buffers.get(config.binding);
 			return {
 				binding: config.binding,
 				resource: { buffer: buffer || this.#sharedDummyBuffer }
