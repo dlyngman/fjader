@@ -105,6 +105,8 @@ interface RestTicks {
 	max: number;
 	/** d3's tick spec (i1, i2, inc) of `frame`, or NaN when not known. */
 	spec: Float64Array;
+	/** Set when `frame`'s values change (from a counter that only grows): what tickFormatFor keys on. */
+	revision: number;
 }
 
 const E10 = Math.sqrt(50);
@@ -290,15 +292,16 @@ export class LinearScaleState {
 	/** The ticks at rest, per count (tickFrame): rebuilt only when their values change. */
 	#restTicks = new Map<number, RestTicks>();
 	#specScratch = new Float64Array(3);
-	/** Bumped whenever a count's ticks at rest change values: what tickFormatFor keys on. */
+	/** The revisions handed to RestTicks: unique, so a dropped count's next frame is new too. */
 	#tickRevision = 0;
-	/** tickFormatFor's formatter, and what it was made for. */
-	#formatCache: {
-		fn: ((value: number) => string) | null;
-		count: number;
-		revision: number;
-		custom: unknown;
-	} = { fn: null, count: -1, revision: -1, custom: null };
+	/**
+	 * tickFormatFor's formatter per count, and what it was made for: per count,
+	 * so consumers asking for different counts do not replace each other's.
+	 */
+	#formatCache = new Map<
+		number,
+		{ fn: (value: number) => string; revision: number; custom: unknown }
+	>();
 
 	// --- Unit-change tween ---
 	/**
@@ -956,12 +959,21 @@ export class LinearScaleState {
 	 * consumer can tell a change by identity.
 	 */
 	#restFrame(count: number): TickEntry[] {
+		// Kept by render domain and count: the ticks (ticksFor) and their labels
+		// are assumed to depend on nothing else. A subclass whose ticks do (time:
+		// its t0) calls invalidateTicks when that changes.
 		const min = this.#renderMin;
 		const max = this.#renderMax;
 		let rest = this.#restTicks.get(count);
 		if (rest && rest.min === min && rest.max === max) return rest.frame;
 		if (!rest) {
-			rest = { frame: [], min: NaN, max: NaN, spec: new Float64Array(3).fill(NaN) };
+			rest = {
+				frame: [],
+				min: NaN,
+				max: NaN,
+				spec: new Float64Array(3).fill(NaN),
+				revision: ++this.#tickRevision
+			};
 			this.#restTicks.set(count, rest);
 		}
 		rest.min = min;
@@ -984,7 +996,7 @@ export class LinearScaleState {
 			}
 			if (!same) {
 				rest.frame = values.map((value) => ({ value, position: 0, alpha: 1, target: true }));
-				this.#tickRevision++;
+				rest.revision = ++this.#tickRevision;
 			}
 			if (specKnown) rest.spec.set(spec);
 			else rest.spec.fill(NaN);
@@ -1093,6 +1105,16 @@ export class LinearScaleState {
 	}
 
 	/**
+	 * Drop the kept tick frames and formatters: for a subclass whose ticks or
+	 * labels depend on more than the domain and the count, when that changes.
+	 */
+	protected invalidateTicks(): void {
+		this.#restTicks.clear();
+		// Readers of the ticks re-read them, whether or not the domain moves.
+		this._version++;
+	}
+
+	/**
 	 * `tickFormat(count)`, made again only when the ticks change values (or the
 	 * custom format does): the formatter for every frame of a pan, without a new
 	 * closure per frame. d3 picks a format's precision from the tick step, which
@@ -1103,19 +1125,16 @@ export class LinearScaleState {
 		this._version;
 		const custom = this.#customFormat;
 		this.#restFrame(count);
-		const cache = this.#formatCache;
-		if (
-			cache.fn &&
-			cache.count === count &&
-			cache.revision === this.#tickRevision &&
-			cache.custom === custom
-		)
-			return cache.fn;
-		cache.fn = this.tickFormat(count);
-		cache.count = count;
-		cache.revision = this.#tickRevision;
-		cache.custom = custom;
-		return cache.fn;
+		const revision = this.#restTicks.get(count)!.revision;
+		const cached = this.#formatCache.get(count);
+		if (cached && cached.revision === revision && cached.custom === custom) return cached.fn;
+		const fn = this.tickFormat(count);
+		if (cached) {
+			cached.fn = fn;
+			cached.revision = revision;
+			cached.custom = custom;
+		} else this.#formatCache.set(count, { fn, revision, custom });
+		return fn;
 	}
 
 	/**

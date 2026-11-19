@@ -303,4 +303,28 @@ describe('tickFrame without work per frame', () => {
 		moveTo(s, 1, 100000);
 		expect(s.tickFrame(5).map((e) => e.value)).toEqual(s.getTicks(5));
 	});
+
+	it('tickFormatFor keeps one formatter per count: two counts do not replace each other', () => {
+		const s = onScreen(new LinearScaleState('y'), -50, 750);
+		const five = s.tickFormatFor(5);
+		const ten = s.tickFormatFor(10);
+		moveTo(s, -40, 760);
+		expect(s.tickFormatFor(5)).toBe(five);
+		expect(s.tickFormatFor(10)).toBe(ten);
+	});
+
+	it('invalidateTicks: a basis other than the domain changed, so the same domain re-ticks', () => {
+		// As TimeScaleState does when its t0 moves: the same offsets, other dates.
+		class Rebased extends LinearScaleState {
+			rebase() {
+				this.invalidateTicks();
+			}
+		}
+		const s = onScreen(new Rebased('y'), -50, 750);
+		const frame = s.tickFrame(5);
+		const format = s.tickFormatFor(5);
+		s.rebase();
+		expect(s.tickFrame(5)).not.toBe(frame);
+		expect(s.tickFormatFor(5)).not.toBe(format);
+	});
 });
