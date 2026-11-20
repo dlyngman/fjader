@@ -1,12 +1,12 @@
 <script lang="ts">
-	import { getContext, onDestroy } from 'svelte';
-	import { AXIS_REGISTRY, type AxisRegistry, type ParallelAxesSpec } from './axis-registry.svelte';
+	import { declareInChart } from '../charts/declarations.svelte';
+	import type { ParallelAxesSpec } from './axis-spec';
 
 	/**
 	 * A parallel coordinates chart's axes: one per column, with its ticks, their
 	 * labels and the column's name, following the columns as they are dragged
 	 * into a new order. Drawn on the GPU, over the lines: this component declares
-	 * the axes (axis-registry), wherever it is placed, and the chart's canvas
+	 * the axes (charts/declarations), wherever it is placed, and the chart's canvas
 	 * draws them (GpuParallelAxes).
 	 */
 	interface Props {
@@ -16,7 +16,6 @@
 
 	let { ticksNumber = 5, tickFormat = null }: Props = $props();
 
-	const registry = getContext<AxisRegistry | undefined>(AXIS_REGISTRY);
 	const spec: ParallelAxesSpec = {
 		id: `parallel-axes-${crypto.randomUUID().slice(0, 8)}`,
 		get ticksNumber() {
@@ -26,6 +25,5 @@
 			return tickFormat;
 		}
 	};
-	const unregister = registry?.registerParallel(spec);
-	onDestroy(() => unregister?.());
+	declareInChart('parallel', spec);
 </script>

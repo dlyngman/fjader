@@ -16,6 +16,7 @@
 	import { identityKeyFor } from '$lib/query-engine/identity-key';
 	import { checkFacetCells } from './facet-limits';
 	import ChartCell from './ChartCell.svelte';
+	import { DECLARATION_REGISTRY, DeclarationRegistry } from './declarations.svelte';
 	import { categoryLabel } from '$lib/query-engine/categorical-identity';
 
 	interface Props {
@@ -494,6 +495,9 @@
 
 	setContext('chart', marksContext);
 	setContext('legend-position', () => legendPosition);
+	// The chart's declarations (axes, parallel axes, the plot border), read by
+	// every cell (charts/declarations).
+	setContext(DECLARATION_REGISTRY, new DeclarationRegistry());
 </script>
 
 <div class="figure-container" bind:clientWidth={layout.width} data-fjader-tooltip={tooltipScheme}>

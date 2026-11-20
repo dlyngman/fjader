@@ -3,7 +3,7 @@
 	import ParallelAxisRenderer from '../rendering/ParallelAxisRenderer.svelte';
 	import ParallelAxisTicks from './ParallelAxisTicks.svelte';
 	import { PARALLEL_MAX_AXES, PARALLEL_TICKS_PER_AXIS } from '../rendering/uniform-sizes';
-	import type { ParallelAxesSpec } from './axis-registry.svelte';
+	import type { ParallelAxesSpec } from './axis-spec';
 	import type { TextAtlas, TextStyle } from '$lib/gpu/text/TextAtlas.svelte';
 	import type { ChartContext, ContinuousScaleState, WebGPUCanvasContext } from '$lib/types';
 
