@@ -228,6 +228,8 @@
 
 	function mark(kind, label) {
 		events.push({ kind, label, t: now() });
+		// Mirrored as User Timing, so a Chrome performance trace shows it (docs/measuring.md).
+		performance.mark(`fjader:${kind}:${label}`);
 	}
 
 	function pointer(target, type, x, y, buttons = 0) {

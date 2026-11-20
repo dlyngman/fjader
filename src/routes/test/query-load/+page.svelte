@@ -96,6 +96,8 @@
 		const svg = document.querySelector('[data-chart^="1 "] svg.svg-foreground');
 		if (!svg) return;
 		dragging = true;
+		// User Timing, so a Chrome performance trace shows the drag (docs/measuring.md).
+		performance.mark('fjader:drag:start');
 		const r = svg.getBoundingClientRect();
 		const y = r.top + r.height * 0.5;
 		const at = (f) => r.left + r.width * f;
@@ -133,6 +135,7 @@
 		}
 		fire('pointerup', at(0.2));
 		drag = { start, end: performance.now() };
+		performance.mark('fjader:drag:end');
 		dragging = false;
 	}
 

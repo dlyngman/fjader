@@ -101,6 +101,8 @@
 
 	function mark(kind, label, extra = {}) {
 		events.push({ kind, label, time: performance.now(), ...extra });
+		// Mirrored as User Timing, so a Chrome performance trace shows it (docs/measuring.md).
+		performance.mark(`fjader:${kind}:${label}`);
 	}
 
 	/** Until no mark read is pending and none settled for QUIET_MS, capped. */
