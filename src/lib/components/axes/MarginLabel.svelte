@@ -1,6 +1,10 @@
 <script lang="ts">
+	import { warnIfInChildren } from '$lib/components/charts/declarations.svelte';
 	import { getContext } from 'svelte';
 	import type { ChartContext, ContinuousScaleState } from '$lib/types';
+
+	// An overlay draws its own SVG/HTML where it is placed: not yet a declaration.
+	warnIfInChildren('MarginLabel', 'background');
 
 	interface Props {
 		show?: 'both' | 'x' | 'y';

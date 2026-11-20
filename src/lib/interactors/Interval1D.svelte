@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { warnIfInChildren } from '$lib/components/charts/declarations.svelte';
 	import { getContext, onMount, untrack } from 'svelte';
 	import { isBetween } from '@uwdata/mosaic-sql';
 	import { BrushState1D } from './brush-state.svelte';
@@ -25,9 +26,17 @@
 		selection?: string;
 		field?: FieldRef;
 		axis?: 'x' | 'y';
+		/** The name to report in warnings: the public wrapper's (IntervalX, IntervalY). */
+		component?: string;
 	}
 
-	let { selection, field, axis = 'x' }: Props = $props();
+	let { selection, field, axis = 'x', component = 'Interval1D' }: Props = $props();
+
+	// An overlay draws its own SVG/HTML where it is placed: not yet a declaration.
+	warnIfInChildren(
+		untrack(() => component),
+		'interactors'
+	);
 
 	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const filterGroup = filterGroups.get(selection);

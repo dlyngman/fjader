@@ -14,7 +14,7 @@
  * `DeclarationScope` naming the cell, so a facet grid whose snippets render
  * once per cell gets one declaration per cell, each drawn in its own cell.
  */
-import { getContext, onDestroy } from 'svelte';
+import { getContext, onDestroy, type Snippet } from 'svelte';
 import type { AxisSpec, ParallelAxesSpec } from '../axes/axis-spec';
 
 /** A plot border around the inner plot area (`<Frame/>`). */
@@ -44,9 +44,27 @@ export const DECLARATION_REGISTRY = 'declaration-registry';
 export const DECLARATION_SCOPE = 'declaration-scope';
 /** Set by `ChartCell`: what its canvas draws (`DeclarationRegistry.forCell`). */
 export const CELL_DECLARATIONS = 'cell-declarations';
+/**
+ * Set by `ChartContainer`: its children, which the chart's canvas renders. Any
+ * `WebGPUCanvas` in the chart without a `facetIndex` renders them, so a chart
+ * has exactly one such canvas: a `canvas` snippet holds a single one.
+ */
+export const CHART_CHILDREN = 'chart-children';
+
+/** A chart's children, as its canvas renders them (`WebGPUCanvas`). */
+export interface ChartChildren {
+	/** The children, inside their `DeclarationScope`; none when the chart has none. */
+	readonly snippet: Snippet | undefined;
+}
 
 export interface DeclarationScopeContext {
 	readonly cellId: string | null;
+	/**
+	 * Placed directly in a chart (`ChartContainer`'s children), not in one of
+	 * its snippets. Read by the overlays that can't be placed there yet
+	 * (`warnIfInChildren`).
+	 */
+	readonly inChildren: boolean;
 }
 
 export class DeclarationRegistry {
@@ -93,6 +111,22 @@ export class CellDeclarations {
 	get frames(): FrameSpec[] {
 		return this.of('frame');
 	}
+}
+
+/**
+ * For a component that renders its own SVG or HTML where it is placed (an
+ * overlay: a crosshair, a brush, a toggle, a legend): warn when it is a direct
+ * child of a chart. Children render inside the chart's canvas layer, where such
+ * a component can't draw or take pointer events; it belongs in its snippet
+ * until it is a declaration too. Call during component initialisation.
+ */
+export function warnIfInChildren(component: string, snippet: string): void {
+	const scope = getContext<DeclarationScopeContext | undefined>(DECLARATION_SCOPE);
+	if (!scope?.inChildren) return;
+	console.warn(
+		`fjader: <${component}> can't be a direct child of <ChartContainer> yet; ` +
+			`place it in the chart's \`${snippet}\` snippet.`
+	);
 }
 
 /**

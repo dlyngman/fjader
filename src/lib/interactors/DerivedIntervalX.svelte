@@ -11,4 +11,11 @@
 	let { sourceSelection, selection, offset, relayClauses }: Props = $props();
 </script>
 
-<DerivedInterval1D {sourceSelection} {selection} {offset} axis="x" {relayClauses} />
+<DerivedInterval1D
+	{sourceSelection}
+	{selection}
+	{offset}
+	axis="x"
+	{relayClauses}
+	component="DerivedIntervalX"
+/>

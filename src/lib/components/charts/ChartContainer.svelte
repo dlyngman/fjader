@@ -16,7 +16,14 @@
 	import { identityKeyFor } from '$lib/query-engine/identity-key';
 	import { checkFacetCells } from './facet-limits';
 	import ChartCell from './ChartCell.svelte';
-	import { DECLARATION_REGISTRY, DeclarationRegistry } from './declarations.svelte';
+	import {
+		CHART_CHILDREN,
+		DECLARATION_REGISTRY,
+		DeclarationRegistry,
+		type ChartChildren
+	} from './declarations.svelte';
+	import DeclarationScope from './DeclarationScope.svelte';
+	import WebGPUCanvas from '../rendering/WebGPUCanvas.svelte';
 	import { categoryLabel } from '$lib/query-engine/categorical-identity';
 
 	interface Props {
@@ -71,6 +78,15 @@
 		interactors?: Snippet;
 		legend?: Snippet;
 		legendPosition?: 'top' | 'right';
+		/**
+		 * The chart's components, placed directly: marks, `Grid`, `Frame`,
+		 * `AxisLeft`, `AxisBottom`, `ParallelAxes`. Each draws where it belongs,
+		 * in every cell of a facet grid; the chart makes its own canvas for them.
+		 * Overlays (`Crosshair`, brushes, `Toggle`, `MarginLabel`, `Legend`)
+		 * still go in their snippets. With a `canvas` snippet too, the children
+		 * render in the snippet's canvas, beside its components.
+		 */
+		children?: Snippet;
 		wheelInteraction?: { dwellTimeMs?: number; momentumThreshold?: number; enabled?: boolean };
 		xZoomLimit?: number;
 		yZoomLimit?: number;
@@ -111,6 +127,7 @@
 		interactors = undefined,
 		legend = undefined,
 		legendPosition = 'top',
+		children = undefined,
 		entrance = 'auto',
 		wheelInteraction = {
 			dwellTimeMs: 250,
@@ -498,7 +515,29 @@
 	// The chart's declarations (axes, parallel axes, the plot border), read by
 	// every cell (charts/declarations).
 	setContext(DECLARATION_REGISTRY, new DeclarationRegistry());
+
+	// The children render in the chart's canvas, whichever makes it: a `canvas`
+	// snippet's WebGPUCanvas, or one the chart makes for them when there is no
+	// snippet. The cells render that canvas as they render the snippet (in a
+	// facet grid, once, in the hidden marks container); the canvas renders the
+	// children beside its own components (CHART_CHILDREN), so with both, the
+	// children's marks draw in the snippet's canvas.
+	const chartChildren: ChartChildren = {
+		get snippet() {
+			return children ? flatComponents : undefined;
+		}
+	};
+	setContext(CHART_CHILDREN, chartChildren);
+	const chartCanvas = $derived(canvas ?? (children ? flatCanvas : undefined));
 </script>
+
+{#snippet flatComponents()}
+	<DeclarationScope cellId={null} inChildren>{@render children?.()}</DeclarationScope>
+{/snippet}
+
+{#snippet flatCanvas()}
+	<WebGPUCanvas />
+{/snippet}
 
 <div class="figure-container" bind:clientWidth={layout.width} data-fjader-tooltip={tooltipScheme}>
 	{#if legend && legendPosition === 'top'}
@@ -514,7 +553,7 @@
 	{#if fx}
 		<!-- Faceted mode -->
 		<div class="facet-marks-container">
-			{@render canvas?.()}
+			{@render chartCanvas?.()}
 		</div>
 
 		{#if facetRefusal}
@@ -567,7 +606,7 @@
 			{wheelInteraction}
 			{background}
 			{foreground}
-			{canvas}
+			canvas={chartCanvas}
 			{interactors}
 			{overlay}
 		/>

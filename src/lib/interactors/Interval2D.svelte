@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { warnIfInChildren } from '$lib/components/charts/declarations.svelte';
 	import { getContext, onMount } from 'svelte';
 	import { and, isBetween } from '@uwdata/mosaic-sql';
 	import { BrushState2D } from './brush-state.svelte';
@@ -16,6 +17,9 @@
 	import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 	import type { SourceHandle } from '$lib/query-engine/FilterGroup.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
+
+	// An overlay draws its own SVG/HTML where it is placed: not yet a declaration.
+	warnIfInChildren('Interval2D', 'interactors');
 
 	interface Props {
 		/** Filter group name — selects which FilterGroup this brush writes to. */

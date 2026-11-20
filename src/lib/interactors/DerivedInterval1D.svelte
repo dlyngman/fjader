@@ -17,6 +17,7 @@
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 	import type { Clause } from '$lib/query-engine/CrossfilterSelection.svelte';
 	import { ClauseRelay } from './relay-clauses';
+	import { warnIfInChildren } from '$lib/components/charts/declarations.svelte';
 
 	interface Props {
 		sourceSelection: string;
@@ -24,6 +25,8 @@
 		offset: string;
 		axis?: 'x' | 'y';
 		relayClauses?: boolean;
+		/** The name to report in warnings: the public wrapper's (DerivedIntervalX). */
+		component?: string;
 	}
 
 	let {
@@ -31,8 +34,15 @@
 		selection: selectionName = 'derived',
 		offset,
 		axis = 'x',
-		relayClauses = true
+		relayClauses = true,
+		component = 'DerivedInterval1D'
 	}: Props = $props();
+
+	// An overlay draws its own SVG/HTML where it is placed: not yet a declaration.
+	warnIfInChildren(
+		untrack(() => component),
+		'interactors'
+	);
 
 	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const sourceGroup = filterGroups.get(sourceSelection);

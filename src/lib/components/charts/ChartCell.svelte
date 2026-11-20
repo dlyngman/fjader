@@ -1088,11 +1088,15 @@
 
 	<div class="cell-content">
 		{#if cellReady}
-			<svg class="svg-background" width={layout.width} height={layout.height}>
-				<g transform={layout.innerTransform}>
-					<DeclarationScope cellId={cellChartId}>{@render background?.()}</DeclarationScope>
-				</g>
-			</svg>
+			<!-- Only for a background snippet: what drew there (axes, the frame) is on
+			     the GPU now, so a chart without one has no SVG under its canvas. -->
+			{#if background}
+				<svg class="svg-background" width={layout.width} height={layout.height}>
+					<g transform={layout.innerTransform}>
+						<DeclarationScope cellId={cellChartId}>{@render background?.()}</DeclarationScope>
+					</g>
+				</svg>
+			{/if}
 
 			<div class="canvas-layer">
 				{#if canvas}

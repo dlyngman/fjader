@@ -10,7 +10,12 @@
 	import GpuAxis from '../axes/GpuAxis.svelte';
 	import GpuParallelAxes from '../axes/GpuParallelAxes.svelte';
 	import PlotBorderRenderer from './PlotBorderRenderer.svelte';
-	import { CELL_DECLARATIONS, type CellDeclarations } from '../charts/declarations.svelte';
+	import {
+		CELL_DECLARATIONS,
+		CHART_CHILDREN,
+		type CellDeclarations,
+		type ChartChildren
+	} from '../charts/declarations.svelte';
 
 	interface Props {
 		canvasComponents?: Snippet | undefined;
@@ -45,6 +50,14 @@
 	 * on the GPU. None in a facet grid's pass-through canvas: each cell draws its own.
 	 */
 	const declarations = getContext<CellDeclarations | undefined>(CELL_DECLARATIONS);
+	/**
+	 * The chart's children (ChartContainer), rendered here beside this canvas's
+	 * own components when this is the chart's canvas: not a facet cell's own,
+	 * which draws the children's marks from the one instance in the
+	 * pass-through canvas.
+	 */
+	const chartChildren = getContext<ChartChildren | undefined>(CHART_CHILDREN);
+	const ownsChildren = facetIndex == null;
 	setContext('text-atlas', textAtlas);
 
 	function handlePaint() {
@@ -326,6 +339,7 @@
 {#if isFaceted}
 	<!-- Pass-through: marks render here but real canvases live in FacetCells -->
 	{@render canvasComponents?.()}
+	{#if ownsChildren}{@render chartChildren?.snippet?.()}{/if}
 {:else if initializationError}
 	<div class="webgpu-error">
 		<p>WebGPU initialization failed for chart {chartId}:</p>
@@ -360,6 +374,7 @@
 	</canvas>
 	{#if contextConfigured}
 		{@render canvasComponents?.()}
+		{#if ownsChildren}{@render chartChildren?.snippet?.()}{/if}
 		{#if (declarations?.frames.length ?? 0) > 0}
 			<PlotBorderRenderer />
 		{/if}

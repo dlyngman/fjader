@@ -119,7 +119,15 @@ export class RendererHost {
 		this.#mounted = true;
 
 		const ctx = this.#options.webGPUContext;
-		if (!ctx) return;
+		if (!ctx) {
+			// Placed outside any chart canvas: nothing would draw, and nothing would say why.
+			console.warn(
+				`fjader: ${this.#options.label ?? this.#options.markType} has no WebGPU canvas to draw in: ` +
+					"it is outside any chart, or among a chart's children while a `canvas` snippet " +
+					'owns the canvas. Place it in the chart (or its canvas snippet).'
+			);
+			return;
+		}
 		for (let i = 0; i < DEVICE_POLL_LIMIT && !ctx.isInitialized(); i++) {
 			await new Promise((r) => setTimeout(r, DEVICE_POLL_MS));
 		}
