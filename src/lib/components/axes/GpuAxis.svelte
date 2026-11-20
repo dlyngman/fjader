@@ -5,14 +5,14 @@
 	import { categoryLabel } from '$lib/query-engine/categorical-identity';
 	import { dimsBySelection } from '$lib/components/rendering/activity-reads';
 	import { clearTitleOffset, textWidth } from './axis-title';
-	import type { AxisSpec, AxisTitle } from './axis-registry.svelte';
+	import type { AxisSpec, AxisTitle } from './axis-spec';
 	import type { TextAtlas, TextStyle } from '$lib/gpu/text/TextAtlas.svelte';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 	import type { ChartContext, ContinuousScaleState, WebGPUCanvasContext } from '$lib/types';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 
 	/**
-	 * One declared axis (axis-registry), drawn on the GPU (AxisRenderer).
+	 * One declared axis (charts/declarations), drawn on the GPU (AxisRenderer).
 	 *
 	 * What it computes, whenever the axis changes: per tick its position, its
 	 * opacity and its label's atlas slot. The same sources the SVG axes read:
@@ -57,8 +57,18 @@
 	 * closure per frame of a pan, so formatted labels are kept until the ticks
 	 * change. Returned as is: wrapping it would make a new function each time.
 	 */
+	// A custom tickFormat is the scale's format too (tooltips, MarginLabel). Set
+	// here, per cell, not where the axis is declared: a declaration reads no
+	// chart context (charts/declarations).
+	$effect(() => {
+		const s = scale;
+		const format = spec.tickFormat;
+		if (format && s && s.scaleType !== 'band') (s as ContinuousScaleState).setCustomFormat(format);
+	});
+
 	const formatter: (value: unknown) => string = $derived.by(() => {
-		if (spec.tickFormat) return spec.tickFormat;
+		// A specifier string is applied by the scale's formatter (set above).
+		if (typeof spec.tickFormat === 'function') return spec.tickFormat;
 		const s = scale;
 		if (s && 'tickFormatFor' in s)
 			return (s as ContinuousScaleState).tickFormatFor() as (value: unknown) => string;

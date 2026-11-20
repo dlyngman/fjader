@@ -10,7 +10,7 @@
 	import GpuAxis from '../axes/GpuAxis.svelte';
 	import GpuParallelAxes from '../axes/GpuParallelAxes.svelte';
 	import PlotBorderRenderer from './PlotBorderRenderer.svelte';
-	import { AXIS_REGISTRY, type AxisRegistry } from '../axes/axis-registry.svelte';
+	import { CELL_DECLARATIONS, type CellDeclarations } from '../charts/declarations.svelte';
 
 	interface Props {
 		canvasComponents?: Snippet | undefined;
@@ -40,8 +40,11 @@
 	 * them to the GPU (gpu/text/TextAtlas.svelte.ts).
 	 */
 	const textAtlas = new TextAtlas();
-	/** The cell's declared axes (AxisLeft, AxisBottom, ParallelAxes), drawn here, on the GPU. */
-	const axisRegistry = getContext<AxisRegistry | undefined>(AXIS_REGISTRY);
+	/**
+	 * What the cell declared (axes, parallel axes, the plot border), drawn here,
+	 * on the GPU. None in a facet grid's pass-through canvas: each cell draws its own.
+	 */
+	const declarations = getContext<CellDeclarations | undefined>(CELL_DECLARATIONS);
 	setContext('text-atlas', textAtlas);
 
 	function handlePaint() {
@@ -357,13 +360,13 @@
 	</canvas>
 	{#if contextConfigured}
 		{@render canvasComponents?.()}
-		{#if (axisRegistry?.frames.length ?? 0) > 0}
+		{#if (declarations?.frames.length ?? 0) > 0}
 			<PlotBorderRenderer />
 		{/if}
-		{#each axisRegistry?.axes ?? [] as spec (spec.id)}
+		{#each declarations?.axes ?? [] as spec (spec.id)}
 			<GpuAxis {spec} />
 		{/each}
-		{#each axisRegistry?.parallel ?? [] as spec (spec.id)}
+		{#each declarations?.parallel ?? [] as spec (spec.id)}
 			<GpuParallelAxes {spec} />
 		{/each}
 	{:else}

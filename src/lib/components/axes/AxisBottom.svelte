@@ -1,17 +1,20 @@
 <script lang="ts">
-	import { getContext, onDestroy } from 'svelte';
-	import type { ChartContext, ContinuousScaleState } from '$lib/types';
-	import { AXIS_REGISTRY, type AxisRegistry, type AxisSpec } from './axis-registry.svelte';
+	import { declareInChart } from '../charts/declarations.svelte';
+	import type { AxisSpec, TickFormat } from './axis-spec';
 
 	/**
 	 * The x axis, below the plot: its ticks, their labels, and the scale's label
 	 * as its title. Drawn on the GPU in the chart's margins: this component
-	 * declares the axis (axis-registry), wherever it is placed, and the chart's
+	 * declares the axis (charts/declarations), wherever it is placed, and the chart's
 	 * canvas draws it (GpuAxis).
 	 */
 	interface Props {
 		ticksNumber?: number;
-		tickFormat?: ((value: unknown) => string) | null;
+		/**
+		 * A function, or a d3-format specifier (`'+%'`): either becomes the
+		 * scale's format too, for tooltips and the hover readout.
+		 */
+		tickFormat?: TickFormat | null;
 		/**
 		 * Draw the scale's label as the axis title (default). `false` draws none; the
 		 * label still names the scale, so charts sharing it still link their zoom.
@@ -30,16 +33,9 @@
 		title = true,
 		titleAnchor = 'center'
 	}: Props = $props();
-	const c = getContext<ChartContext>('chart');
-
-	// Propagate custom format to scale state once it exists (for MarginLabel, tooltips, etc.)
-	$effect(() => {
-		const s = c.xScaleState;
-		if (tickFormat && s && s.scaleType !== 'band')
-			(s as ContinuousScaleState).setCustomFormat(tickFormat);
-	});
-
-	const registry = getContext<AxisRegistry | undefined>(AXIS_REGISTRY);
+	// A pure declaration: it reads no chart context here. What the axis does
+	// per cell, including handing a custom tickFormat to the scale (for
+	// tooltips and MarginLabel), runs in GpuAxis.
 	const spec: AxisSpec = {
 		id: `axis-bottom-${crypto.randomUUID().slice(0, 8)}`,
 		side: 'bottom',
@@ -58,6 +54,5 @@
 		titleOffset: 32,
 		titlePlacement: 'side'
 	};
-	const unregister = registry?.register(spec);
-	onDestroy(() => unregister?.());
+	declareInChart('axis', spec);
 </script>

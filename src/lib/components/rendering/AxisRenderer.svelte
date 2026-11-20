@@ -5,7 +5,7 @@
 	import { getGPUContext } from '$lib/gpu';
 	import { ATLAS_WGSL } from '$lib/gpu/text/atlas-bindings';
 	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
-	import type { AxisTitle } from '../axes/axis-registry.svelte';
+	import type { AxisTitle } from '../axes/axis-spec';
 
 	/**
 	 * One axis, drawn on the GPU in the chart's margins (a `cell`-space layer):

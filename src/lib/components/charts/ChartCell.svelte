@@ -3,7 +3,12 @@
 	import type { ChartVisibility } from './ChartVisibility.svelte';
 	import type { ChartHover } from './ChartHover.svelte';
 	import { setContext, getContext, onMount } from 'svelte';
-	import { AXIS_REGISTRY, AxisRegistry } from '../axes/axis-registry.svelte';
+	import {
+		CELL_DECLARATIONS,
+		DECLARATION_REGISTRY,
+		type DeclarationRegistry
+	} from './declarations.svelte';
+	import DeclarationScope from './DeclarationScope.svelte';
 	import type { Snippet } from 'svelte';
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
 	import type { Margin } from '$lib/types';
@@ -464,8 +469,10 @@
 	};
 
 	setContext('chart', chartContext);
-	// The axes this cell draws, as AxisLeft/AxisBottom declare them (GPU-drawn by WebGPUCanvas).
-	setContext(AXIS_REGISTRY, new AxisRegistry());
+	// What this cell's canvas draws: the chart's declarations for every cell, and
+	// this cell's own (from its per-cell snippets, scoped below).
+	const declarationRegistry = getContext<DeclarationRegistry>(DECLARATION_REGISTRY);
+	setContext(CELL_DECLARATIONS, declarationRegistry.forCell(cellChartId));
 
 	// --- Pointer event handling ---
 	const pointerBuffer = { x: 0, y: 0 };
@@ -1083,7 +1090,7 @@
 		{#if cellReady}
 			<svg class="svg-background" width={layout.width} height={layout.height}>
 				<g transform={layout.innerTransform}>
-					{@render background?.()}
+					<DeclarationScope cellId={cellChartId}>{@render background?.()}</DeclarationScope>
 				</g>
 			</svg>
 
@@ -1133,7 +1140,7 @@
 					onpointerenter={handleInnerMouseEnter}
 					onpointerleave={handleInnerMouseLeave}
 				>
-					{@render foreground?.()}
+					<DeclarationScope cellId={cellChartId}>{@render foreground?.()}</DeclarationScope>
 					<HoverIndicator />
 					<rect
 						x="0"
@@ -1143,13 +1150,13 @@
 						fill="transparent"
 						class="interaction-target"
 					/>
-					{@render interactors?.()}
+					<DeclarationScope cellId={cellChartId}>{@render interactors?.()}</DeclarationScope>
 				</g>
 			</svg>
 
 			{#if overlay}
 				<div class="overlay-layer">
-					{@render overlay()}
+					<DeclarationScope cellId={cellChartId}>{@render overlay()}</DeclarationScope>
 				</div>
 			{/if}
 
