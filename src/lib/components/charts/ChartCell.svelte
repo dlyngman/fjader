@@ -1148,9 +1148,12 @@
 					<DeclarationScope cellId={cellChartId}>{@render foreground?.()}</DeclarationScope>
 					<!-- Declared overlays (Crosshair, AxisCenter, SvgLayer), keyed by the
 					     declaration, so another one coming or going remounts none. -->
-					{#each cellDeclarations.overlays('clipped') as declared (declared)}
-						{@render declared.snippet(chartContext)}
-					{/each}
+					<!-- In this cell's scope: a declaration inside an overlay is this cell's. -->
+					<DeclarationScope cellId={cellChartId}>
+						{#each cellDeclarations.overlays('clipped') as declared (declared)}
+							{@render declared.snippet(chartContext)}
+						{/each}
+					</DeclarationScope>
 					<HoverIndicator />
 					<rect
 						x="0"
@@ -1166,9 +1169,12 @@
 				<!-- Overlays over the plot and its margins, unclipped, taking no pointer
 				     events (MarginLabel, SvgLayer clip={false}). -->
 				<g transform={layout.innerTransform} class="overlay-margins">
-					{#each cellDeclarations.overlays('margins') as declared (declared)}
-						{@render declared.snippet(chartContext)}
-					{/each}
+					<!-- In this cell's scope: a declaration inside an overlay is this cell's. -->
+					<DeclarationScope cellId={cellChartId}>
+						{#each cellDeclarations.overlays('margins') as declared (declared)}
+							{@render declared.snippet(chartContext)}
+						{/each}
+					</DeclarationScope>
 				</g>
 			</svg>
 

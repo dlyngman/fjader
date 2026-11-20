@@ -14,6 +14,10 @@
 
 	const c = getContext<ChartContext>('chart');
 
+	// A value or a screen position of 0 is valid: only null and NaN are not.
+	const isValid = (v: unknown): v is number =>
+		v !== null && v !== undefined && !Number.isNaN(v as number);
+
 	const xFormatter = $derived(
 		c.xScaleState && c.xScaleState.scaleType !== 'band'
 			? (v: unknown) => (c.xScaleState as ContinuousScaleState).formatValue(v as number)
@@ -28,12 +32,12 @@
 
 {#if c.xScale && c.yScale && c.innerHeight && c.innerWidth}
 	<g class="margin-label">
-		{#if c.currentXScreenPoint && c.currentXDataPoint && (show === 'both' || show === 'x') && c.active}
+		{#if isValid(c.currentXScreenPoint) && isValid(c.currentXDataPoint) && (show === 'both' || show === 'x') && c.active}
 			<text text-anchor="middle" x={c.currentXScreenPoint} y={-5}>
 				{xFormatter(c.currentXDataPoint)}
 			</text>
 		{/if}
-		{#if c.currentYScreenPoint && c.currentYDataPoint && (show === 'both' || show === 'y') && c.active}
+		{#if isValid(c.currentYScreenPoint) && isValid(c.currentYDataPoint) && (show === 'both' || show === 'y') && c.active}
 			<text
 				text-anchor="start"
 				dominant-baseline="middle"

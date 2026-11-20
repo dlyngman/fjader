@@ -27,7 +27,10 @@
 	}: Props = $props();
 	const c = getContext<ChartContext>('chart');
 
-	// Propagate custom format to scale state once it exists
+	// Propagate custom format to scale state once it exists. Here, per cell, not
+	// in the AxisCenter declaration: a declaration reads no chart context (in a
+	// facet grid it sits in the hidden pass-through, not a cell). Idempotent on
+	// the shared scale, as GpuAxis's.
 	$effect(() => {
 		const s = c.yScaleState;
 		if (tickFormat && s && s.scaleType !== 'band')
