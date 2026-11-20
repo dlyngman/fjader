@@ -517,8 +517,8 @@
 	// every cell (charts/declarations).
 	setContext(DECLARATION_REGISTRY, new DeclarationRegistry());
 	// The chart's text atlas: its strings and slots, painted by each of its
-	// canvases (one, or a facet grid's cells), so <Labels> in a facet grid's
-	// pass-through canvas draw in every cell. (TextMark still declines facets.)
+	// canvases (one, or a facet grid's cells), so text layers in a facet grid's
+	// pass-through canvas (<Labels>, TextMark) draw in every cell.
 	setContext(CHART_TEXT_ATLAS, new TextAtlas());
 
 	// The children render in the chart's canvas, whichever makes it: a `canvas`

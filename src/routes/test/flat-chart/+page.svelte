@@ -264,8 +264,8 @@
 			<div class="chart-panel wide">
 				<h3>8. Labels and TextMark, faceted, with snippets</h3>
 				<p class="desc">
-					As charts are written today. Counts (&lt;Labels&gt;) in every species cell, each cell its
-					own. The island names (TextMark) don't draw in facet grids yet.
+					As charts are written today. Counts (&lt;Labels&gt;) and island names (TextMark) in every
+					species cell, each cell its own.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="island" yLabel="count" fx="species">

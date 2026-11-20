@@ -108,10 +108,6 @@
 	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 
-	if (chartContext.fx) {
-		console.warn('[fjader] TextMark does not draw in faceted charts yet.');
-	}
-
 	let setup = $state<MarkLifecycleV2 | null>(null);
 
 	// --- Scale Type Inference ---
@@ -339,7 +335,7 @@
 	});
 </script>
 
-{#if !chartContext.fx && (setup?.gpuReady || !table) && markColor.ready && xData && yData && slotData}
+{#if (setup?.gpuReady || !table) && markColor.ready && xData && yData && slotData}
 	<Texts
 		{markId}
 		{xData}
@@ -358,5 +354,6 @@
 		dataVersion={setup?.dataVersion || 0}
 		landsFor={setup?.landsFor ?? 0}
 		bandAxis={setup?.alignedBand ?? null}
+		facetData={setup?.facetData ?? null}
 	/>
 {/if}
