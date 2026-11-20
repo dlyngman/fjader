@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { isNegativeOrNanExpr } from '$lib/gpu/NanShaderLib';
 	import { UNIFORM_BYTES } from './uniform-sizes';
 	import { getContext, onMount, onDestroy } from 'svelte';
 	import { RendererHost } from './RendererHost.svelte';
@@ -99,8 +100,8 @@
 	// --- Facet compile-time specialization ---
 	const FACET_DISCARD_WGSL = `
       // Facet filtering: discard vertices not belonging to this cell
-      // A negative facet (-1, padded for a NULL facet) is no cell: u32() would clamp it to cell 0.
-      if ((facetIdx < 0.0 || u32(facetIdx) != frameUniforms.activeFacetIdx)) {
+      // A negative or NaN facet (a NULL facet: -1 when padded, NaN when kept) is no cell; u32() would put it in cell 0.
+      if ((${isNegativeOrNanExpr('facetIdx')} || u32(facetIdx) != frameUniforms.activeFacetIdx)) {
         var degen: VertexOutput;
         degen.position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
         return degen;

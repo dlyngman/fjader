@@ -4,7 +4,7 @@
 	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { ATLAS_WGSL } from '$lib/gpu/text/atlas-bindings';
-	import { isNanExpr } from '$lib/gpu/NanShaderLib';
+	import { isNanExpr, isNegativeOrNanExpr } from '$lib/gpu/NanShaderLib';
 	import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
 	import {
 		LABEL_RENDERER_HOST,
@@ -87,8 +87,8 @@
 
 	// In a facet grid the host's rows are every cell's, and its record holds
 	// each row where its own cell's placement put it: a cell draws its own rows
-	// only, by the host's facet index, as the host's draw does. A negative facet (-1,
-	// padded for a NULL facet) is no cell's: u32() would clamp it to cell 0.
+	// only, by the host's facet index, as the host's draw does. A negative or NaN
+	// facet (a NULL facet) is no cell's: u32() would put it in cell 0.
 	const faceted = !!chartContext.fx;
 
 	const host = new RendererHost({
@@ -148,7 +148,7 @@
       @builtin(instance_index) i: u32,
     ) -> VertexOutput {
       if (i >= arrayLength(&slots)) { return nothing(); }
-      ${faceted ? 'if (i >= arrayLength(&facets) || (facets[i] < 0.0 || u32(facets[i]) != frameUniforms.activeFacetIdx)) { return nothing(); }' : ''}
+      ${faceted ? `if (i >= arrayLength(&facets) || (${isNegativeOrNanExpr('facets[i]')} || u32(facets[i]) != frameUniforms.activeFacetIdx)) { return nothing(); }` : ''}
       let slot = slots[i];
       if (slot < 0.0) { return nothing(); }
       let whole = select(1.0, wholes[i], i < arrayLength(&wholes));

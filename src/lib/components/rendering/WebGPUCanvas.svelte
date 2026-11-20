@@ -5,7 +5,12 @@
 	import type { ChartContext, EntranceMode, WebGPUCanvasContext } from '$lib/types';
 	import type { GPUCoordinator, ChartRegistrationResult } from '$lib/gpu/GPUCoordinator.svelte';
 	import type { FacetScaleRef } from '$lib/gpu/GPUCoordinator.svelte';
-	import { TextAtlas, ATLAS_CSS_WIDTH, CHART_TEXT_ATLAS } from '$lib/gpu/text/TextAtlas.svelte';
+	import {
+		TextAtlas,
+		ATLAS_CSS_WIDTH,
+		CHART_TEXT_ATLAS,
+		type AtlasSurface
+	} from '$lib/gpu/text/TextAtlas.svelte';
 	import { parseColorToRGBA } from '$lib/scales/color-utils';
 	import GpuAxis from '../axes/GpuAxis.svelte';
 	import GpuParallelAxes from '../axes/GpuParallelAxes.svelte';
@@ -47,6 +52,8 @@
 	 * canvas's layers acquired. A canvas outside a chart makes its own.
 	 */
 	const textAtlas = getContext<TextAtlas | undefined>(CHART_TEXT_ATLAS) ?? new TextAtlas();
+	/** This canvas's surface of the atlas, once it is attached. */
+	let atlasSurface = $state.raw<AtlasSurface | null>(null);
 	/**
 	 * What the cell declared (axes, parallel axes, the plot border), drawn here,
 	 * on the GPU. None in a facet grid's pass-through canvas: each cell draws its own.
@@ -63,7 +70,8 @@
 	setContext('text-atlas', textAtlas);
 
 	function handlePaint() {
-		if (canvas && atlasContainer) textAtlas.paint(canvas, atlasContainer, chartId);
+		if (canvas && atlasContainer && atlasSurface)
+			textAtlas.paint(canvas, atlasContainer, atlasSurface);
 	}
 	let context: GPUCanvasContext | null = null;
 	let gpuCoordinator: GPUCoordinator | null | undefined = isFaceted ? getGPUContext() : undefined;
@@ -171,7 +179,7 @@
 
 			// Notify coordinator that context is ready
 			chartControl.setContextReady();
-			textAtlas.attach(gpuCoordinator.device!, gpuCoordinator, chartId);
+			atlasSurface = textAtlas.attach(gpuCoordinator.device!, gpuCoordinator, chartId);
 			console.log(`✅ Chart ${chartId} registered and ready`);
 		} catch (error) {
 			console.error(`❌ Chart registration failed for ${chartId}:`, error);
@@ -287,7 +295,8 @@
 		console.log(`🧹 Destroying WebGPUCanvas ${chartId}`);
 
 		try {
-			textAtlas.detach(chartId);
+			if (atlasSurface) textAtlas.detach(atlasSurface);
+			atlasSurface = null;
 
 			// Clean up chart registration
 			if (chartControl) {
@@ -315,6 +324,15 @@
 		} catch (error) {
 			console.error(`❌ Error during WebGPUCanvas ${chartId} destruction:`, error);
 		}
+	});
+
+	// Whether this canvas is laid out: one that is not (display: none, zero size)
+	// gets no paint events, so the atlas must not wait for it (TextAtlas).
+	// Deliberately not the coordinator's viewport visibility: an offscreen
+	// canvas still paints (AtlasSurface.laidOut says why).
+	$effect(() => {
+		const surface = atlasSurface;
+		if (surface) textAtlas.setLaidOut(surface, width > 0 && height > 0);
 	});
 
 	$effect(() => {

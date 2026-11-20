@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { TextAtlas, type TextStyle } from './TextAtlas.svelte';
+import { TextAtlas, type AtlasSurface, type TextStyle } from './TextAtlas.svelte';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import { ATLAS_MAX_ENTRIES } from './atlas-bindings';
 
@@ -103,7 +103,11 @@ describe('TextAtlas surfaces (one per canvas: a facet grid paints one per cell)'
 	}
 
 	/** A canvas and an atlas container holding spans for `slots` (their strings as acquired). */
-	function paintWith(atlas: TextAtlas, chartId: string, spans: Array<[number, string]>): void {
+	function paintWith(
+		atlas: TextAtlas,
+		surface: AtlasSurface,
+		spans: Array<[number, string]>
+	): void {
 		const canvas = {
 			getElementImageDefaultSize: () => ({ width: 200, height: 40 })
 		} as unknown as HTMLCanvasElement;
@@ -116,26 +120,26 @@ describe('TextAtlas surfaces (one per canvas: a facet grid paints one per cell)'
 			})),
 			getBoundingClientRect: () => box
 		} as unknown as HTMLElement;
-		atlas.paint(canvas, container, chartId);
+		atlas.paint(canvas, container, surface);
 	}
 
 	it('a string is drawable once every canvas that paints has it; one not painted yet holds nothing back', () => {
 		const { device, coordinator } = fakeGpu();
 		const atlas = new TextAtlas();
 		const slot = atlas.acquire('42', style);
-		atlas.attach(device, coordinator, 'cell-a');
-		atlas.attach(device, coordinator, 'cell-b');
+		const a = atlas.attach(device, coordinator, 'cell-a');
+		const b = atlas.attach(device, coordinator, 'cell-b');
 		expect(atlas.isRasterized(slot)).toBe(false);
 
-		paintWith(atlas, 'cell-a', [[slot, '42']]);
+		paintWith(atlas, a, [[slot, '42']]);
 		// cell-b has not painted: it does not hold the label back.
 		expect(atlas.isRasterized(slot)).toBe(true);
 
-		paintWith(atlas, 'cell-b', []);
+		paintWith(atlas, b, []);
 		// cell-b painted without it: not drawable everywhere yet.
 		expect(atlas.isRasterized(slot)).toBe(false);
 
-		paintWith(atlas, 'cell-b', [[slot, '42']]);
+		paintWith(atlas, b, [[slot, '42']]);
 		expect(atlas.isRasterized(slot)).toBe(true);
 	});
 
@@ -143,10 +147,10 @@ describe('TextAtlas surfaces (one per canvas: a facet grid paints one per cell)'
 		const { device, coordinator, bound } = fakeGpu();
 		const atlas = new TextAtlas();
 		const slot = atlas.acquire('a', style);
-		atlas.attach(device, coordinator, 'cell-a');
-		atlas.attach(device, coordinator, 'cell-b');
-		paintWith(atlas, 'cell-a', [[slot, 'a']]);
-		paintWith(atlas, 'cell-b', [[slot, 'a']]);
+		const a = atlas.attach(device, coordinator, 'cell-a');
+		const b = atlas.attach(device, coordinator, 'cell-b');
+		paintWith(atlas, a, [[slot, 'a']]);
+		paintWith(atlas, b, [[slot, 'a']]);
 		expect(Object.keys(bound).sort()).toEqual(['cell-a', 'cell-b']);
 		expect(bound['cell-a']).not.toBe(bound['cell-b']);
 	});
@@ -155,20 +159,64 @@ describe('TextAtlas surfaces (one per canvas: a facet grid paints one per cell)'
 		const { device, coordinator, writes, bound } = fakeGpu();
 		const atlas = new TextAtlas();
 		const slot = atlas.acquire('x', style);
-		atlas.attach(device, coordinator, 'cell-a');
-		atlas.attach(device, coordinator, 'cell-b');
-		paintWith(atlas, 'cell-a', [[slot, 'x']]);
-		paintWith(atlas, 'cell-b', []);
+		const a = atlas.attach(device, coordinator, 'cell-a');
+		const b = atlas.attach(device, coordinator, 'cell-b');
+		paintWith(atlas, a, [[slot, 'x']]);
+		paintWith(atlas, b, []);
 		expect(atlas.isRasterized(slot)).toBe(false);
 
-		atlas.detach('cell-b');
+		// Detaching the canvas that held it back makes it drawable, and says so:
+		// the layers waiting on paintVersion look again.
+		const version = atlas.paintVersion;
+		atlas.detach(b);
 		expect(bound['cell-b']).toBeNull();
 		expect(atlas.isRasterized(slot)).toBe(true);
+		expect(atlas.paintVersion).toBeGreaterThan(version);
 
 		const before = writes.length;
 		atlas.release(slot);
 		expect(atlas.isRasterized(slot)).toBe(false);
 		// One zeroed row, for the one canvas still attached.
 		expect(writes.length - before).toBe(1);
+	});
+
+	it('a canvas detaching keeps a newer canvas with the same chart id bound', () => {
+		// A facet grid's cell ids are positional: a new cell can take an id whose
+		// old canvas is destroyed after it.
+		const { device, coordinator, bound } = fakeGpu();
+		const atlas = new TextAtlas();
+		const slot = atlas.acquire('n', style);
+		const old = atlas.attach(device, coordinator, 'fx-0');
+		paintWith(atlas, old, [[slot, 'n']]);
+		const fresh = atlas.attach(device, coordinator, 'fx-0');
+		paintWith(atlas, fresh, [[slot, 'n']]);
+		const freshBinding = bound['fx-0'];
+
+		atlas.detach(old);
+		expect(bound['fx-0']).toBe(freshBinding);
+		expect(atlas.isRasterized(slot)).toBe(true);
+
+		atlas.detach(fresh);
+		expect(bound['fx-0']).toBeNull();
+	});
+
+	it('a canvas that is not laid out holds nothing back, and saying so lets labels look again', () => {
+		// display: none or zero size: no paint events come for it.
+		const { device, coordinator } = fakeGpu();
+		const atlas = new TextAtlas();
+		const slot = atlas.acquire('h', style);
+		const shown = atlas.attach(device, coordinator, 'fx-0');
+		const hidden = atlas.attach(device, coordinator, 'fx-1');
+		paintWith(atlas, shown, [[slot, 'h']]);
+		paintWith(atlas, hidden, []);
+		expect(atlas.isRasterized(slot)).toBe(false);
+
+		const version = atlas.paintVersion;
+		atlas.setLaidOut(hidden, false);
+		expect(atlas.isRasterized(slot)).toBe(true);
+		expect(atlas.paintVersion).toBeGreaterThan(version);
+
+		atlas.setLaidOut(hidden, true);
+		expect(atlas.isRasterized(slot)).toBe(false);
 	});
 });

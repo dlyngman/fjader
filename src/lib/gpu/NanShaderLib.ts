@@ -43,3 +43,14 @@ fn isNaN(v: f32) -> bool {
 export function isNanExpr(f32Expr: string): string {
 	return `((bitcast<u32>(${f32Expr}) & 0x7fffffffu) > 0x7f800000u)`;
 }
+
+/**
+ * Whether an f32 is negative or NaN, as one integer test: the sign bit makes a
+ * negative value's bits larger than +Inf's, and so does a NaN's mantissa. For
+ * a facet index, where both mean "no cell": -1 is a NULL facet that dense()
+ * padded, NaN a NULL facet that was kept. A float test would miss the NaN on
+ * Metal; `u32()` of either is 0, which would put the row in cell 0.
+ */
+export function isNegativeOrNanExpr(f32Expr: string): string {
+	return `(bitcast<u32>(${f32Expr}) > 0x7f800000u)`;
+}

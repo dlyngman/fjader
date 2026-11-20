@@ -137,8 +137,13 @@ interface Entry {
 	refs: number;
 }
 
-/** One canvas the atlas is painted into: its texture and entry table, bound to its chart. */
-interface Surface {
+/**
+ * One canvas the atlas is painted into: its texture and entry table, bound to
+ * its chart. Per canvas, not per chart id: a facet grid's cells are keyed by
+ * category while their ids are positional, so a new cell can take an id whose
+ * old canvas has not been destroyed yet.
+ */
+export interface AtlasSurface {
 	chartId: string;
 	texture: GPUTexture | null;
 	entries: GPUBuffer | null;
@@ -148,6 +153,18 @@ interface Surface {
 	rasterized: Uint8Array;
 	/** Painted at least once: a surface that never paints holds no label back. */
 	painted: boolean;
+	/**
+	 * Whether its canvas is laid out (has a size). One that is not (display:
+	 * none, zero size) gets no paint events, so it holds no label back either.
+	 * A canvas scrolled out of view is laid out, and does get them (measured on
+	 * Chrome 157 with /test/flat-chart?paintlog=1).
+	 *
+	 * Not the coordinator's viewport visibility (GPUCoordinator's
+	 * IntersectionObserver, isChartVisible), which asks whether a chart is
+	 * worth spending work on, keyed by chart id: an offscreen canvas is not
+	 * visible there but still paints, so it is the wrong test for this.
+	 */
+	laidOut: boolean;
 }
 
 export class TextAtlas {
@@ -180,8 +197,10 @@ export class TextAtlas {
 
 	#device: GPUDevice | null = null;
 	#coordinator: GPUCoordinator | null = null;
-	/** The canvases painting this atlas, by chart id. */
-	readonly #surfaces = new Map<string, Surface>();
+	/** The canvases painting this atlas. */
+	readonly #surfaces = new Set<AtlasSurface>();
+	/** Which surface's texture each chart id is bound to at the coordinator. */
+	readonly #boundBy = new Map<string, AtlasSurface>();
 
 	/**
 	 * A slot for `text` in `style`, counted: release it once per acquire. -1
@@ -205,7 +224,7 @@ export class TextAtlas {
 			return -1;
 		}
 		this.#entries[slot] = { key, refs: 1, item: { slot, text, css: styleCss(style) } };
-		for (const surface of this.#surfaces.values()) surface.rasterized[slot] = 0;
+		for (const surface of this.#surfaces) surface.rasterized[slot] = 0;
 		this.#byKey.set(key, slot);
 		this.#scheduleItems();
 		return slot;
@@ -218,7 +237,7 @@ export class TextAtlas {
 		this.#entries[slot] = null;
 		this.#byKey.delete(entry.key);
 		this.#free.push(slot);
-		for (const surface of this.#surfaces.values()) {
+		for (const surface of this.#surfaces) {
 			surface.rasterized[slot] = 0;
 			surface.table.fill(0, slot * 4, slot * 4 + 4);
 			if (surface.entries && this.#device) {
@@ -260,31 +279,35 @@ export class TextAtlas {
 		});
 	}
 
-	/** Start painting into a canvas: the device, and the canvas's chart id at the coordinator. */
-	attach(device: GPUDevice, coordinator: GPUCoordinator, chartId: string): void {
+	/**
+	 * Start painting into a canvas: the device, and the canvas's chart id at the
+	 * coordinator. The surface is the canvas's handle for `paint` and `detach`.
+	 */
+	attach(device: GPUDevice, coordinator: GPUCoordinator, chartId: string): AtlasSurface {
 		this.#device = device;
 		this.#coordinator = coordinator;
-		if (this.#surfaces.has(chartId)) return;
-		this.#surfaces.set(chartId, {
+		const surface: AtlasSurface = {
 			chartId,
 			texture: null,
 			entries: null,
 			table: new Float32Array(ATLAS_TABLE_BYTES / 4),
 			rasterized: new Uint8Array(ATLAS_MAX_ENTRIES),
-			painted: false
-		});
+			painted: false,
+			laidOut: true
+		};
+		this.#surfaces.add(surface);
+		return surface;
 	}
 
 	/**
-	 * Draw `container` into chart `chartId`'s texture and rebuild its entry
-	 * table. Runs in that canvas's `paint` handler, which fires after layout
-	 * whenever the container would be drawn differently.
+	 * Draw `container` into `surface`'s texture and rebuild its entry table.
+	 * Runs in that canvas's `paint` handler, which fires after layout whenever
+	 * the container would be drawn differently.
 	 */
-	paint(canvas: HTMLCanvasElement, container: HTMLElement, chartId: string): void {
+	paint(canvas: HTMLCanvasElement, container: HTMLElement, surface: AtlasSurface): void {
 		this.#readSwatches(container);
 		const device = this.#device;
-		const surface = this.#surfaces.get(chartId);
-		if (!device || !this.#coordinator || !surface) return;
+		if (!device || !this.#coordinator || !this.#surfaces.has(surface)) return;
 		const size = (canvas as DrawableCanvas).getElementImageDefaultSize(container);
 		const width = Math.ceil(size.width);
 		const height = Math.ceil(size.height);
@@ -330,7 +353,7 @@ export class TextAtlas {
 		}
 		surface.painted = true;
 		this.paintVersion++;
-		this.#coordinator.invalidateChart(chartId);
+		this.#coordinator.invalidateChart(surface.chartId);
 	}
 
 	/** Each swatch's colour as the page computes it now, where it changed. */
@@ -349,14 +372,15 @@ export class TextAtlas {
 
 	/**
 	 * Whether `slot`'s string has been painted (and not released since) in every
-	 * canvas that has painted: a facet grid's label switches to a new string
-	 * only once each cell can draw it.
+	 * canvas that has painted and is laid out: a facet grid's label switches to
+	 * a new string only once each cell can draw it, and a hidden cell (no paint
+	 * events) does not hold the others back.
 	 */
 	isRasterized(slot: number): boolean {
 		if (slot < 0) return false;
 		let any = false;
-		for (const surface of this.#surfaces.values()) {
-			if (!surface.painted) continue;
+		for (const surface of this.#surfaces) {
+			if (!surface.painted || !surface.laidOut) continue;
 			if (surface.rasterized[slot] !== 1) return false;
 			any = true;
 		}
@@ -364,7 +388,7 @@ export class TextAtlas {
 	}
 
 	/** A surface's texture at least `width` × `height` texels, and its entry table; rebinds on growth. */
-	#ensureResources(device: GPUDevice, surface: Surface, width: number, height: number): void {
+	#ensureResources(device: GPUDevice, surface: AtlasSurface, width: number, height: number): void {
 		surface.entries ??= device.createBuffer({
 			label: `text-atlas-entries-${surface.chartId}`,
 			size: ATLAS_TABLE_BYTES,
@@ -393,24 +417,44 @@ export class TextAtlas {
 			view: surface.texture.createView(),
 			entries: surface.entries
 		});
+		this.#boundBy.set(surface.chartId, surface);
 	}
 
-	/** Stop painting into chart `chartId`'s canvas, and free its texture and table. */
-	detach(chartId: string): void {
-		const surface = this.#surfaces.get(chartId);
-		if (!surface) return;
-		this.#coordinator?.setChartTextAtlas(chartId, null);
+	/**
+	 * Stop painting into a canvas, and free its texture and table. Its chart's
+	 * binding is cleared only if this surface set it: a newer canvas with the
+	 * same chart id keeps its own.
+	 */
+	detach(surface: AtlasSurface): void {
+		if (!this.#surfaces.delete(surface)) return;
+		if (this.#boundBy.get(surface.chartId) === surface) {
+			this.#coordinator?.setChartTextAtlas(surface.chartId, null);
+			this.#boundBy.delete(surface.chartId);
+		}
 		surface.texture?.destroy();
 		surface.entries?.destroy();
-		this.#surfaces.delete(chartId);
+		// A string pending on this canvas alone may be drawable now: the text
+		// layers waiting on paintVersion look again.
+		this.paintVersion++;
 		if (this.#surfaces.size === 0) {
 			this.#device = null;
 			this.#coordinator = null;
 		}
 	}
 
+	/**
+	 * Whether `surface`'s canvas is laid out. A change can make a pending
+	 * string drawable (or not yet), so the text layers waiting on paintVersion
+	 * look again.
+	 */
+	setLaidOut(surface: AtlasSurface, laidOut: boolean): void {
+		if (surface.laidOut === laidOut) return;
+		surface.laidOut = laidOut;
+		this.paintVersion++;
+	}
+
 	/** Detach every canvas. */
 	destroy(): void {
-		for (const chartId of [...this.#surfaces.keys()]) this.detach(chartId);
+		for (const surface of [...this.#surfaces]) this.detach(surface);
 	}
 }
