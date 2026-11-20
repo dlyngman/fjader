@@ -285,7 +285,8 @@
 
 	const chartEl = (id) => document.querySelector(`[data-chart="${id}"]`);
 	const foreground = (id) => chartEl(id)?.querySelector('svg.svg-foreground');
-	const plotRect = (id) => chartEl(id).querySelector('g.frame').getBoundingClientRect();
+	const plotRect = (id) =>
+		chartEl(id).querySelector('rect.interaction-target').getBoundingClientRect();
 
 	function mark(kind, label, extra = {}) {
 		events.push({ kind, label, t: performance.now(), ...extra });

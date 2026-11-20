@@ -1,17 +1,17 @@
 /**
- * The axes a chart cell draws, as its axis components declare them.
+ * The GPU-drawn guide declarations a chart cell renders (axes, parallel axes,
+ * and plot border frames).
  *
- * `<AxisLeft/>` and `<AxisBottom/>` are placed in the chart's `background`
- * snippet, which is SVG, outside the canvas, but the axes draw on the GPU, in
- * the canvas, in the chart's margins. So the components DECLARE: each
- * registers its settings here, and the cell's WebGPUCanvas draws whatever is
- * registered (GpuAxis). A declaration works wherever it is placed.
+ * `<AxisLeft/>`, `<AxisBottom/>`, `<ParallelAxes/>` and `<Frame/>` declare
+ * their settings here wherever they are placed, and the cell's `WebGPUCanvas`
+ * draws each registered declaration on the GPU.
  *
- * `<ParallelAxes/>` declares the same way: one axis per column of a parallel
- * coordinates chart, drawn by GpuParallelAxes.
+ * Stored as one `kind`-keyed list; the typed getters filter on read so Svelte
+ * templates track `declarations` reactively and unit tests work identically in
+ * Node.
  *
  * One registry per chart cell (ChartCell), so a facet grid's cells draw their
- * own axes.
+ * own axes and plot borders.
  */
 
 /** One axis's settings, read through getters so they stay the component's props. */
@@ -36,6 +36,16 @@ export interface ParallelAxesSpec {
 	readonly tickFormat: ((value: unknown) => string) | null;
 }
 
+/** A plot border around the inner plot area (`<Frame/>`). */
+export interface FrameSpec {
+	readonly id: string;
+}
+
+export type ChartDeclaration =
+	| { readonly kind: 'axis'; readonly spec: AxisSpec }
+	| { readonly kind: 'parallel'; readonly spec: ParallelAxesSpec }
+	| { readonly kind: 'frame'; readonly spec: FrameSpec };
+
 export const AXIS_REGISTRY = 'axis-registry';
 
 /** An axis title as the axis renderer draws it. */
@@ -48,21 +58,42 @@ export interface AxisTitle {
 }
 
 export class AxisRegistry {
-	axes = $state<AxisSpec[]>([]);
+	declarations = $state<ChartDeclaration[]>([]);
 
-	register(spec: AxisSpec): () => void {
-		this.axes = [...this.axes, spec];
+	get axes(): AxisSpec[] {
+		return this.declarations
+			.filter((d): d is Extract<ChartDeclaration, { kind: 'axis' }> => d.kind === 'axis')
+			.map((d) => d.spec);
+	}
+
+	get parallel(): ParallelAxesSpec[] {
+		return this.declarations
+			.filter((d): d is Extract<ChartDeclaration, { kind: 'parallel' }> => d.kind === 'parallel')
+			.map((d) => d.spec);
+	}
+
+	get frames(): FrameSpec[] {
+		return this.declarations
+			.filter((d): d is Extract<ChartDeclaration, { kind: 'frame' }> => d.kind === 'frame')
+			.map((d) => d.spec);
+	}
+
+	registerDeclaration(decl: ChartDeclaration): () => void {
+		this.declarations = [...this.declarations, decl];
 		return () => {
-			this.axes = this.axes.filter((s) => s !== spec);
+			this.declarations = this.declarations.filter((d) => d !== decl);
 		};
 	}
 
-	parallel = $state<ParallelAxesSpec[]>([]);
+	register(spec: AxisSpec): () => void {
+		return this.registerDeclaration({ kind: 'axis', spec });
+	}
 
 	registerParallel(spec: ParallelAxesSpec): () => void {
-		this.parallel = [...this.parallel, spec];
-		return () => {
-			this.parallel = this.parallel.filter((s) => s !== spec);
-		};
+		return this.registerDeclaration({ kind: 'parallel', spec });
+	}
+
+	registerFrame(spec: FrameSpec): () => void {
+		return this.registerDeclaration({ kind: 'frame', spec });
 	}
 }

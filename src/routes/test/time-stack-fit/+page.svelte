@@ -219,7 +219,7 @@
 			: 'pointermove';
 
 	const foreground = () => chartEl.querySelector('svg.svg-foreground');
-	const plot = () => chartEl.querySelector('g.frame').getBoundingClientRect();
+	const plot = () => chartEl.querySelector('rect.interaction-target').getBoundingClientRect();
 	/** A point in the x axis margin, `f` of the way across the plot. */
 	function marginPoint(f) {
 		const r = plot();

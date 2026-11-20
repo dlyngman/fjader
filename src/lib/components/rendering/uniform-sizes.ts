@@ -30,6 +30,7 @@ export const UNIFORM_BYTES = {
 	textsMarkConstants: 64,
 	labelConstants: 64,
 	axisConstants: 48,
+	borderConstants: 16,
 	parallelConfig: 176,
 	parallelAxisConstants: 272,
 	parallelAxisScales: PARALLEL_MAX_AXES * SCALE_PARAM_BYTES

@@ -9,6 +9,7 @@
 	import { parseColorToRGBA } from '$lib/scales/color-utils';
 	import GpuAxis from '../axes/GpuAxis.svelte';
 	import GpuParallelAxes from '../axes/GpuParallelAxes.svelte';
+	import PlotBorderRenderer from './PlotBorderRenderer.svelte';
 	import { AXIS_REGISTRY, type AxisRegistry } from '../axes/axis-registry.svelte';
 
 	interface Props {
@@ -356,6 +357,9 @@
 	</canvas>
 	{#if contextConfigured}
 		{@render canvasComponents?.()}
+		{#if (axisRegistry?.frames.length ?? 0) > 0}
+			<PlotBorderRenderer />
+		{/if}
 		{#each axisRegistry?.axes ?? [] as spec (spec.id)}
 			<GpuAxis {spec} />
 		{/each}
