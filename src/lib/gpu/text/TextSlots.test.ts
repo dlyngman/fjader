@@ -145,4 +145,8 @@ describe('withFacetKeys', () => {
 		const k = withFacetKeys(new Float32Array([7, 8]), new Float32Array([3, 3]))!;
 		expect(k[1] - k[0]).toBe(1);
 	});
+
+	it('matches rows by index when keys and facets differ in length', () => {
+		expect(withFacetKeys(new Float32Array([1, 2, 3]), new Float32Array([0, 0]))).toBeNull();
+	});
 });
