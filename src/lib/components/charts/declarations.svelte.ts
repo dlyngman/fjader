@@ -162,9 +162,10 @@ export function orderOverlays(overlays: readonly OverlaySpec[]): OverlaySpec[] {
 /**
  * For a component that still renders its own SVG or HTML where it is placed
  * (a brush, a toggle, a legend; the crosshair and the readout are declared
- * overlays now): warn when it is a direct child of a chart. Children render inside the chart's canvas layer, where such
- * a component can't draw or take pointer events; it belongs in its snippet
- * until it is a declaration too. Call during component initialisation.
+ * overlays now): warn when it is a direct child of a chart. Children render
+ * inside the chart's canvas layer, where such a component can't draw or take
+ * pointer events; it belongs in its snippet until it is a declaration too.
+ * Call during component initialisation.
  */
 export function warnIfInChildren(component: string, snippet: string): void {
 	const scope = getContext<DeclarationScopeContext | undefined>(DECLARATION_SCOPE);
