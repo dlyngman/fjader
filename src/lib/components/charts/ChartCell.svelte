@@ -472,7 +472,8 @@
 	// What this cell's canvas draws: the chart's declarations for every cell, and
 	// this cell's own (from its per-cell snippets, scoped below).
 	const declarationRegistry = getContext<DeclarationRegistry>(DECLARATION_REGISTRY);
-	setContext(CELL_DECLARATIONS, declarationRegistry.forCell(cellChartId));
+	const cellDeclarations = declarationRegistry.forCell(cellChartId);
+	setContext(CELL_DECLARATIONS, cellDeclarations);
 
 	// --- Pointer event handling ---
 	const pointerBuffer = { x: 0, y: 0 };
@@ -1145,6 +1146,11 @@
 					onpointerleave={handleInnerMouseLeave}
 				>
 					<DeclarationScope cellId={cellChartId}>{@render foreground?.()}</DeclarationScope>
+					<!-- Declared overlays (Crosshair, AxisCenter, SvgLayer), keyed by the
+					     declaration, so another one coming or going remounts none. -->
+					{#each cellDeclarations.overlays('clipped') as declared (declared)}
+						{@render declared.snippet(chartContext)}
+					{/each}
 					<HoverIndicator />
 					<rect
 						x="0"
@@ -1155,6 +1161,14 @@
 						class="interaction-target"
 					/>
 					<DeclarationScope cellId={cellChartId}>{@render interactors?.()}</DeclarationScope>
+				</g>
+
+				<!-- Overlays over the plot and its margins, unclipped, taking no pointer
+				     events (MarginLabel, SvgLayer clip={false}). -->
+				<g transform={layout.innerTransform} class="overlay-margins">
+					{#each cellDeclarations.overlays('margins') as declared (declared)}
+						{@render declared.snippet(chartContext)}
+					{/each}
 				</g>
 			</svg>
 
@@ -1227,6 +1241,10 @@
 
 	.svg-background {
 		z-index: 1;
+	}
+
+	.overlay-margins {
+		pointer-events: none;
 	}
 
 	.interaction-target {

@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { DeclarationRegistry, type ChartDeclaration, type FrameSpec } from './declarations.svelte';
+import {
+	DeclarationRegistry,
+	orderOverlays,
+	type ChartDeclaration,
+	type FrameSpec,
+	type OverlaySpec
+} from './declarations.svelte';
 import type { AxisSpec, ParallelAxesSpec } from '../axes/axis-spec';
 
 function axis(id: string, side: 'bottom' | 'left' = 'bottom'): AxisSpec {
@@ -28,7 +34,7 @@ describe('DeclarationRegistry', () => {
 		registry.register({ kind: 'axis', spec: left, cellId: null });
 		registry.register({ kind: 'parallel', spec: parallel, cellId: null });
 
-		expect(registry.declarations.map((d) => [d.kind, d.spec.id])).toEqual([
+		expect(registry.declarations.map((d) => [d.kind, 'id' in d.spec ? d.spec.id : ''])).toEqual([
 			['axis', 'axis-bottom-1'],
 			['frame', 'frame-1'],
 			['axis', 'axis-left-1'],
@@ -82,5 +88,41 @@ describe('DeclarationRegistry', () => {
 
 		unregisterAxis();
 		expect(registry.declarations).toEqual([]);
+	});
+});
+
+describe('overlays', () => {
+	// The snippet is never rendered here: only the specs' identity and order matter.
+	const snippet = (() => {}) as unknown as OverlaySpec['snippet'];
+	const overlay = (slot: OverlaySpec['slot'], zIndex = 0): OverlaySpec => ({
+		snippet,
+		slot,
+		zIndex
+	});
+
+	it('orders by zIndex, registration order breaking ties, and keeps the specs', () => {
+		const a = overlay('clipped');
+		const b = overlay('clipped', -1);
+		const c = overlay('clipped');
+		const d = overlay('clipped', 2);
+		const ordered = orderOverlays([a, b, c, d]);
+		expect(ordered).toEqual([b, a, c, d]);
+		// The same objects, so a keyed {#each} keeps each mounted.
+		expect(ordered[1]).toBe(a);
+	});
+
+	it('a cell draws its slot only: every cell’s and its own, not another cell’s', () => {
+		const registry = new DeclarationRegistry();
+		const crosshair = overlay('clipped');
+		const readout = overlay('margins');
+		const own = overlay('clipped', 1);
+		const other = overlay('clipped');
+		registry.register({ kind: 'overlay', spec: crosshair, cellId: null });
+		registry.register({ kind: 'overlay', spec: readout, cellId: null });
+		registry.register({ kind: 'overlay', spec: own, cellId: 'cell-a' });
+		registry.register({ kind: 'overlay', spec: other, cellId: 'cell-b' });
+		const cell = registry.forCell('cell-a');
+		expect(cell.overlays('clipped')).toEqual([crosshair, own]);
+		expect(cell.overlays('margins')).toEqual([readout]);
 	});
 });
