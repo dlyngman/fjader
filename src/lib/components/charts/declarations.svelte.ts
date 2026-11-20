@@ -44,7 +44,11 @@ export const DECLARATION_REGISTRY = 'declaration-registry';
 export const DECLARATION_SCOPE = 'declaration-scope';
 /** Set by `ChartCell`: what its canvas draws (`DeclarationRegistry.forCell`). */
 export const CELL_DECLARATIONS = 'cell-declarations';
-/** Set by `ChartContainer`: its children, which the chart's canvas renders. */
+/**
+ * Set by `ChartContainer`: its children, which the chart's canvas renders. Any
+ * `WebGPUCanvas` in the chart without a `facetIndex` renders them, so a chart
+ * has exactly one such canvas: a `canvas` snippet holds a single one.
+ */
 export const CHART_CHILDREN = 'chart-children';
 
 /** A chart's children, as its canvas renders them (`WebGPUCanvas`). */
