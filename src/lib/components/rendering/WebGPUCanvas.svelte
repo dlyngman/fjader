@@ -5,7 +5,7 @@
 	import type { ChartContext, EntranceMode, WebGPUCanvasContext } from '$lib/types';
 	import type { GPUCoordinator, ChartRegistrationResult } from '$lib/gpu/GPUCoordinator.svelte';
 	import type { FacetScaleRef } from '$lib/gpu/GPUCoordinator.svelte';
-	import { TextAtlas, ATLAS_CSS_WIDTH } from '$lib/gpu/text/TextAtlas.svelte';
+	import { TextAtlas, ATLAS_CSS_WIDTH, CHART_TEXT_ATLAS } from '$lib/gpu/text/TextAtlas.svelte';
 	import { parseColorToRGBA } from '$lib/scales/color-utils';
 	import GpuAxis from '../axes/GpuAxis.svelte';
 	import GpuParallelAxes from '../axes/GpuParallelAxes.svelte';
@@ -40,11 +40,13 @@
 	let canvas = $state<HTMLCanvasElement>();
 	let atlasContainer = $state<HTMLElement>();
 	/**
-	 * The chart's text atlas: text layers acquire their strings from it, this
-	 * component renders them inside the canvas, and the canvas's `paint` hands
-	 * them to the GPU (gpu/text/TextAtlas.svelte.ts).
+	 * The chart's text atlas (gpu/text/TextAtlas.svelte.ts): text layers acquire
+	 * their strings from it, this component renders them inside the canvas, and
+	 * the canvas's `paint` hands them to the GPU. The chart's own, shared by its
+	 * canvases: in a facet grid every cell paints the strings the pass-through
+	 * canvas's layers acquired. A canvas outside a chart makes its own.
 	 */
-	const textAtlas = new TextAtlas();
+	const textAtlas = getContext<TextAtlas | undefined>(CHART_TEXT_ATLAS) ?? new TextAtlas();
 	/**
 	 * What the cell declared (axes, parallel axes, the plot border), drawn here,
 	 * on the GPU. None in a facet grid's pass-through canvas: each cell draws its own.
@@ -61,7 +63,7 @@
 	setContext('text-atlas', textAtlas);
 
 	function handlePaint() {
-		if (canvas && atlasContainer) textAtlas.paint(canvas, atlasContainer);
+		if (canvas && atlasContainer) textAtlas.paint(canvas, atlasContainer, chartId);
 	}
 	let context: GPUCanvasContext | null = null;
 	let gpuCoordinator: GPUCoordinator | null | undefined = isFaceted ? getGPUContext() : undefined;
@@ -285,7 +287,7 @@
 		console.log(`🧹 Destroying WebGPUCanvas ${chartId}`);
 
 		try {
-			textAtlas.destroy();
+			textAtlas.detach(chartId);
 
 			// Clean up chart registration
 			if (chartControl) {

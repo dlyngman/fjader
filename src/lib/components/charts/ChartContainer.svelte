@@ -24,6 +24,7 @@
 	} from './declarations.svelte';
 	import DeclarationScope from './DeclarationScope.svelte';
 	import WebGPUCanvas from '../rendering/WebGPUCanvas.svelte';
+	import { CHART_TEXT_ATLAS, TextAtlas } from '$lib/gpu/text/TextAtlas.svelte';
 	import { categoryLabel } from '$lib/query-engine/categorical-identity';
 
 	interface Props {
@@ -515,6 +516,10 @@
 	// The chart's declarations (axes, parallel axes, the plot border), read by
 	// every cell (charts/declarations).
 	setContext(DECLARATION_REGISTRY, new DeclarationRegistry());
+	// The chart's text atlas: its strings and slots, painted by each of its
+	// canvases (one, or a facet grid's cells), so text layers in a facet grid's
+	// pass-through canvas draw in every cell.
+	setContext(CHART_TEXT_ATLAS, new TextAtlas());
 
 	// The children render in the chart's canvas, whichever makes it: a `canvas`
 	// snippet's WebGPUCanvas, or one the chart makes for them when there is no

@@ -27,6 +27,14 @@
  * The texture is sized when it is drawn, from the container's laid-out size:
  * a change can wrap the container onto another row, and a texture sized
  * before would cut that row off.
+ *
+ * ONE REGISTRY, A SURFACE PER CANVAS. The strings and their slots belong to
+ * the chart (one atlas per `ChartContainer`); each canvas that draws the chart
+ * is a surface: it renders the same spans in its own container and paints them
+ * into its own texture and table, bound to its own chart id. A facet grid's
+ * text layers live once, in the pass-through canvas, and draw in every cell
+ * with the same slots: each cell's surface has the strings at its own
+ * rectangles. Without facets there is one surface.
  */
 
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
@@ -54,6 +62,9 @@ export interface AtlasItem {
 	/** Inline CSS for the span. */
 	css: string;
 }
+
+/** Context key: the chart's atlas, created by `ChartContainer`, painted by each of its canvases. */
+export const CHART_TEXT_ATLAS = 'chart-text-atlas';
 
 /** The container's width in CSS pixels: 2048 texels at a device pixel ratio of 2. */
 export const ATLAS_CSS_WIDTH = 1024;
@@ -126,6 +137,19 @@ interface Entry {
 	refs: number;
 }
 
+/** One canvas the atlas is painted into: its texture and entry table, bound to its chart. */
+interface Surface {
+	chartId: string;
+	texture: GPUTexture | null;
+	entries: GPUBuffer | null;
+	/** The entry table, mirrored on the CPU: rewritten at each paint. */
+	table: Float32Array<ArrayBuffer>;
+	/** Whether each slot's string is in this surface's texture. */
+	rasterized: Uint8Array;
+	/** Painted at least once: a surface that never paints holds no label back. */
+	painted: boolean;
+}
+
 export class TextAtlas {
 	/** The spans WebGPUCanvas renders, keyed by slot. Replaced, never mutated, when entries change. */
 	items = $state<AtlasItem[]>([]);
@@ -146,24 +170,18 @@ export class TextAtlas {
 	 */
 	swatches = $state<AtlasColor[]>([]);
 
-	/** Whether each slot's string is in the texture. */
-	readonly #rasterized = new Uint8Array(ATLAS_MAX_ENTRIES);
-
 	readonly #entries: (Entry | null)[] = [];
 	readonly #byKey = new Map<string, number>();
 	readonly #free: number[] = [];
 	#itemsScheduled = false;
 	#warnedFull = false;
 
-	/** The entry table, mirrored on the CPU: rewritten at each paint. */
-	readonly #table = new Float32Array(ATLAS_TABLE_BYTES / 4);
 	readonly #zeroRow = new Float32Array(ATLAS_ENTRY_BYTES / 4);
 
 	#device: GPUDevice | null = null;
 	#coordinator: GPUCoordinator | null = null;
-	#chartId = '';
-	#texture: GPUTexture | null = null;
-	#entriesBuffer: GPUBuffer | null = null;
+	/** The canvases painting this atlas, by chart id. */
+	readonly #surfaces = new Map<string, Surface>();
 
 	/**
 	 * A slot for `text` in `style`, counted: release it once per acquire. -1
@@ -187,7 +205,7 @@ export class TextAtlas {
 			return -1;
 		}
 		this.#entries[slot] = { key, refs: 1, item: { slot, text, css: styleCss(style) } };
-		this.#rasterized[slot] = 0;
+		for (const surface of this.#surfaces.values()) surface.rasterized[slot] = 0;
 		this.#byKey.set(key, slot);
 		this.#scheduleItems();
 		return slot;
@@ -200,10 +218,12 @@ export class TextAtlas {
 		this.#entries[slot] = null;
 		this.#byKey.delete(entry.key);
 		this.#free.push(slot);
-		this.#rasterized[slot] = 0;
-		this.#table.fill(0, slot * 4, slot * 4 + 4);
-		if (this.#entriesBuffer && this.#device) {
-			this.#device.queue.writeBuffer(this.#entriesBuffer, slot * ATLAS_ENTRY_BYTES, this.#zeroRow);
+		for (const surface of this.#surfaces.values()) {
+			surface.rasterized[slot] = 0;
+			surface.table.fill(0, slot * 4, slot * 4 + 4);
+			if (surface.entries && this.#device) {
+				this.#device.queue.writeBuffer(surface.entries, slot * ATLAS_ENTRY_BYTES, this.#zeroRow);
+			}
 		}
 		this.#scheduleItems();
 	}
@@ -240,29 +260,38 @@ export class TextAtlas {
 		});
 	}
 
-	/** Start drawing: the chart's device and its id at the coordinator. */
+	/** Start painting into a canvas: the device, and the canvas's chart id at the coordinator. */
 	attach(device: GPUDevice, coordinator: GPUCoordinator, chartId: string): void {
 		this.#device = device;
 		this.#coordinator = coordinator;
-		this.#chartId = chartId;
+		if (this.#surfaces.has(chartId)) return;
+		this.#surfaces.set(chartId, {
+			chartId,
+			texture: null,
+			entries: null,
+			table: new Float32Array(ATLAS_TABLE_BYTES / 4),
+			rasterized: new Uint8Array(ATLAS_MAX_ENTRIES),
+			painted: false
+		});
 	}
 
 	/**
-	 * Draw `container` into the texture and rebuild the entry table. Runs in the
-	 * canvas's `paint` handler, which fires after layout whenever the container
-	 * would be drawn differently.
+	 * Draw `container` into chart `chartId`'s texture and rebuild its entry
+	 * table. Runs in that canvas's `paint` handler, which fires after layout
+	 * whenever the container would be drawn differently.
 	 */
-	paint(canvas: HTMLCanvasElement, container: HTMLElement): void {
+	paint(canvas: HTMLCanvasElement, container: HTMLElement, chartId: string): void {
 		this.#readSwatches(container);
 		const device = this.#device;
-		if (!device || !this.#coordinator) return;
+		const surface = this.#surfaces.get(chartId);
+		if (!device || !this.#coordinator || !surface) return;
 		const size = (canvas as DrawableCanvas).getElementImageDefaultSize(container);
 		const width = Math.ceil(size.width);
 		const height = Math.ceil(size.height);
 		if (width === 0 || height === 0) return;
 
-		this.#ensureResources(device, width, height);
-		const texture = this.#texture!;
+		this.#ensureResources(device, surface, width, height);
+		const texture = surface.texture!;
 		(device.queue as DrawableQueue).drawElementImageToTexture(
 			{ source: container },
 			{ texture, size: [Math.min(texture.width, width), Math.min(texture.height, height)] }
@@ -272,7 +301,7 @@ export class TextAtlas {
 		// store over its CSS size, the device pixel ratio).
 		const box = container.getBoundingClientRect();
 		const scale = box.width > 0 ? size.width / box.width : 1;
-		const table = this.#table;
+		const table = surface.table;
 		let maxSlot = -1;
 		for (const child of container.children) {
 			const slot = Number((child as HTMLElement).dataset.slot);
@@ -293,14 +322,15 @@ export class TextAtlas {
 			table[o + 1] = y0;
 			table[o + 2] = Math.min(x1, texture.width) - x0;
 			table[o + 3] = Math.min(y1, texture.height) - y0;
-			this.#rasterized[slot] = 1;
+			surface.rasterized[slot] = 1;
 			if (slot > maxSlot) maxSlot = slot;
 		}
 		if (maxSlot >= 0) {
-			device.queue.writeBuffer(this.#entriesBuffer!, 0, table, 0, (maxSlot + 1) * 4);
+			device.queue.writeBuffer(surface.entries!, 0, table, 0, (maxSlot + 1) * 4);
 		}
+		surface.painted = true;
 		this.paintVersion++;
-		this.#coordinator.invalidateChart(this.#chartId);
+		this.#coordinator.invalidateChart(chartId);
 	}
 
 	/** Each swatch's colour as the page computes it now, where it changed. */
@@ -317,19 +347,30 @@ export class TextAtlas {
 		}
 	}
 
-	/** Whether `slot`'s string has been painted into the texture (and not released since). */
+	/**
+	 * Whether `slot`'s string has been painted (and not released since) in every
+	 * canvas that has painted: a facet grid's label switches to a new string
+	 * only once each cell can draw it.
+	 */
 	isRasterized(slot: number): boolean {
-		return slot >= 0 && this.#rasterized[slot] === 1;
+		if (slot < 0) return false;
+		let any = false;
+		for (const surface of this.#surfaces.values()) {
+			if (!surface.painted) continue;
+			if (surface.rasterized[slot] !== 1) return false;
+			any = true;
+		}
+		return any;
 	}
 
-	/** The texture at least `width` × `height` texels, and the entry table; rebinds on growth. */
-	#ensureResources(device: GPUDevice, width: number, height: number): void {
-		this.#entriesBuffer ??= device.createBuffer({
-			label: `text-atlas-entries-${this.#chartId}`,
+	/** A surface's texture at least `width` × `height` texels, and its entry table; rebinds on growth. */
+	#ensureResources(device: GPUDevice, surface: Surface, width: number, height: number): void {
+		surface.entries ??= device.createBuffer({
+			label: `text-atlas-entries-${surface.chartId}`,
 			size: ATLAS_TABLE_BYTES,
 			usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
 		});
-		const t = this.#texture;
+		const t = surface.texture;
 		if (t && t.width >= width && t.height >= height) return;
 
 		const max = device.limits.maxTextureDimension2D;
@@ -339,8 +380,8 @@ export class TextAtlas {
 			Math.ceil(Math.max(height, t?.height ?? 0) / HEIGHT_STEP) * HEIGHT_STEP
 		);
 		t?.destroy();
-		this.#texture = device.createTexture({
-			label: `text-atlas-${this.#chartId}`,
+		surface.texture = device.createTexture({
+			label: `text-atlas-${surface.chartId}`,
 			size: [w, h],
 			format: ATLAS_FORMAT,
 			usage:
@@ -348,19 +389,28 @@ export class TextAtlas {
 				GPUTextureUsage.COPY_DST |
 				GPUTextureUsage.RENDER_ATTACHMENT
 		});
-		this.#coordinator!.setChartTextAtlas(this.#chartId, {
-			view: this.#texture.createView(),
-			entries: this.#entriesBuffer
+		this.#coordinator!.setChartTextAtlas(surface.chartId, {
+			view: surface.texture.createView(),
+			entries: surface.entries
 		});
 	}
 
+	/** Stop painting into chart `chartId`'s canvas, and free its texture and table. */
+	detach(chartId: string): void {
+		const surface = this.#surfaces.get(chartId);
+		if (!surface) return;
+		this.#coordinator?.setChartTextAtlas(chartId, null);
+		surface.texture?.destroy();
+		surface.entries?.destroy();
+		this.#surfaces.delete(chartId);
+		if (this.#surfaces.size === 0) {
+			this.#device = null;
+			this.#coordinator = null;
+		}
+	}
+
+	/** Detach every canvas. */
 	destroy(): void {
-		this.#coordinator?.setChartTextAtlas(this.#chartId, null);
-		this.#texture?.destroy();
-		this.#entriesBuffer?.destroy();
-		this.#texture = null;
-		this.#entriesBuffer = null;
-		this.#device = null;
-		this.#coordinator = null;
+		for (const chartId of [...this.#surfaces.keys()]) this.detach(chartId);
 	}
 }
