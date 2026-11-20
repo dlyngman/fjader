@@ -123,14 +123,16 @@
 	const FACET_BINDING_WGSL = `\n  @group(1) @binding(${BINDINGS.FACET}) var<storage, read> facetIndices: array<f32>;`;
 	const FACET_DISCARD_WGSL = `
     // Facet filtering: discard vertices not belonging to this cell
-    if (u32(facetIndices[instanceIdx]) != frameUniforms.activeFacetIdx) {
+    // A negative facet (-1, padded for a NULL facet) is no cell: u32() would clamp it to cell 0.
+    if ((facetIndices[instanceIdx] < 0.0 || u32(facetIndices[instanceIdx]) != frameUniforms.activeFacetIdx)) {
       var degen: VertexOutput;
       degen.position = DISCARD_POS;
       return degen;
     }`;
 	const FACET_BOUNDARY_WGSL = `
     // Facet boundary: discard segment if next point is in a different facet
-    if (u32(facetIndices[nextIdx]) != frameUniforms.activeFacetIdx) {
+    // A negative facet (-1, padded for a NULL facet) is no cell: u32() would clamp it to cell 0.
+    if ((facetIndices[nextIdx] < 0.0 || u32(facetIndices[nextIdx]) != frameUniforms.activeFacetIdx)) {
       var output: VertexOutput;
       output.position = DISCARD_POS;
       return output;

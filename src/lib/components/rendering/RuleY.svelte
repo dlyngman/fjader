@@ -99,7 +99,8 @@
 	// --- Facet compile-time specialization ---
 	const FACET_DISCARD_WGSL = `
       // Facet filtering: discard vertices not belonging to this cell
-      if (u32(facetIdx) != frameUniforms.activeFacetIdx) {
+      // A negative facet (-1, padded for a NULL facet) is no cell: u32() would clamp it to cell 0.
+      if ((facetIdx < 0.0 || u32(facetIdx) != frameUniforms.activeFacetIdx)) {
         var degen: VertexOutput;
         degen.position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
         return degen;

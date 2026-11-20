@@ -45,7 +45,7 @@
 	};
 	const FILLS: Record<LabelFillMode, number> = { color: 0, inherit: 1, contrast: 2 };
 
-	const BINDINGS = { RECORDS: 0, SLOTS: 1, CONSTANTS: 2, WHOLE: 3 };
+	const BINDINGS = { RECORDS: 0, SLOTS: 1, CONSTANTS: 2, WHOLE: 3, FACETS: 4 };
 	const LABEL_Z_INDEX = 1000;
 
 	interface Props {
@@ -85,8 +85,14 @@
 	const labelHost = getContext<LabelRendererHost>(LABEL_RENDERER_HOST);
 	const gpuCoordinator = getGPUContext();
 
+	// In a facet grid the host's rows are every cell's, and its record holds
+	// each row where its own cell's placement put it: a cell draws its own rows
+	// only, by the host's facet index, as the host's draw does. A negative facet (-1,
+	// padded for a NULL facet) is no cell's: u32() would clamp it to cell 0.
+	const faceted = !!chartContext.fx;
+
 	const host = new RendererHost({
-		markType: `labels-${labelHost.recordKind}`,
+		markType: `labels-${labelHost.recordKind}${faceted ? '-faceted' : ''}`,
 		webGPUContext,
 		gpuCoordinator,
 		chartContext,
@@ -120,6 +126,7 @@
     // f32 per row each, so rebin holds and cuts carry them as any channel.
     @group(1) @binding(${BINDINGS.SLOTS}) var<storage, read> slots: array<f32>;
     @group(1) @binding(${BINDINGS.WHOLE}) var<storage, read> wholes: array<f32>;
+    ${faceted ? `@group(1) @binding(${BINDINGS.FACETS}) var<storage, read> facets: array<f32>;` : ''}
 
     struct VertexOutput {
       @builtin(position) position: vec4<f32>,
@@ -141,6 +148,7 @@
       @builtin(instance_index) i: u32,
     ) -> VertexOutput {
       if (i >= arrayLength(&slots)) { return nothing(); }
+      ${faceted ? 'if (i >= arrayLength(&facets) || (facets[i] < 0.0 || u32(facets[i]) != frameUniforms.activeFacetIdx)) { return nothing(); }' : ''}
       let slot = slots[i];
       if (slot < 0.0) { return nothing(); }
       let whole = select(1.0, wholes[i], i < arrayLength(&wholes));
@@ -236,6 +244,9 @@
 		{ binding: BINDINGS.RECORDS, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
 		{ binding: BINDINGS.SLOTS, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
 		{ binding: BINDINGS.WHOLE, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX },
+		...(faceted
+			? [{ binding: BINDINGS.FACETS, type: 'read-only-storage', visibility: GPUShaderStage.VERTEX }]
+			: []),
 		{
 			binding: BINDINGS.CONSTANTS,
 			type: 'uniform',
@@ -263,6 +274,7 @@
 		);
 		r.setExternalBinding(BINDINGS.SLOTS, () => labelHost.renderer()?.bufferFor(binding));
 		r.setExternalBinding(BINDINGS.WHOLE, () => labelHost.renderer()?.bufferFor(wholeAt));
+		if (faceted) r.setExternalBinding(BINDINGS.FACETS, () => labelHost.facets());
 		hostBound = true;
 	});
 
@@ -290,7 +302,10 @@
 	function draw(pass: GPURenderPassEncoder) {
 		const hostRenderer = labelHost.renderer();
 		const count = hostRenderer?.instanceCount ?? 0;
-		if (!hostBound || !quadBuffer || count === 0 || !renderer.syncExternal()) return;
+		if (!hostBound || !quadBuffer || count === 0) return;
+		// No facet index yet: a stand-in would read as cell 0's for every row.
+		if (faceted && !labelHost.facets()) return;
+		if (!renderer.syncExternal()) return;
 		// Set here, after the sync: a rebuild this frame replaced the bind group
 		// the coordinator set before calling this.
 		pass.setBindGroup(1, renderer.perDataBindGroup!);
@@ -314,10 +329,19 @@
 					label: 'box-labels-geometry'
 				});
 				device.queue.writeBuffer(quadBuffer, 0, corners);
-				r.registerLayer(draw);
+				// Faceted: each cell's layer, registered as the cells resolve (below).
+				if (!faceted) r.registerLayer(draw);
 			}
 		})
 	);
+
+	// A facet grid's cells, as they resolve: one layer per cell, as the host's.
+	$effect(() => {
+		if (!faceted || !renderer?.resourcesCreated) return;
+		const ids = chartContext.facetChartIds;
+		if (!ids?.length) return;
+		renderer.registerFacetLayers(ids, draw);
+	});
 
 	onDestroy(() => {
 		quadBuffer?.destroy();

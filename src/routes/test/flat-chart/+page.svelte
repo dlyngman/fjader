@@ -17,7 +17,9 @@
 		WebGPUCanvas,
 		BarMarkY,
 		Frame,
-		Crosshair
+		Crosshair,
+		Labels,
+		TextMark
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 
@@ -135,6 +137,75 @@
 								{/snippet}
 							</WebGPUCanvas>
 						{/snippet}
+					</ChartContainer>
+				</div>
+			</div>
+
+			<div class="chart-panel">
+				<h3>7. Labels and TextMark, not faceted (control)</h3>
+				<p class="desc">
+					Counts inside the bars' tops (&lt;Labels anchor="inside-end"&gt;) and island names above
+					the bars (TextMark).
+				</p>
+				<div class="chart-wrapper">
+					<ChartContainer xLabel="island" yLabel="count">
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<BarMarkY table="penguins" x="island" y={count()} fill="island"
+							><Labels anchor="inside-end" /></BarMarkY
+						>
+						<TextMark table="penguins" x="island" y={count()} text="island" dy={-14} fontSize={9} />
+					</ChartContainer>
+				</div>
+			</div>
+
+			<div class="chart-panel wide">
+				<h3>8. Labels and TextMark, faceted, with snippets</h3>
+				<p class="desc">
+					As charts are written today. Text in every cell means faceted text works; none means the
+					facet bug predates the flat API.
+				</p>
+				<div class="chart-wrapper">
+					<ChartContainer xLabel="island" yLabel="count" fx="species">
+						{#snippet background()}
+							<Frame />
+							<AxisLeft />
+							<AxisBottom />
+						{/snippet}
+						{#snippet canvas()}
+							<WebGPUCanvas>
+								{#snippet canvasComponents()}
+									<BarMarkY table="penguins" x="island" y={count()} fill="island"
+										><Labels anchor="inside-end" /></BarMarkY
+									>
+									<TextMark
+										table="penguins"
+										x="island"
+										y={count()}
+										text="island"
+										dy={-14}
+										fontSize={9}
+									/>
+								{/snippet}
+							</WebGPUCanvas>
+						{/snippet}
+					</ChartContainer>
+				</div>
+			</div>
+
+			<div class="chart-panel wide">
+				<h3>9. Labels and TextMark, faceted, as children</h3>
+				<p class="desc">The same, flat.</p>
+				<div class="chart-wrapper">
+					<ChartContainer xLabel="island" yLabel="count" fx="species">
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<BarMarkY table="penguins" x="island" y={count()} fill="island"
+							><Labels anchor="inside-end" /></BarMarkY
+						>
+						<TextMark table="penguins" x="island" y={count()} text="island" dy={-14} fontSize={9} />
 					</ChartContainer>
 				</div>
 			</div>
