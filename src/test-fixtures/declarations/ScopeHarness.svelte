@@ -8,8 +8,9 @@
 	} from '$lib/components/charts/declarations.svelte';
 
 	/**
-	 * Test fixture (declaration-scope.test.ts), outside src/lib so it is not packaged: a registry, and a probe placed bare, inside a cell's scope,
-	 * and directly in the chart's children.
+	 * Test fixture (declaration-scope.test.ts), outside src/lib so it is not
+	 * packaged: a registry, and a probe placed bare, inside a cell's scope, and
+	 * directly in the chart's children.
 	 */
 	let { registry }: { registry: DeclarationRegistry } = $props();
 	setContext(DECLARATION_REGISTRY, registry);

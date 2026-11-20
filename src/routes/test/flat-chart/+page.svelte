@@ -3,8 +3,8 @@
 	 * Flat charts: a chart's components as ChartContainer's children, no
 	 * snippets. Each case says what should happen; compare 1 with 2 and 3.
 	 *
-	 *   ?misuse=1  adds case 6: an overlay and a mark placed where they can't
-	 *              draw, for the console warnings (open DevTools first)
+	 *   ?misuse=1  adds case 6: an overlay placed where it can't draw, for the
+	 *              console warning (open DevTools first)
 	 */
 	import { count, loadParquet } from '@uwdata/mosaic-sql';
 	import { initFjader } from '$lib';
@@ -120,8 +120,8 @@
 			<div class="chart-panel">
 				<h3>5. canvas snippet + children</h3>
 				<p class="desc">
-					The snippet owns the canvas (bars draw); the axes and frame among the children still
-					register and draw. One console warning about having both.
+					Mixing works: the children render in the snippet's canvas. The bars (children) draw on the
+					grid (snippet), with axes and frame. No warning.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="island" yLabel="count">
@@ -143,9 +143,8 @@
 				<div class="chart-panel">
 					<h3>6. Misuse (?misuse=1)</h3>
 					<p class="desc">
-						A crosshair as a child: a warning to keep it in foreground. A mark among the children
-						while a canvas snippet owns the canvas: it doesn't draw, and a warning says it has no
-						canvas (besides the one about having both).
+						A crosshair as a child: a warning to keep it in the foreground snippet, and it doesn't
+						draw. Everything else draws.
 					</p>
 					<div class="chart-wrapper">
 						<ChartContainer xLabel="island" yLabel="count">

@@ -14,7 +14,7 @@
  * `DeclarationScope` naming the cell, so a facet grid whose snippets render
  * once per cell gets one declaration per cell, each drawn in its own cell.
  */
-import { getContext, onDestroy } from 'svelte';
+import { getContext, onDestroy, type Snippet } from 'svelte';
 import type { AxisSpec, ParallelAxesSpec } from '../axes/axis-spec';
 
 /** A plot border around the inner plot area (`<Frame/>`). */
@@ -44,6 +44,14 @@ export const DECLARATION_REGISTRY = 'declaration-registry';
 export const DECLARATION_SCOPE = 'declaration-scope';
 /** Set by `ChartCell`: what its canvas draws (`DeclarationRegistry.forCell`). */
 export const CELL_DECLARATIONS = 'cell-declarations';
+/** Set by `ChartContainer`: its children, which the chart's canvas renders. */
+export const CHART_CHILDREN = 'chart-children';
+
+/** A chart's children, as its canvas renders them (`WebGPUCanvas`). */
+export interface ChartChildren {
+	/** The children, inside their `DeclarationScope`; none when the chart has none. */
+	readonly snippet: Snippet | undefined;
+}
 
 export interface DeclarationScopeContext {
 	readonly cellId: string | null;

@@ -4,7 +4,7 @@
 	import type { ChartContext, ContinuousScaleState } from '$lib/types';
 
 	// An overlay draws its own SVG/HTML where it is placed: not yet a declaration.
-	warnIfInChildren('MarginLabel', 'foreground');
+	warnIfInChildren('MarginLabel', 'background');
 
 	interface Props {
 		show?: 'both' | 'x' | 'y';
