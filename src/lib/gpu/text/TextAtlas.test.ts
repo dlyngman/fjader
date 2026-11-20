@@ -106,10 +106,11 @@ describe('TextAtlas surfaces (one per canvas: a facet grid paints one per cell)'
 	function paintWith(
 		atlas: TextAtlas,
 		surface: AtlasSurface,
-		spans: Array<[number, string]>
+		spans: Array<[number, string]>,
+		height = 40
 	): void {
 		const canvas = {
-			getElementImageDefaultSize: () => ({ width: 200, height: 40 })
+			getElementImageDefaultSize: () => ({ width: 200, height })
 		} as unknown as HTMLCanvasElement;
 		const box = { left: 0, top: 0, right: 200, bottom: 40, width: 200, height: 40 };
 		const container = {
@@ -218,5 +219,29 @@ describe('TextAtlas surfaces (one per canvas: a facet grid paints one per cell)'
 
 		atlas.setLaidOut(hidden, true);
 		expect(atlas.isRasterized(slot)).toBe(false);
+	});
+
+	it('an old canvas that took the binding back returns it on detach', () => {
+		// The old canvas paints and grows its texture after the new one bound,
+		// which rebinds the id to it; its detach must hand the id back.
+		const { device, coordinator, bound } = fakeGpu();
+		const atlas = new TextAtlas();
+		const slot = atlas.acquire('r', style);
+		const old = atlas.attach(device, coordinator, 'fx-0');
+		paintWith(atlas, old, [[slot, 'r']]);
+		const fresh = atlas.attach(device, coordinator, 'fx-0');
+		paintWith(atlas, fresh, [[slot, 'r']]);
+		const freshBinding = bound['fx-0'];
+		paintWith(atlas, old, [[slot, 'r']], 4000);
+		expect(bound['fx-0']).not.toBe(freshBinding);
+
+		atlas.detach(old);
+		// The fresh canvas's texture and table again (a new view of them).
+		expect(bound['fx-0']).not.toBeNull();
+		expect((bound['fx-0'] as { entries: unknown }).entries).toBe(
+			(freshBinding as { entries: unknown }).entries
+		);
+		atlas.detach(fresh);
+		expect(bound['fx-0']).toBeNull();
 	});
 });

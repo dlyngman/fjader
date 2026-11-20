@@ -55,6 +55,14 @@
 		});
 	}
 
+	/** Hide or show the first cell's canvas (display: none): it gets no paint events while hidden. */
+	let firstHidden = $state(false);
+	function toggleFirstCell() {
+		const layer = gridEl.querySelector('canvas').parentElement;
+		firstHidden = !firstHidden;
+		layer.style.display = firstHidden ? 'none' : '';
+	}
+
 	function changeLabels() {
 		snapshot();
 		for (const cell of cells) cell.paints = 0;
@@ -98,6 +106,9 @@
 			<div class="paintlog">
 				<button onclick={startCounting}>1. Start counting</button>
 				<button onclick={changeLabels} disabled={cells.length === 0}>2. Change every label</button>
+				<button onclick={toggleFirstCell} disabled={cells.length === 0}
+					>3. {firstHidden ? 'Show' : 'Hide'} first cell</button
+				>
 				<span>changes: {changes}</span>
 				<table>
 					<thead><tr><th>cell</th><th>top (px)</th><th>in view</th><th>paints</th></tr></thead>
@@ -117,7 +128,9 @@
 				<h3>Paint log: 12 facet cells, most below the fold</h3>
 				<p class="desc">
 					Stay at the top. Press 1 once the grid has drawn, then 2: every label's string changes. Do
-					the offscreen cells' paint counts move? Do the visible cells' labels update?
+					the offscreen cells' paint counts move? Do the visible cells' labels update? Then 3 hides
+					the first cell (display: none); press 2 again: the other cells' labels must still update,
+					though the hidden cell no longer paints.
 				</p>
 				<div class="tall-grid" bind:this={gridEl}>
 					<ChartContainer

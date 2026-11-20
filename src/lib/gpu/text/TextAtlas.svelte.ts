@@ -428,8 +428,20 @@ export class TextAtlas {
 	detach(surface: AtlasSurface): void {
 		if (!this.#surfaces.delete(surface)) return;
 		if (this.#boundBy.get(surface.chartId) === surface) {
-			this.#coordinator?.setChartTextAtlas(surface.chartId, null);
-			this.#boundBy.delete(surface.chartId);
+			// Another canvas with this chart id (a facet cell that took the id while
+			// this one was still alive) gets the binding back, if it has a texture;
+			// otherwise none: a surface binds when its texture is first created.
+			const other = [...this.#surfaces].find((s) => s.chartId === surface.chartId && s.texture);
+			if (other && other.texture && other.entries) {
+				this.#coordinator?.setChartTextAtlas(other.chartId, {
+					view: other.texture.createView(),
+					entries: other.entries
+				});
+				this.#boundBy.set(other.chartId, other);
+			} else {
+				this.#coordinator?.setChartTextAtlas(surface.chartId, null);
+				this.#boundBy.delete(surface.chartId);
+			}
 		}
 		surface.texture?.destroy();
 		surface.entries?.destroy();

@@ -55,6 +55,14 @@
 	/** This canvas's surface of the atlas, once it is attached. */
 	let atlasSurface = $state.raw<AtlasSurface | null>(null);
 	/**
+	 * The canvas element's own size, as laid out (0 under display: none). Not the
+	 * chart's layout, which keeps its last size while the cell measures 0, nor its
+	 * inner size, which is 0 in a cell narrower than its margins while its canvas
+	 * still paints.
+	 */
+	let canvasClientWidth = $state(0);
+	let canvasClientHeight = $state(0);
+	/**
 	 * What the cell declared (axes, parallel axes, the plot border), drawn here,
 	 * on the GPU. None in a facet grid's pass-through canvas: each cell draws its own.
 	 */
@@ -332,7 +340,7 @@
 	// canvas still paints (AtlasSurface.laidOut says why).
 	$effect(() => {
 		const surface = atlasSurface;
-		if (surface) textAtlas.setLaidOut(surface, width > 0 && height > 0);
+		if (surface) textAtlas.setLaidOut(surface, canvasClientWidth > 0 && canvasClientHeight > 0);
 	});
 
 	$effect(() => {
@@ -374,7 +382,14 @@
 		canvas lays out its children without painting them, and draws them on
 		request. Its one child is the text atlas.
 	-->
-	<canvas bind:this={canvas} content="drawable" layoutsubtree onpaint={handlePaint}>
+	<canvas
+		bind:this={canvas}
+		bind:clientWidth={canvasClientWidth}
+		bind:clientHeight={canvasClientHeight}
+		content="drawable"
+		layoutsubtree
+		onpaint={handlePaint}
+	>
 		{#if textAtlas.items.length > 0 || textAtlas.swatches.length > 0}
 			<div
 				class="fjader-text-atlas"
