@@ -1,55 +1,21 @@
 <script lang="ts">
-	import { warnIfInChildren } from '$lib/components/charts/declarations.svelte';
-	import { getContext } from 'svelte';
-	import type { ChartContext, ContinuousScaleState } from '$lib/types';
+	import { declareOverlay } from '$lib/components/charts/declarations.svelte';
+	import MarginLabelCell from './MarginLabelCell.svelte';
 
-	// An overlay draws its own SVG/HTML where it is placed: not yet a declaration.
-	warnIfInChildren('MarginLabel', 'background');
-
+	/**
+	 * The pointer's values, in the margins: x above the plot, y to its right.
+	 * A declaration: each cell draws it in its unclipped margins
+	 * (MarginLabelCell), over the plot and the axes, from its own hover point.
+	 */
 	interface Props {
 		show?: 'both' | 'x' | 'y';
 	}
 
 	let { show = 'both' }: Props = $props();
 
-	const c = getContext<ChartContext>('chart');
-
-	const xFormatter = $derived(
-		c.xScaleState && c.xScaleState.scaleType !== 'band'
-			? (v: unknown) => (c.xScaleState as ContinuousScaleState).formatValue(v as number)
-			: String
-	);
-	const yFormatter = $derived(
-		c.yScaleState && c.yScaleState.scaleType !== 'band'
-			? (v: unknown) => (c.yScaleState as ContinuousScaleState).formatValue(v as number)
-			: String
-	);
+	declareOverlay(cell, { slot: 'margins' });
 </script>
 
-{#if c.xScale && c.yScale && c.innerHeight && c.innerWidth}
-	<g class="margin-label">
-		{#if c.currentXScreenPoint && c.currentXDataPoint && (show === 'both' || show === 'x') && c.active}
-			<text text-anchor="middle" x={c.currentXScreenPoint} y={-5}>
-				{xFormatter(c.currentXDataPoint)}
-			</text>
-		{/if}
-		{#if c.currentYScreenPoint && c.currentYDataPoint && (show === 'both' || show === 'y') && c.active}
-			<text
-				text-anchor="start"
-				dominant-baseline="middle"
-				x={c.innerWidth + 5}
-				y={c.currentYScreenPoint}
-			>
-				{yFormatter(c.currentYDataPoint)}
-			</text>
-		{/if}
-	</g>
-{/if}
-
-<style>
-	text {
-		fill: var(--fjader-text-secondary, #6b7280);
-		font-family: var(--fjader-font, system-ui, sans-serif);
-		font-size: 10px;
-	}
-</style>
+{#snippet cell()}
+	<MarginLabelCell {show} />
+{/snippet}

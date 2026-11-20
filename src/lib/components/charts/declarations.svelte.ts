@@ -1,12 +1,14 @@
 /**
  * What a chart draws because a component declared it, rather than rendered it
- * where it was placed: axes, parallel axes, the plot border.
+ * where it was placed: axes, parallel axes, the plot border, and SVG overlays.
  *
- * A declaration component (`AxisLeft`, `AxisBottom`, `ParallelAxes`, `Frame`)
- * registers its settings here, as getters over its props, and reads no chart
- * context where it is placed: what it needs per cell runs in the component the
- * cell draws it with (`GpuAxis`, `GpuParallelAxes`, `PlotBorderRenderer`, in
- * the cell's `WebGPUCanvas`).
+ * A declaration component registers its settings here and reads no chart
+ * context where it is placed: what it needs per cell runs in what each cell
+ * draws it with. GPU declarations (`AxisLeft`, `AxisBottom`, `ParallelAxes`,
+ * `Frame`) register getters over their props, drawn in the cell's
+ * `WebGPUCanvas` (`GpuAxis`, `GpuParallelAxes`, `PlotBorderRenderer`). Overlays
+ * (`Crosshair`, `MarginLabel`, `AxisCenter`, `SvgLayer`) register a snippet the
+ * cell renders in its foreground SVG (`declareOverlay`).
  *
  * One registry per chart (`ChartContainer`). A declaration is for every cell
  * of the chart, or for one: `ChartCell` renders its per-cell snippets
@@ -16,16 +18,40 @@
  */
 import { getContext, onDestroy, type Snippet } from 'svelte';
 import type { AxisSpec, ParallelAxesSpec } from '../axes/axis-spec';
+import type { ChartContext } from '$lib/types';
 
 /** A plot border around the inner plot area (`<Frame/>`). */
 export interface FrameSpec {
 	readonly id: string;
 }
 
+/**
+ * Where in a cell's foreground SVG an overlay draws: `clipped`, inside the plot
+ * clip, under the hover dot and the hit target (Crosshair, AxisCenter,
+ * SvgLayer); `margins`, unclipped, over the plot and its margins, taking no
+ * pointer events (MarginLabel, SvgLayer clip={false}).
+ */
+export type OverlaySlot = 'clipped' | 'margins';
+
+/**
+ * An SVG overlay (`declareOverlay`): a snippet each cell renders in its
+ * foreground SVG, with the cell's chart context. Defined where the overlay is
+ * declared, so it reads that component's props reactively; rendered in the
+ * cell, so a component inside it reads the cell's context (its hover point,
+ * scales, size).
+ */
+export interface OverlaySpec {
+	readonly snippet: Snippet<[ChartContext]>;
+	readonly slot: OverlaySlot;
+	/** Draw order within the slot, lower first. Registration order breaks ties only. */
+	readonly zIndex: number;
+}
+
 interface Specs {
 	axis: AxisSpec;
 	parallel: ParallelAxesSpec;
 	frame: FrameSpec;
+	overlay: OverlaySpec;
 }
 
 export type DeclarationKind = keyof Specs;
@@ -61,8 +87,8 @@ export interface DeclarationScopeContext {
 	readonly cellId: string | null;
 	/**
 	 * Placed directly in a chart (`ChartContainer`'s children), not in one of
-	 * its snippets. Read by the overlays that can't be placed there yet
-	 * (`warnIfInChildren`).
+	 * its snippets. Read by the components that can't be placed there yet
+	 * (`warnIfInChildren`): the toggles, the brushes, the legend.
 	 */
 	readonly inChildren: boolean;
 }
@@ -111,14 +137,35 @@ export class CellDeclarations {
 	get frames(): FrameSpec[] {
 		return this.of('frame');
 	}
+
+	/** The overlays this cell draws in `slot`, in draw order (orderOverlays). */
+	overlays(slot: OverlaySlot): OverlaySpec[] {
+		return orderOverlays(this.of('overlay').filter((o) => o.slot === slot));
+	}
 }
 
 /**
- * For a component that renders its own SVG or HTML where it is placed (an
- * overlay: a crosshair, a brush, a toggle, a legend): warn when it is a direct
- * child of a chart. Children render inside the chart's canvas layer, where such
- * a component can't draw or take pointer events; it belongs in its snippet
- * until it is a declaration too. Call during component initialisation.
+ * Overlays in draw order: by zIndex, and by registration order among equals.
+ * Registration order alone is not stable: an overlay in a toggled {#if}
+ * registers again at the end, and a chart's children register once its canvas
+ * is ready, after the declarations in its snippets. A zIndex is the only
+ * guaranteed order. A new array; the specs themselves, so a keyed {#each}
+ * keeps each overlay mounted.
+ */
+export function orderOverlays(overlays: readonly OverlaySpec[]): OverlaySpec[] {
+	return overlays
+		.map((o, i) => [o, i] as const)
+		.sort(([a, i], [b, j]) => a.zIndex - b.zIndex || i - j)
+		.map(([o]) => o);
+}
+
+/**
+ * For a component that still renders its own SVG or HTML where it is placed
+ * (a brush, a toggle, a legend; the crosshair and the readout are declared
+ * overlays now): warn when it is a direct child of a chart. Children render
+ * inside the chart's canvas layer, where such a component can't draw or take
+ * pointer events; it belongs in its snippet until it is a declaration too.
+ * Call during component initialisation.
  */
 export function warnIfInChildren(component: string, snippet: string): void {
 	const scope = getContext<DeclarationScopeContext | undefined>(DECLARATION_SCOPE);
@@ -127,6 +174,29 @@ export function warnIfInChildren(component: string, snippet: string): void {
 		`fjader: <${component}> can't be a direct child of <ChartContainer> yet; ` +
 			`place it in the chart's \`${snippet}\` snippet.`
 	);
+}
+
+/**
+ * Declare an SVG overlay in the chart this component is placed in: `snippet`
+ * renders in every cell's foreground SVG (or the cell its scope names), in
+ * `slot`, with the cell's chart context. `options` may hold getters (it is read
+ * on every use). Call during component initialisation.
+ */
+export function declareOverlay(
+	snippet: Snippet<[ChartContext]>,
+	options: { readonly slot: OverlaySlot; readonly zIndex?: number }
+): void {
+	// Read through the options on every use, so options given as getters over
+	// props (SvgLayer's clip and zIndex) move and reorder the overlay live.
+	declareInChart('overlay', {
+		snippet,
+		get slot() {
+			return options.slot;
+		},
+		get zIndex() {
+			return options.zIndex ?? 0;
+		}
+	});
 }
 
 /**

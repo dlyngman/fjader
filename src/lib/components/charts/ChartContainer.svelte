@@ -533,6 +533,11 @@
 		}
 	};
 	setContext(CHART_CHILDREN, chartChildren);
+	// The canvas renders the children once WebGPU is ready (in a facet grid's
+	// pass-through, at once). So declarations among them, SVG overlays too,
+	// register then: without WebGPU, none (the chart shows its error box and
+	// has no marks to hover), and after any declared in snippets, which is why
+	// overlays order by zIndex, not by registration (orderOverlays).
 	const chartCanvas = $derived(canvas ?? (children ? flatCanvas : undefined));
 </script>
 

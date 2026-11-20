@@ -26,7 +26,7 @@ describe('DeclarationScope', () => {
 		registry.register = register;
 		for (const d of registered) registry.register(d);
 
-		expect(registered.map((d) => [d.spec.id, d.cellId])).toEqual([
+		expect(registered.map((d) => ['id' in d.spec ? d.spec.id : '', d.cellId])).toEqual([
 			['bare', null],
 			['in-cell-a', 'cell-a'],
 			['in-children', null]

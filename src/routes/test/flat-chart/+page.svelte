@@ -23,8 +23,11 @@
 		Crosshair,
 		Labels,
 		TextMark,
-		DotsMark
+		DotsMark,
+		MarginLabel,
+		SvgLayer
 	} from '$lib/components';
+	import { Toggle } from '$lib/interactors';
 	import { Grid } from '$lib/components/guides';
 
 	const { queryEngine } = initFjader();
@@ -179,7 +182,10 @@
 
 			<div class="chart-panel">
 				<h3>2. Flat children</h3>
-				<p class="desc">The same chart, no snippets. No SVG under the canvas.</p>
+				<p class="desc">
+					The same chart, no snippets, plus a crosshair and the hover readout as children. No SVG
+					under the canvas.
+				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="island" yLabel="count">
 						<Frame />
@@ -187,13 +193,18 @@
 						<AxisLeft />
 						<AxisBottom />
 						<BarMarkY table="penguins" x="island" y={count()} fill="island" />
+						<Crosshair />
+						<MarginLabel />
 					</ChartContainer>
 				</div>
 			</div>
 
 			<div class="chart-panel wide">
 				<h3>3. Flat children, faceted by species</h3>
-				<p class="desc">One declaration of each: every cell has its frame and both axes, once.</p>
+				<p class="desc">
+					One declaration of each: every cell has its frame and both axes, once, and its own
+					crosshair and readout where the pointer is (the readout clear of the cell labels).
+				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="island" yLabel="count" fx="species">
 						<Frame />
@@ -201,6 +212,8 @@
 						<AxisLeft />
 						<AxisBottom />
 						<BarMarkY table="penguins" x="island" y={count()} fill="island" />
+						<Crosshair />
+						<MarginLabel />
 					</ChartContainer>
 				</div>
 			</div>
@@ -316,8 +329,9 @@
 				<h3>10. A fixed annotation in a facet grid</h3>
 				<p class="desc">
 					A TextMark without a table ("note" at bill length 45, depth 20) has no facet: every
-					species cell draws it. (Numeric axes: a band axis takes category ids, not names, so a
-					tableless TextMark can't be placed on one by name.)
+					species cell draws it. Two SvgLayers: a dashed line at depth 18 (clipped to the plot) and
+					"depth 18" in the right margin (clip=false). (A band axis takes category ids, not names,
+					so a tableless TextMark can't be placed on one by name.)
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="bill_length" yLabel="bill_depth" fx="species">
@@ -326,6 +340,25 @@
 						<AxisBottom />
 						<DotsMark table="penguins" x="bill_length" y="bill_depth" fill="species" />
 						<TextMark x={[45]} y={[20]} text={['note']} fontSize={11} />
+						<SvgLayer>
+							{#snippet children(cell)}
+								<line
+									x1={0}
+									x2={cell.innerWidth}
+									y1={cell.yScale(18)}
+									y2={cell.yScale(18)}
+									stroke="tomato"
+									stroke-dasharray="4 3"
+								/>
+							{/snippet}
+						</SvgLayer>
+						<SvgLayer clip={false}>
+							{#snippet children(cell)}
+								<text x={cell.innerWidth + 4} y={cell.yScale(18)} fill="tomato" font-size="10"
+									>depth 18</text
+								>
+							{/snippet}
+						</SvgLayer>
 					</ChartContainer>
 				</div>
 			</div>
@@ -334,15 +367,15 @@
 				<div class="chart-panel">
 					<h3>6. Misuse (?misuse=1)</h3>
 					<p class="desc">
-						A crosshair as a child: a warning to keep it in the foreground snippet, and it doesn't
-						draw. Everything else draws.
+						A Toggle as a child: a warning to keep it in the interactors snippet (overlays like the
+						crosshair are children now; the toggles and brushes follow).
 					</p>
 					<div class="chart-wrapper">
 						<ChartContainer xLabel="island" yLabel="count">
 							<Frame />
 							<AxisLeft />
 							<AxisBottom />
-							<Crosshair />
+							<Toggle field="island" />
 							<BarMarkY table="penguins" x="island" y={count()} fill="island" />
 							{#snippet canvas()}
 								<WebGPUCanvas>
