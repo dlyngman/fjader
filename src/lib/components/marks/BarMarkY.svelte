@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { withFacetKeys } from '$lib/gpu/text/TextSlots';
 	import { getContext, setContext, onDestroy, untrack, type Snippet } from 'svelte';
 	import { LABEL_MARK_HOST, LABEL_RENDERER_HOST, type LabelMarkHost } from '../labels/label-host';
 	import { LabelRendererHolder } from '../labels/LabelRendererHolder.svelte';
@@ -331,7 +332,8 @@
 				return { kind: 'field', field: entry.fill };
 			return null;
 		},
-		rowKeys: () => x0Data ?? null,
+		// The bar's category id, and in a facet grid its facet too (withFacetKeys).
+		rowKeys: () => withFacetKeys(x0Data ?? null, setup?.facetData),
 		addSelect(alias, field) {
 			labelFields = { ...labelFields, [alias]: field };
 			return () => {

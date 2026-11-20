@@ -22,7 +22,8 @@
 		Frame,
 		Crosshair,
 		Labels,
-		TextMark
+		TextMark,
+		DotsMark
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
 
@@ -264,8 +265,8 @@
 			<div class="chart-panel wide">
 				<h3>8. Labels and TextMark, faceted, with snippets</h3>
 				<p class="desc">
-					As charts are written today. Counts (&lt;Labels&gt;) in every species cell, each cell its
-					own. The island names (TextMark) don't draw in facet grids yet.
+					As charts are written today. Counts (&lt;Labels&gt;) and island names (TextMark) in every
+					species cell, each cell its own.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="island" yLabel="count" fx="species">
@@ -307,6 +308,24 @@
 							><Labels anchor="inside-end" /></BarMarkY
 						>
 						<TextMark table="penguins" x="island" y={count()} text="island" dy={-14} fontSize={9} />
+					</ChartContainer>
+				</div>
+			</div>
+
+			<div class="chart-panel wide">
+				<h3>10. A fixed annotation in a facet grid</h3>
+				<p class="desc">
+					A TextMark without a table ("note" at bill length 45, depth 20) has no facet: every
+					species cell draws it. (Numeric axes: a band axis takes category ids, not names, so a
+					tableless TextMark can't be placed on one by name.)
+				</p>
+				<div class="chart-wrapper">
+					<ChartContainer xLabel="bill_length" yLabel="bill_depth" fx="species">
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<DotsMark table="penguins" x="bill_length" y="bill_depth" fill="species" />
+						<TextMark x={[45]} y={[20]} text={['note']} fontSize={11} />
 					</ChartContainer>
 				</div>
 			</div>

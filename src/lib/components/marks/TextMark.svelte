@@ -15,7 +15,7 @@
 	} from './utils';
 	import { buildReactiveConfig } from './utils/reactive-config';
 	import Texts from '../rendering/Texts.svelte';
-	import { TextSlots } from '$lib/gpu/text/TextSlots';
+	import { TextSlots, withFacetKeys } from '$lib/gpu/text/TextSlots';
 	import type { TextAtlas, TextStyle } from '$lib/gpu/text/TextAtlas.svelte';
 	import type {
 		FieldRef,
@@ -107,10 +107,6 @@
 	const gpuCoordinator = getContext<GPUCoordinator | undefined>('gpu-coordinator') ?? null;
 	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
-
-	if (chartContext.fx) {
-		console.warn('[fjader] TextMark does not draw in faceted charts yet.');
-	}
 
 	let setup = $state<MarkLifecycleV2 | null>(null);
 
@@ -261,9 +257,13 @@
 	$effect(() => {
 		const rows = labels;
 		const s = style;
-		// A row's key: its category's id on the band axis it is aligned on, if any.
+		// A row's key: its category's id on the band axis it is aligned on, if any,
+		// and in a facet grid its facet too (withFacetKeys).
 		const band = setup?.alignedBand;
-		const keys = band === 'x' ? xData : band === 'y' ? yData : null;
+		const keys = withFacetKeys(
+			band === 'x' ? xData : band === 'y' ? yData : null,
+			setup?.facetData
+		);
 		untrack(() => {
 			const interim = textSlots.stage(rows, s, keys);
 			if (interim) slotData = interim;
@@ -339,7 +339,7 @@
 	});
 </script>
 
-{#if !chartContext.fx && (setup?.gpuReady || !table) && markColor.ready && xData && yData && slotData}
+{#if (setup?.gpuReady || !table) && markColor.ready && xData && yData && slotData}
 	<Texts
 		{markId}
 		{xData}
@@ -358,5 +358,7 @@
 		dataVersion={setup?.dataVersion || 0}
 		landsFor={setup?.landsFor ?? 0}
 		bandAxis={setup?.alignedBand ?? null}
+		facetData={setup?.facetData ?? null}
+		rowsHaveFacets={!!table}
 	/>
 {/if}

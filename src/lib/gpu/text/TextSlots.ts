@@ -108,3 +108,25 @@ export class TextSlots {
 		this.#currentKeys = null;
 	}
 }
+
+/**
+ * Row keys for a facet grid: a row's category id is the same in every cell, so
+ * a key that is only the category would match a row that moved to another
+ * cell, and show that cell the old cell's string until the new one is
+ * painted. Facet and category together, as one exact number (facet × 2³² +
+ * category: facet and category ids are integers well inside 2²¹ and 2³²).
+ * The keys as they are outside a facet grid; null (rows matched by index)
+ * if keys and facets ever differ in length, which a row past the shorter one
+ * would otherwise compare as undefined === undefined, unchanged.
+ */
+export function withFacetKeys(
+	keys: ArrayLike<number> | null,
+	facets: ArrayLike<number> | null | undefined
+): ArrayLike<number> | null {
+	if (!keys || !facets) return keys;
+	if (keys.length !== facets.length) return null;
+	const n = keys.length;
+	const out = new Float64Array(n);
+	for (let i = 0; i < n; i++) out[i] = facets[i] * 4294967296 + keys[i];
+	return out;
+}

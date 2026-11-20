@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TextSlots } from './TextSlots';
+import { TextSlots, withFacetKeys } from './TextSlots';
 import type { TextAtlas, TextStyle } from './TextAtlas.svelte';
 
 const style: TextStyle = { fontSize: 11, fontWeight: 'normal', fontFamily: null };
@@ -125,5 +125,28 @@ describe('TextSlots', () => {
 		slots.stage(['b'], style);
 		slots.destroy();
 		expect(atlas.live()).toEqual([]);
+	});
+});
+
+describe('withFacetKeys', () => {
+	it('is the keys themselves outside a facet grid', () => {
+		const keys = new Float32Array([3, 4]);
+		expect(withFacetKeys(keys, null)).toBe(keys);
+		expect(withFacetKeys(null, new Float32Array([0, 1]))).toBeNull();
+	});
+
+	it('tells the same category in two cells apart, and keeps one cell’s rows equal', () => {
+		// Row 1 is Dream in cell 0, then Dream in cell 1: no longer the same row.
+		const before = withFacetKeys(new Float32Array([2, 5]), new Float32Array([0, 0]))!;
+		const after = withFacetKeys(new Float32Array([2, 5]), new Float32Array([0, 1]))!;
+		expect(after[0]).toBe(before[0]);
+		expect(after[1]).not.toBe(before[1]);
+		// Exact: a category id differs by 1, so do the keys.
+		const k = withFacetKeys(new Float32Array([7, 8]), new Float32Array([3, 3]))!;
+		expect(k[1] - k[0]).toBe(1);
+	});
+
+	it('matches rows by index when keys and facets differ in length', () => {
+		expect(withFacetKeys(new Float32Array([1, 2, 3]), new Float32Array([0, 0]))).toBeNull();
 	});
 });

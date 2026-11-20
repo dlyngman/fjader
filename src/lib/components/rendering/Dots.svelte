@@ -387,7 +387,7 @@
 			// the pipeline. Skip this mark's draw until the facet data lands. (#193)
 			const facetBuffer = renderer.getVertexBuffer(FACET_VERTEX_SLOT);
 			if (!facetBuffer) return;
-			passEncoder.setVertexBuffer(1, facetBuffer);
+			passEncoder.setVertexBuffer(FACET_VERTEX_SLOT, facetBuffer);
 		}
 		passEncoder.draw(quadVertexCount, renderer.instanceCount);
 	}
