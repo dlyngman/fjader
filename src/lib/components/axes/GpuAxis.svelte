@@ -67,7 +67,8 @@
 	});
 
 	const formatter: (value: unknown) => string = $derived.by(() => {
-		if (spec.tickFormat) return spec.tickFormat;
+		// A specifier string is applied by the scale's formatter (set above).
+		if (typeof spec.tickFormat === 'function') return spec.tickFormat;
 		const s = scale;
 		if (s && 'tickFormatFor' in s)
 			return (s as ContinuousScaleState).tickFormatFor() as (value: unknown) => string;

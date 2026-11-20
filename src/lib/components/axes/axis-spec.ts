@@ -5,12 +5,18 @@
  * (`charts/declarations.svelte.ts`).
  */
 
+/**
+ * A tick format: a function, or a d3-format specifier (`'+%'`, `',.0f'`) the
+ * scale applies with the precision its tick step needs.
+ */
+export type TickFormat = string | ((value: unknown) => string);
+
 /** One axis's settings, read through getters so they stay the component's props. */
 export interface AxisSpec {
 	readonly id: string;
 	readonly side: 'bottom' | 'left';
 	readonly ticksNumber: number;
-	readonly tickFormat: ((value: unknown) => string) | null;
+	readonly tickFormat: TickFormat | null;
 	readonly title: boolean;
 	/** Bottom: where along the axis the title sits. */
 	readonly titleAnchor: 'start' | 'center' | 'end';

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { declareInChart } from '../charts/declarations.svelte';
-	import type { AxisSpec } from './axis-spec';
+	import type { AxisSpec, TickFormat } from './axis-spec';
 
 	/**
 	 * The x axis, below the plot: its ticks, their labels, and the scale's label
@@ -10,7 +10,11 @@
 	 */
 	interface Props {
 		ticksNumber?: number;
-		tickFormat?: ((value: unknown) => string) | null;
+		/**
+		 * A function, or a d3-format specifier (`'+%'`): either becomes the
+		 * scale's format too, for tooltips and the hover readout.
+		 */
+		tickFormat?: TickFormat | null;
 		/**
 		 * Draw the scale's label as the axis title (default). `false` draws none; the
 		 * label still names the scale, so charts sharing it still link their zoom.
