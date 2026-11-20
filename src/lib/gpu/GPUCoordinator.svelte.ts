@@ -169,10 +169,14 @@ function layerCanDraw(layer: LayerConfig, chartScalesKnown: boolean): boolean {
 	);
 }
 
-/** A guide (a grid line, an axis) rather than data: it neither enters nor starts the entrance. */
+/** A guide (a grid line, an axis, a plot border) rather than data: it neither enters nor starts the entrance. */
 function isGuideLayer(layer: LayerConfig): boolean {
-	// Axes draw as soon as the scales exist, before any data: not the entrance.
-	return layer.markType.startsWith('grid-line-') || layer.markType.startsWith('axis-');
+	// Axes and plot borders draw as soon as the scales exist, before any data: not the entrance.
+	return (
+		layer.markType.startsWith('grid-line-') ||
+		layer.markType.startsWith('axis-') ||
+		layer.markType === 'plot-border'
+	);
 }
 
 export interface DataBindingEntry {

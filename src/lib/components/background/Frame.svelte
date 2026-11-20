@@ -1,21 +1,17 @@
 <script lang="ts">
-	import { getContext } from 'svelte';
-	import type { ChartContext } from '$lib/types';
+	import { getContext, onDestroy } from 'svelte';
+	import { AXIS_REGISTRY, type AxisRegistry, type FrameSpec } from '../axes/axis-registry.svelte';
 
-	const c = getContext<ChartContext>('chart');
+	/**
+	 * The plot area's border: a 1 CSS px frame around the inner plot box.
+	 * Drawn on the GPU in cell space (`PlotBorderRenderer`): this component
+	 * declares the frame in the chart's registry wherever it is placed, and
+	 * `WebGPUCanvas` draws it.
+	 */
+	const registry = getContext<AxisRegistry | undefined>(AXIS_REGISTRY);
+	const spec: FrameSpec = {
+		id: `frame-${crypto.randomUUID().slice(0, 8)}`
+	};
+	const unregister = registry?.registerFrame(spec);
+	onDestroy(() => unregister?.());
 </script>
-
-{#if c.xScale && c.yScale && c.innerHeight && c.innerWidth}
-	<g class="frame">
-		<line x1={0} x2={0} y1={0} y2={c.innerHeight} />
-		<line x1={0} x2={c.innerWidth} y1={0} y2={0} />
-		<line x1={0} x2={c.innerWidth} y1={c.innerHeight} y2={c.innerHeight} />
-		<line x1={c.innerWidth} x2={c.innerWidth} y1={0} y2={c.innerHeight} />
-	</g>
-{/if}
-
-<style>
-	line {
-		stroke: var(--fjader-text-muted, #d1d5db);
-	}
-</style>
