@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { isNegativeOrNanExpr } from '$lib/gpu/NanShaderLib';
 	import { UNIFORM_BYTES } from './uniform-sizes';
-	import { getContext, onMount, onDestroy } from 'svelte';
+	import { getContext, onMount, onDestroy, untrack } from 'svelte';
 	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { ATLAS_WGSL } from '$lib/gpu/text/atlas-bindings';
@@ -82,6 +82,11 @@
 		bandAxis?: 'x' | 'y' | null;
 		/** In a facet grid, each row's facet index: a cell draws its own rows (see Dots). */
 		facetData?: Float32Array | null;
+		/**
+		 * In a facet grid, whether the rows carry a facet (a mark with a table).
+		 * False for a fixed annotation, which every cell draws whole.
+		 */
+		rowsHaveFacets?: boolean;
 	}
 
 	let {
@@ -104,7 +109,8 @@
 		rotate = 0,
 		markId = '',
 		bandAxis = null,
-		facetData = null
+		facetData = null,
+		rowsHaveFacets = true
 	}: Props = $props();
 
 	const morphX = $derived(bandAxis === 'y');
@@ -114,13 +120,17 @@
 	const webGPUContext = getContext<WebGPUCanvasContext>('webgpu-canvas');
 	const gpuCoordinator = getGPUContext();
 
-	// Facet index: vertex slot 1, a per-instance attribute (not a storage
-	// buffer), as Dots and Rects take it. Read once, as the facet is.
-	const faceted = !!chartContext.fx;
+	// In a facet grid each cell draws this layer (perCell). Rows that carry a
+	// facet are filtered to their own cell (filtered): the facet index arrives
+	// in vertex slot 1, a per-instance attribute (not a storage buffer), as Dots
+	// and Rects take it. A fixed annotation has none, and every cell draws it
+	// whole. Read once, as the facet is.
+	const perCell = !!chartContext.fx;
+	const filtered = perCell && untrack(() => rowsHaveFacets);
 	const FACET_VERTEX_SLOT = 1;
 
 	const host = new RendererHost({
-		markType: faceted ? 'texts-faceted' : 'texts',
+		markType: filtered ? 'texts-faceted' : 'texts',
 		webGPUContext,
 		gpuCoordinator,
 		chartContext,
@@ -174,11 +184,11 @@
     @vertex
     fn vertexMain(
       @location(0) corner: vec2<f32>,
-      ${faceted ? '@location(1) facetIdx: f32,' : ''}
+      ${filtered ? '@location(1) facetIdx: f32,' : ''}
       @builtin(instance_index) instanceIdx: u32,
     ) -> VertexOutput {
       ${
-				faceted
+				filtered
 					? `// A cell draws its own rows. A negative or NaN facet (a NULL facet) is no cell; u32() would put it in cell 0.
       if (${isNegativeOrNanExpr('facetIdx')} || u32(facetIdx) != frameUniforms.activeFacetIdx) { return nothing(); }`
 					: ''
@@ -251,7 +261,7 @@
 			arrayStride: 2 * 4,
 			attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' as GPUVertexFormat }]
 		},
-		...(faceted
+		...(filtered
 			? [
 					{
 						arrayStride: 4,
@@ -301,12 +311,12 @@
 		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.SLOT, slotData);
 	});
 	$effect(() => {
-		if (renderer?.resourcesCreated && faceted && facetData)
+		if (renderer?.resourcesCreated && filtered && facetData)
 			renderer.writeVertexBuffer(FACET_VERTEX_SLOT, facetData);
 	});
 	// A facet grid's cells, as they resolve: one layer per cell.
 	$effect(() => {
-		if (!renderer?.resourcesCreated || !faceted) return;
+		if (!renderer?.resourcesCreated || !perCell) return;
 		const ids = chartContext.facetChartIds;
 		if (!ids?.length) return;
 		renderer.registerFacetLayers(ids, drawTexts);
@@ -349,13 +359,15 @@
 	function drawTexts(passEncoder: GPURenderPassEncoder) {
 		if (!quadGeometryBuffer || renderer.instanceCount === 0) return;
 		passEncoder.setVertexBuffer(0, quadGeometryBuffer);
-		if (faceted) {
+		if (filtered) {
 			// The faceted pipeline declares vertex slot 1: drawing without it is a
 			// validation error that loses every mark in the submit (#193). Skip
 			// until the facet data lands.
+			// Nor while it holds fewer rows than are drawn: a result with no rows
+			// still draws one instance (TextSlots keeps a slot).
 			const facetBuffer = renderer.getVertexBuffer(FACET_VERTEX_SLOT);
-			if (!facetBuffer) return;
-			passEncoder.setVertexBuffer(1, facetBuffer);
+			if (!facetBuffer || facetBuffer.size < renderer.instanceCount * 4) return;
+			passEncoder.setVertexBuffer(FACET_VERTEX_SLOT, facetBuffer);
 		}
 		passEncoder.draw(6, renderer.instanceCount);
 	}
@@ -377,7 +389,7 @@
 				});
 				device.queue.writeBuffer(quadGeometryBuffer, 0, corners);
 				// Faceted: each cell's layer, registered as the cells resolve (above).
-				if (!faceted) r.registerLayer(drawTexts);
+				if (!perCell) r.registerLayer(drawTexts);
 			}
 		})
 	);
