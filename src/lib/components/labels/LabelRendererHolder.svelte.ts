@@ -23,6 +23,8 @@ export interface AttachedRenderer {
 	renderer(): BaseGPURenderer | null;
 	recordBinding: number;
 	color(): LabelHostColor;
+	/** Each row's facet index in a facet grid (LabelRendererHost.facets). */
+	facets(): GPUBuffer | undefined;
 }
 
 /** Bindings past every binding a host's draw and kernels declare. */
@@ -70,5 +72,9 @@ export class LabelRendererHolder implements LabelRendererHost {
 
 	color(): LabelHostColor {
 		return this.#attached?.color() ?? { mode: 0, scaleIndex: 0, constant: [0, 0, 0, 1] };
+	}
+
+	facets(): GPUBuffer | undefined {
+		return this.#attached?.facets();
 	}
 }

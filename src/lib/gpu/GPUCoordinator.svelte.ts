@@ -485,6 +485,10 @@ export class GPUCoordinator {
 	// =========================================================================
 	// VIEWPORT VISIBILITY (IntersectionObserver + Page Visibility API)
 	// =========================================================================
+	// Whether a chart is worth spending work on: in view (200 px margin) and
+	// the page shown. Not whether its canvas gets paint events: an offscreen
+	// canvas still paints, and the text atlas waits on that instead, per
+	// canvas (AtlasSurface.laidOut in gpu/text/TextAtlas.svelte.ts).
 	#visibilityObserver: IntersectionObserver | null = null;
 	#observedElements = new Map<string, HTMLElement>(); // chartId -> element
 	#visibilityCallbacks = new Map<string, (visible: boolean) => void>();

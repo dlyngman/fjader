@@ -4,7 +4,7 @@
 	import { parseColorToRGBA } from '$lib/scales/color-utils';
 	import type { TextAtlas, TextStyle } from '$lib/gpu/text/TextAtlas.svelte';
 	import { TextSlots } from '$lib/gpu/text/TextSlots';
-	import type { ChartContext, FieldRef, WebGPUCanvasContext } from '$lib/types';
+	import type { FieldRef, WebGPUCanvasContext } from '$lib/types';
 	import {
 		LABEL_MARK_HOST,
 		LABEL_RENDERER_HOST,
@@ -84,13 +84,11 @@
 	const rendererHost = getContext<LabelRendererHolder | undefined>(LABEL_RENDERER_HOST);
 	const textAtlas = getContext<TextAtlas | undefined>('text-atlas');
 	const canvas = getContext<WebGPUCanvasContext | undefined>('webgpu-canvas');
-	const chartContext = getContext<ChartContext>('chart');
 	if (!markHost || !rendererHost || !textAtlas || !canvas) {
 		throw new Error(
 			"<Labels> attaches to a mark: place it inside one, as in <BarMarkY …><Labels /></BarMarkY>, in the chart's canvasComponents."
 		);
 	}
-	if (chartContext.fx) console.warn('[fjader] <Labels> does not draw in faceted charts yet.');
 
 	/**
 	 * This layer's channels on the host renderer, one f32 per row each: its
@@ -245,7 +243,7 @@
 	});
 </script>
 
-{#if !chartContext.fx && rendererHost.attached}
+{#if rendererHost.attached}
 	<BoxLabels
 		{slotBinding}
 		{wholeBinding}

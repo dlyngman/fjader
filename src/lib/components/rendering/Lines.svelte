@@ -5,7 +5,7 @@
 	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { getCurveWGSL, getCurveResolution } from '$lib/gpu/CurveShaderLib';
-	import { NAN_WGSL } from '$lib/gpu/NanShaderLib';
+	import { NAN_WGSL, isNegativeOrNanExpr } from '$lib/gpu/NanShaderLib';
 	import { DEFAULT_STROKE_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, WebGPUCanvasContext, CurveType } from '$lib/types';
 	import type { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte';
@@ -130,14 +130,16 @@
 	const FACET_BINDING_WGSL = `\n  @group(1) @binding(${BINDINGS.FACET}) var<storage, read> facetIndices: array<f32>;`;
 	const FACET_DISCARD_WGSL = `
     // Facet filtering: discard vertices not belonging to this cell
-    if (u32(facetIndices[instanceIdx]) != frameUniforms.activeFacetIdx) {
+    // A negative or NaN facet (a NULL facet: -1 when padded, NaN when kept) is no cell; u32() would put it in cell 0.
+    if ((${isNegativeOrNanExpr('facetIndices[instanceIdx]')} || u32(facetIndices[instanceIdx]) != frameUniforms.activeFacetIdx)) {
       var degen: VertexOutput;
       degen.position = DISCARD_POS;
       return degen;
     }`;
 	const FACET_BOUNDARY_WGSL = `
     // Facet boundary: discard segment if next point is in a different facet
-    if (u32(facetIndices[nextIdx]) != frameUniforms.activeFacetIdx) {
+    // A negative or NaN facet (a NULL facet: -1 when padded, NaN when kept) is no cell; u32() would put it in cell 0.
+    if ((${isNegativeOrNanExpr('facetIndices[nextIdx]')} || u32(facetIndices[nextIdx]) != frameUniforms.activeFacetIdx)) {
       var output: VertexOutput;
       output.position = DISCARD_POS;
       return output;

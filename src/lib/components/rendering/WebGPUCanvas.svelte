@@ -5,7 +5,12 @@
 	import type { ChartContext, EntranceMode, WebGPUCanvasContext } from '$lib/types';
 	import type { GPUCoordinator, ChartRegistrationResult } from '$lib/gpu/GPUCoordinator.svelte';
 	import type { FacetScaleRef } from '$lib/gpu/GPUCoordinator.svelte';
-	import { TextAtlas, ATLAS_CSS_WIDTH } from '$lib/gpu/text/TextAtlas.svelte';
+	import {
+		TextAtlas,
+		ATLAS_CSS_WIDTH,
+		CHART_TEXT_ATLAS,
+		type AtlasSurface
+	} from '$lib/gpu/text/TextAtlas.svelte';
 	import { parseColorToRGBA } from '$lib/scales/color-utils';
 	import GpuAxis from '../axes/GpuAxis.svelte';
 	import GpuParallelAxes from '../axes/GpuParallelAxes.svelte';
@@ -40,11 +45,23 @@
 	let canvas = $state<HTMLCanvasElement>();
 	let atlasContainer = $state<HTMLElement>();
 	/**
-	 * The chart's text atlas: text layers acquire their strings from it, this
-	 * component renders them inside the canvas, and the canvas's `paint` hands
-	 * them to the GPU (gpu/text/TextAtlas.svelte.ts).
+	 * The chart's text atlas (gpu/text/TextAtlas.svelte.ts): text layers acquire
+	 * their strings from it, this component renders them inside the canvas, and
+	 * the canvas's `paint` hands them to the GPU. The chart's own, shared by its
+	 * canvases: in a facet grid every cell paints the strings the pass-through
+	 * canvas's layers acquired. A canvas outside a chart makes its own.
 	 */
-	const textAtlas = new TextAtlas();
+	const textAtlas = getContext<TextAtlas | undefined>(CHART_TEXT_ATLAS) ?? new TextAtlas();
+	/** This canvas's surface of the atlas, once it is attached. */
+	let atlasSurface = $state.raw<AtlasSurface | null>(null);
+	/**
+	 * The canvas element's own size, as laid out (0 under display: none). Not the
+	 * chart's layout, which keeps its last size while the cell measures 0, nor its
+	 * inner size, which is 0 in a cell narrower than its margins while its canvas
+	 * still paints.
+	 */
+	let canvasClientWidth = $state(0);
+	let canvasClientHeight = $state(0);
 	/**
 	 * What the cell declared (axes, parallel axes, the plot border), drawn here,
 	 * on the GPU. None in a facet grid's pass-through canvas: each cell draws its own.
@@ -61,7 +78,8 @@
 	setContext('text-atlas', textAtlas);
 
 	function handlePaint() {
-		if (canvas && atlasContainer) textAtlas.paint(canvas, atlasContainer);
+		if (canvas && atlasContainer && atlasSurface)
+			textAtlas.paint(canvas, atlasContainer, atlasSurface);
 	}
 	let context: GPUCanvasContext | null = null;
 	let gpuCoordinator: GPUCoordinator | null | undefined = isFaceted ? getGPUContext() : undefined;
@@ -169,7 +187,7 @@
 
 			// Notify coordinator that context is ready
 			chartControl.setContextReady();
-			textAtlas.attach(gpuCoordinator.device!, gpuCoordinator, chartId);
+			atlasSurface = textAtlas.attach(gpuCoordinator.device!, gpuCoordinator, chartId);
 			console.log(`✅ Chart ${chartId} registered and ready`);
 		} catch (error) {
 			console.error(`❌ Chart registration failed for ${chartId}:`, error);
@@ -285,7 +303,8 @@
 		console.log(`🧹 Destroying WebGPUCanvas ${chartId}`);
 
 		try {
-			textAtlas.destroy();
+			if (atlasSurface) textAtlas.detach(atlasSurface);
+			atlasSurface = null;
 
 			// Clean up chart registration
 			if (chartControl) {
@@ -313,6 +332,15 @@
 		} catch (error) {
 			console.error(`❌ Error during WebGPUCanvas ${chartId} destruction:`, error);
 		}
+	});
+
+	// Whether this canvas is laid out: one that is not (display: none, zero size)
+	// gets no paint events, so the atlas must not wait for it (TextAtlas).
+	// Deliberately not the coordinator's viewport visibility: an offscreen
+	// canvas still paints (AtlasSurface.laidOut says why).
+	$effect(() => {
+		const surface = atlasSurface;
+		if (surface) textAtlas.setLaidOut(surface, canvasClientWidth > 0 && canvasClientHeight > 0);
 	});
 
 	$effect(() => {
@@ -354,7 +382,14 @@
 		canvas lays out its children without painting them, and draws them on
 		request. Its one child is the text atlas.
 	-->
-	<canvas bind:this={canvas} content="drawable" layoutsubtree onpaint={handlePaint}>
+	<canvas
+		bind:this={canvas}
+		bind:clientWidth={canvasClientWidth}
+		bind:clientHeight={canvasClientHeight}
+		content="drawable"
+		layoutsubtree
+		onpaint={handlePaint}
+	>
 		{#if textAtlas.items.length > 0 || textAtlas.swatches.length > 0}
 			<div
 				class="fjader-text-atlas"

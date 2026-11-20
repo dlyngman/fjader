@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { isNegativeOrNanExpr } from '$lib/gpu/NanShaderLib';
 	import { UNIFORM_BYTES } from './uniform-sizes';
 	import { getContext, onMount, onDestroy, untrack } from 'svelte';
 	import type { LabelRendererHolder } from '../labels/LabelRendererHolder.svelte';
@@ -186,7 +187,8 @@
 	// Facet index arrives as a vertex attribute (stepMode: instance), not a storage buffer.
 	const FACET_DISCARD_WGSL = `
       // Facet filtering: discard vertices not belonging to this cell
-      if (u32(facetIdx) != frameUniforms.activeFacetIdx) {
+      // A negative or NaN facet (a NULL facet: -1 when padded, NaN when kept) is no cell; u32() would put it in cell 0.
+      if ((${isNegativeOrNanExpr('facetIdx')} || u32(facetIdx) != frameUniforms.activeFacetIdx)) {
         var degen: VertexOutput;
         degen.position = vec4<f32>(0.0, 0.0, 0.0, 0.0);
         return degen;
@@ -314,12 +316,15 @@
 		rectsShaderCode.indexOf('struct VertexOutput')
 	);
 
-	/** A faceted kernel's facet indices, and the skip for another cell's rows. */
+	/**
+	 * A faceted kernel's facet indices, and the skip for another cell's rows (and
+	 * for a NULL facet, -1 or NaN, which u32() would put in cell 0).
+	 */
 	const FACET_KERNEL_BINDING = faceted
 		? `@group(1) @binding(${BINDINGS.FACET}) var<storage, read> facets: array<f32>;`
 		: '';
 	const FACET_KERNEL_SKIP = faceted
-		? `if (i >= arrayLength(&facets) || u32(facets[i]) != frameUniforms.activeFacetIdx) { return; }`
+		? `if (i >= arrayLength(&facets) || (${isNegativeOrNanExpr('facets[i]')} || u32(facets[i]) != frameUniforms.activeFacetIdx)) { return; }`
 		: '';
 	const KERNEL_HEAD = `
     @compute @workgroup_size(${PLACEMENT_WORKGROUP})
@@ -430,7 +435,10 @@
 		return holder.attach({
 			renderer: () => renderer ?? null,
 			recordBinding: BINDINGS.RECORD,
-			color: () => ({ mode: colorMode, scaleIndex: colorScaleIndex, constant: constantColor })
+			color: () => ({ mode: colorMode, scaleIndex: colorScaleIndex, constant: constantColor }),
+			// Created with STORAGE usage (vertex-slot buffers are), so a label layer
+			// can read it as its kernels do.
+			facets: () => (faceted ? renderer?.getVertexBuffer(FACET_VERTEX_SLOT) : undefined)
 		});
 	});
 

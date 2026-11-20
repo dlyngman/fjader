@@ -96,4 +96,10 @@ export interface LabelRendererHost {
 	allocateSlotChannel(): number;
 	releaseSlotChannel(binding: number): void;
 	color(): LabelHostColor;
+	/**
+	 * In a facet grid, each row's facet index (one f32 per row), so a label
+	 * layer draws a cell's rows only, as the host does; undefined otherwise, or
+	 * until the host's facet data has landed.
+	 */
+	facets(): GPUBuffer | undefined;
 }
