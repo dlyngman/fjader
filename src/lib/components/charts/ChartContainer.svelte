@@ -2,7 +2,7 @@
 	import { ScaleGeneration } from '$lib/scales/ScaleGeneration.svelte';
 	import { ChartVisibility } from './ChartVisibility.svelte';
 	import { ChartHover } from './ChartHover.svelte';
-	import { setContext, getContext, onDestroy } from 'svelte';
+	import { setContext, getContext, onDestroy, untrack } from 'svelte';
 	import type { Snippet } from 'svelte';
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
 	import type { Margin } from '$lib/types';
@@ -17,6 +17,8 @@
 	import { checkFacetCells } from './facet-limits';
 	import ChartCell from './ChartCell.svelte';
 	import { DECLARATION_REGISTRY, DeclarationRegistry } from './declarations.svelte';
+	import DeclarationScope from './DeclarationScope.svelte';
+	import WebGPUCanvas from '../rendering/WebGPUCanvas.svelte';
 	import { categoryLabel } from '$lib/query-engine/categorical-identity';
 
 	interface Props {
@@ -71,6 +73,15 @@
 		interactors?: Snippet;
 		legend?: Snippet;
 		legendPosition?: 'top' | 'right';
+		/**
+		 * The chart's components, placed directly: marks, `Grid`, `Frame`,
+		 * `AxisLeft`, `AxisBottom`, `ParallelAxes`. Each draws where it belongs,
+		 * in every cell of a facet grid; the chart makes its own canvas for them.
+		 * Overlays (`Crosshair`, brushes, `Toggle`, `MarginLabel`, `Legend`)
+		 * still go in their snippets. With a `canvas` snippet too, the snippet
+		 * owns the canvas and the children's marks have none (a warning says so).
+		 */
+		children?: Snippet;
 		wheelInteraction?: { dwellTimeMs?: number; momentumThreshold?: number; enabled?: boolean };
 		xZoomLimit?: number;
 		yZoomLimit?: number;
@@ -111,6 +122,7 @@
 		interactors = undefined,
 		legend = undefined,
 		legendPosition = 'top',
+		children = undefined,
 		entrance = 'auto',
 		wheelInteraction = {
 			dwellTimeMs: 250,
@@ -498,9 +510,35 @@
 	// The chart's declarations (axes, parallel axes, the plot border), read by
 	// every cell (charts/declarations).
 	setContext(DECLARATION_REGISTRY, new DeclarationRegistry());
+
+	// Children make the chart's canvas, unless a `canvas` snippet does: the cells
+	// render it as they render that snippet (in a facet grid, once, in the
+	// hidden marks container). Both: the snippet's canvas, and the children
+	// outside any canvas, so their declarations still register.
+	const childCanvas = $derived(canvas ?? (children ? flatCanvas : undefined));
+	untrack(() => {
+		if (canvas && children)
+			console.warn(
+				'fjader: <ChartContainer> has both a `canvas` snippet and children. The snippet ' +
+					"owns the canvas; marks among the children won't draw. Move them into the snippet, " +
+					'or the snippet into the children.'
+			);
+	});
 </script>
 
+{#snippet flatComponents()}
+	<DeclarationScope cellId={null} inChildren>{@render children?.()}</DeclarationScope>
+{/snippet}
+
+{#snippet flatCanvas()}
+	<WebGPUCanvas canvasComponents={flatComponents} />
+{/snippet}
+
 <div class="figure-container" bind:clientWidth={layout.width} data-fjader-tooltip={tooltipScheme}>
+	{#if canvas && children}
+		<div class="children-outside-canvas" hidden>{@render flatComponents()}</div>
+	{/if}
+
 	{#if legend && legendPosition === 'top'}
 		<div
 			class="legend-container legend-top"
@@ -514,7 +552,7 @@
 	{#if fx}
 		<!-- Faceted mode -->
 		<div class="facet-marks-container">
-			{@render canvas?.()}
+			{@render childCanvas?.()}
 		</div>
 
 		{#if facetRefusal}
@@ -567,7 +605,7 @@
 			{wheelInteraction}
 			{background}
 			{foreground}
-			{canvas}
+			canvas={childCanvas}
 			{interactors}
 			{overlay}
 		/>

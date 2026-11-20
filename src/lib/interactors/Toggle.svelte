@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { warnIfInChildren } from '$lib/components/charts/declarations.svelte';
 	import { getContext, onDestroy } from 'svelte';
 	import type { ChartContext } from '$lib/types';
 	import type { ToggleHandle } from '$lib/query-engine/FilterGroup.svelte';
@@ -6,6 +7,9 @@
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 	import BandLabelToggle from './BandLabelToggle.svelte';
 	import { bandFieldsOf } from './band-fields';
+
+	// An overlay draws its own SVG/HTML where it is placed: not yet a declaration.
+	warnIfInChildren('Toggle', 'interactors');
 
 	/**
 	 * Click-to-filter interactor for categorical fields.

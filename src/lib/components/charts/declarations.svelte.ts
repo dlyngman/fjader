@@ -47,6 +47,12 @@ export const CELL_DECLARATIONS = 'cell-declarations';
 
 export interface DeclarationScopeContext {
 	readonly cellId: string | null;
+	/**
+	 * Placed directly in a chart (`ChartContainer`'s children), not in one of
+	 * its snippets. Read by the overlays that can't be placed there yet
+	 * (`warnIfInChildren`).
+	 */
+	readonly inChildren: boolean;
 }
 
 export class DeclarationRegistry {
@@ -93,6 +99,22 @@ export class CellDeclarations {
 	get frames(): FrameSpec[] {
 		return this.of('frame');
 	}
+}
+
+/**
+ * For a component that renders its own SVG or HTML where it is placed (an
+ * overlay: a crosshair, a brush, a toggle, a legend): warn when it is a direct
+ * child of a chart. Children render inside the chart's canvas layer, where such
+ * a component can't draw or take pointer events; it belongs in its snippet
+ * until it is a declaration too. Call during component initialisation.
+ */
+export function warnIfInChildren(component: string, snippet: string): void {
+	const scope = getContext<DeclarationScopeContext | undefined>(DECLARATION_SCOPE);
+	if (!scope?.inChildren) return;
+	console.warn(
+		`fjader: <${component}> can't be a direct child of <ChartContainer> yet; ` +
+			`place it in the chart's \`${snippet}\` snippet.`
+	);
 }
 
 /**

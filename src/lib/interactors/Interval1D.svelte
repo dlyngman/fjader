@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { warnIfInChildren } from '$lib/components/charts/declarations.svelte';
 	import { getContext, onMount, untrack } from 'svelte';
 	import { isBetween } from '@uwdata/mosaic-sql';
 	import { BrushState1D } from './brush-state.svelte';
@@ -16,6 +17,9 @@
 	import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 	import type { SourceHandle } from '$lib/query-engine/FilterGroup.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
+
+	// An overlay draws its own SVG/HTML where it is placed: not yet a declaration.
+	warnIfInChildren('Interval1D', 'interactors');
 
 	/** Helper: cast D3Scale to one with invert() for continuous scales. */
 	type InvertibleScale = D3Scale & { invert(v: number): number | Date };

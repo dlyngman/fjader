@@ -8,6 +8,10 @@
 	import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 	import type { ChartContext, Point } from '$lib/types';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
+	import { warnIfInChildren } from '$lib/components/charts/declarations.svelte';
+
+	// An overlay draws its own SVG/HTML where it is placed: not yet a declaration.
+	warnIfInChildren('ParallelBrushes', 'interactors');
 
 	type InvertibleScale = {
 		(v: unknown): number;

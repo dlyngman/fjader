@@ -17,6 +17,10 @@
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 	import type { Clause } from '$lib/query-engine/CrossfilterSelection.svelte';
 	import { ClauseRelay } from './relay-clauses';
+	import { warnIfInChildren } from '$lib/components/charts/declarations.svelte';
+
+	// An overlay draws its own SVG/HTML where it is placed: not yet a declaration.
+	warnIfInChildren('DerivedInterval1D', 'interactors');
 
 	interface Props {
 		sourceSelection: string;

@@ -1,10 +1,14 @@
 <script lang="ts">
+	import { warnIfInChildren } from '$lib/components/charts/declarations.svelte';
 	import { hasEntered } from '$lib/scales/entered';
 	import { getContext } from 'svelte';
 	import type { ChartContext } from '$lib/types';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 	import BandAxisTicks from './BandAxisTicks.svelte';
 	import type { ContinuousScaleState } from '$lib/types';
+
+	// An overlay draws its own SVG/HTML where it is placed: not yet a declaration.
+	warnIfInChildren('AxisCenter', 'foreground');
 
 	interface Props {
 		anchor?: number;

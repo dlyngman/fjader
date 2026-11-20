@@ -4,6 +4,10 @@
 	import ContinuousColorLegend from './ContinuousColorLegend.svelte';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
+	import { warnIfInChildren } from '$lib/components/charts/declarations.svelte';
+
+	// An overlay draws its own SVG/HTML where it is placed: not yet a declaration.
+	warnIfInChildren('Legend', 'legend');
 	interface Props {
 		color?: string | null;
 		selection?: string;
