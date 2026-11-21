@@ -799,6 +799,10 @@
 
 	function handlePointerDown(event: PointerEvent) {
 		if (otherPointer(event)) return;
+		// Only the primary button presses. A right press (or Ctrl+press, a right
+		// click on a Mac) opens the context menu: taken as a press, its release
+		// was a click, which cleared the brushes.
+		if (event.button !== 0 || event.ctrlKey) return;
 		hoverSettle.hold(true);
 		event.preventDefault();
 		chartCellEl?.focus({ preventScroll: true });
