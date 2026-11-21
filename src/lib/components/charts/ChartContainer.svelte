@@ -660,8 +660,12 @@
 		{:else}
 			<div class="facet-loading">Discovering facet categories...</div>
 		{/if}
-	{:else}
-		<!-- Normal (non-faceted) mode -->
+	{:else if scales}
+		<!-- Normal (non-faceted) mode. Once the chart's scales exist (the effect
+		     above, right after the first render): the cell's marks mount without
+		     waiting for WebGPU, and everything they hand the chart's scales
+		     (requirements, parallel columns) needs them there. Replaced, never
+		     unset, so this does not remount the cell. -->
 		<ChartCell
 			cellChartId={layout.chartId}
 			margin={cellMargin}
