@@ -137,6 +137,12 @@
 			// Register with coordinator after context is ready
 			registerWithCoordinator();
 
+			// setupCanvas reports its own failure through initializationError,
+			// which takes the canvas out of the DOM: not ready, then.
+			if (initializationError) {
+				rejectReady(new Error(initializationError));
+				return;
+			}
 			console.log(`✅ WebGPUCanvas ${chartId} initialized successfully`);
 			resolveReady();
 		} catch (error) {

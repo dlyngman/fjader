@@ -1,4 +1,4 @@
-import { untrack } from 'svelte';
+import { onDestroy, untrack } from 'svelte';
 import { BaseGPURenderer, type InitConfig } from './BaseGPURenderer.svelte';
 import type { GPUCoordinator } from '$lib/gpu';
 import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
@@ -75,6 +75,13 @@ export class RendererHost {
 
 	#options: RendererHostOptions;
 	#mounted = false;
+	/**
+	 * Its component was destroyed. `mount` awaits the canvas, which can take all
+	 * of WebGPU start-up: a component gone by then destroyed `renderer` while it
+	 * was still null, so a renderer built after that would never be destroyed
+	 * and would keep drawing as a stray layer.
+	 */
+	#destroyed = false;
 
 	/**
 	 * Construct during component initialisation — at the top of `<script>`, not
@@ -84,6 +91,9 @@ export class RendererHost {
 	 */
 	constructor(options: RendererHostOptions) {
 		this.#options = options;
+		onDestroy(() => {
+			this.#destroyed = true;
+		});
 
 		// The pipeline is compiled for the chart's scale types, and a chart does
 		// not always know them when its marks mount: a mark that infers its axis
@@ -124,14 +134,17 @@ export class RendererHost {
 			);
 			return;
 		}
-		// However long the canvas takes (thirty configuring at once, a slow
-		// adapter, a background tab): no limit after which a mark gives up and
-		// never draws. It rejects only when the canvas never will be usable.
+		// However long the canvas takes to configure (thirty at once, a slow
+		// adapter, a background tab), a mark waits for it rather than giving up
+		// on a timer of its own. It rejects when the canvas never will be usable,
+		// which includes the canvas's own 5 s wait for the GPU coordinator
+		// running out (WebGPUCanvas shows its error then).
 		try {
 			await ctx.ready;
 		} catch {
 			return;
 		}
+		if (this.#destroyed) return;
 
 		const {
 			markType,
@@ -156,6 +169,10 @@ export class RendererHost {
 			// the coordinator can reach it as soon as `ready` registers a layer.
 			this.renderer = renderer;
 			await renderer.initialize(m.init);
+			// Destroyed while initialising: the component has already destroyed
+			// (or retained) the renderer it saw published above; registering a
+			// layer for it now would draw a destroyed renderer.
+			if (this.#destroyed) return;
 			await m.ready?.(renderer);
 		} catch (error) {
 			const what = this.#options.label ?? markType;

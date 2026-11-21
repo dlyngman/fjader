@@ -2,7 +2,7 @@
 	import { ScaleGeneration } from '$lib/scales/ScaleGeneration.svelte';
 	import { ChartVisibility } from './ChartVisibility.svelte';
 	import { ChartHover } from './ChartHover.svelte';
-	import { setContext, getContext, onDestroy } from 'svelte';
+	import { setContext, getContext, onDestroy, untrack } from 'svelte';
 	import type { Snippet } from 'svelte';
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
 	import type { Margin } from '$lib/types';
@@ -329,17 +329,22 @@
 			entranceGate: chartConfig.entrance
 		});
 
-		// Replay any scale registrations that were queued before scales existed
-		for (const reg of pendingScaleRegistrations) {
-			newScales.registerScaleType(
-				reg.dimension,
-				reg.type,
-				reg.priority,
-				reg.markId,
-				reg.config,
-				reg.columnName
-			);
-		}
+		// Replay any scale registrations that were queued before scales existed.
+		// Untracked: they run inside the effect that creates the scales, and
+		// whatever a registration reads must not become a reason to rebuild the
+		// chart's scales from empty.
+		untrack(() => {
+			for (const reg of pendingScaleRegistrations) {
+				newScales.registerScaleType(
+					reg.dimension,
+					reg.type,
+					reg.priority,
+					reg.markId,
+					reg.config,
+					reg.columnName
+				);
+			}
+		});
 		pendingScaleRegistrations = [];
 
 		scales = newScales;
