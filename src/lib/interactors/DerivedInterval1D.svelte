@@ -1,12 +1,7 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { isBetween } from '@uwdata/mosaic-sql';
-	import {
-		DECLARATION_SCOPE,
-		declareOverlay,
-		getDeclarationChart,
-		type DeclarationScopeContext
-	} from '$lib/components/charts/declarations.svelte';
+	import { declareOverlay, getDeclarationChart } from '$lib/components/charts/declarations.svelte';
 	import { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 	import type { Clause } from '$lib/query-engine/CrossfilterSelection.svelte';
@@ -24,7 +19,6 @@
 	 * range from the shared time scale and writes it, once for the chart; each
 	 * cell (DerivedInterval1DCell) only draws it, clamped to its own scale and
 	 * size. In a facet grid that is one clause and one relay, not one per cell.
-	 * In a per-cell snippet the declaration is per cell, as before.
 	 */
 	interface Props {
 		sourceSelection: string;
@@ -61,9 +55,7 @@
 		)
 	);
 
-	// Per chart; in a per-cell snippet, per cell (the key a cell's always had).
-	const scope = getContext<DeclarationScopeContext | undefined>(DECLARATION_SCOPE);
-	const sourceKey = `derived-${isX ? 'x' : 'y'}-${scope?.cellId ?? chart.chartId}`;
+	const sourceKey = `derived-${isX ? 'x' : 'y'}-${chart.chartId}`;
 
 	// The primary range: the source group's first range clause, found by the
 	// schema its brush stored when writing it.

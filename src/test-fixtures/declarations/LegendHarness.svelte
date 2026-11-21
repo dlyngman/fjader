@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { setContext } from 'svelte';
 	import Legend from '$lib/components/guides/legend/Legend.svelte';
-	import DeclarationScope from '$lib/components/charts/DeclarationScope.svelte';
 	import {
 		DECLARATION_REGISTRY,
 		type DeclarationRegistry
@@ -21,5 +20,3 @@
 
 <Legend color="island" />
 <Legend color="species" position="right" />
-<!-- In a cell's scope (a per-cell snippet): renders in place, declares nothing. -->
-<DeclarationScope cellId="cell-a"><Legend color="sex" /></DeclarationScope>

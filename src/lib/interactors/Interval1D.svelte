@@ -1,12 +1,7 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { isBetween } from '@uwdata/mosaic-sql';
-	import {
-		DECLARATION_SCOPE,
-		declareOverlay,
-		getDeclarationChart,
-		type DeclarationScopeContext
-	} from '$lib/components/charts/declarations.svelte';
+	import { declareOverlay, getDeclarationChart } from '$lib/components/charts/declarations.svelte';
 	import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 	import type { FieldRef } from '$lib/types';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
@@ -22,9 +17,7 @@
 	 * the shared scale (validation, a linked chart's pan); each cell
 	 * (Interval1DCell) turns its pointer events into the drag through its own
 	 * scale and draws the range. In a facet grid it is one selection: a drag in
-	 * any cell replaces it, and every cell draws it. In a per-cell snippet (an
-	 * `interactors` snippet, until the snippets go) the declaration is per cell,
-	 * so it registers once per cell, as before.
+	 * any cell replaces it, and every cell draws it.
 	 */
 	interface Props {
 		/** Filter group name: which selection this brush writes to. */
@@ -52,9 +45,7 @@
 		)
 	);
 
-	// Per chart; in a per-cell snippet, per cell (the id a cell's brush always had).
-	const scope = getContext<DeclarationScopeContext | undefined>(DECLARATION_SCOPE);
-	const source = `interval-${isX ? 'x' : 'y'}-${scope?.cellId ?? chart.chartId}`;
+	const source = `interval-${isX ? 'x' : 'y'}-${chart.chartId}`;
 
 	/** False once destroyed: a cell unmounting later (mid-drag) must not write. */
 	let live = true;

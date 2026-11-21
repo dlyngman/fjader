@@ -3,9 +3,9 @@
 	import CrosshairCell from './CrosshairCell.svelte';
 
 	/**
-	 * Lines through the pointer, in each cell of the chart (or the one cell
-	 * whose snippet it is placed in). A declaration: each cell draws it in its
-	 * clipped foreground (CrosshairCell), from its own hover point.
+	 * Lines through the pointer, in each cell of the chart. A declaration: each
+	 * cell draws it in its clipped foreground (CrosshairCell), from its own hover
+	 * point.
 	 */
 	interface Props {
 		show?: 'both' | 'x' | 'y';

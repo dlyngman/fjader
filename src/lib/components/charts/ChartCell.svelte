@@ -3,12 +3,7 @@
 	import type { ChartVisibility } from './ChartVisibility.svelte';
 	import type { ChartHover } from './ChartHover.svelte';
 	import { setContext, getContext, onMount } from 'svelte';
-	import {
-		CELL_DECLARATIONS,
-		DECLARATION_REGISTRY,
-		type DeclarationRegistry
-	} from './declarations.svelte';
-	import DeclarationScope from './DeclarationScope.svelte';
+	import { DECLARATION_REGISTRY, type DeclarationRegistry } from './declarations.svelte';
 	import type { Snippet } from 'svelte';
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
 	import type { Margin } from '$lib/types';
@@ -69,12 +64,8 @@
 		facetingProps?: FacetingProps;
 		gpuCoordinator: GPUCoordinator;
 		wheelInteraction?: WheelInteractionConfig;
-		background?: Snippet;
-		foreground?: Snippet;
-		canvas?: Snippet;
-		canvasComponents?: Snippet;
-		interactors?: Snippet;
-		overlay?: Snippet;
+		/** The chart's canvas, with its components (unfaceted); a facet cell makes its own. */
+		canvas?: Snippet | null;
 	}
 
 	let {
@@ -100,12 +91,7 @@
 		},
 		gpuCoordinator,
 		wheelInteraction = { dwellTimeMs: 250, momentumThreshold: 150, enabled: true },
-		background = undefined,
-		foreground = undefined,
-		canvas = undefined,
-		canvasComponents = undefined,
-		interactors = undefined,
-		overlay = undefined
+		canvas = undefined
 	}: Props = $props();
 
 	const queryEngine = getContext<QueryEngine>('query-engine');
@@ -476,11 +462,8 @@
 	};
 
 	setContext('chart', chartContext);
-	// What this cell's canvas draws: the chart's declarations for every cell, and
-	// this cell's own (from its per-cell snippets, scoped below).
+	// The chart's declarations: its overlays, drawn in this cell's SVG below.
 	const declarationRegistry = getContext<DeclarationRegistry>(DECLARATION_REGISTRY);
-	const cellDeclarations = declarationRegistry.forCell(cellChartId);
-	setContext(CELL_DECLARATIONS, cellDeclarations);
 
 	// --- Pointer event handling ---
 	const pointerBuffer = { x: 0, y: 0 };
@@ -1132,16 +1115,6 @@
 
 	<div class="cell-content">
 		{#if cellReady}
-			<!-- Only for a background snippet: what drew there (axes, the frame) is on
-			     the GPU now, so a chart without one has no SVG under its canvas. -->
-			{#if background}
-				<svg class="svg-background" width={layout.width} height={layout.height}>
-					<g transform={layout.innerTransform}>
-						<DeclarationScope cellId={cellChartId}>{@render background?.()}</DeclarationScope>
-					</g>
-				</svg>
-			{/if}
-
 			<div class="canvas-layer">
 				{#if canvas}
 					{@render canvas()}
@@ -1188,15 +1161,11 @@
 					onpointerenter={handleInnerMouseEnter}
 					onpointerleave={handleInnerMouseLeave}
 				>
-					<DeclarationScope cellId={cellChartId}>{@render foreground?.()}</DeclarationScope>
 					<!-- Declared overlays (Crosshair, AxisCenter, SvgLayer), keyed by the
 					     declaration, so another one coming or going remounts none. -->
-					<!-- In this cell's scope: a declaration inside an overlay is this cell's. -->
-					<DeclarationScope cellId={cellChartId}>
-						{#each cellDeclarations.overlays('clipped') as declared (declared)}
-							{@render declared.snippet(chartContext)}
-						{/each}
-					</DeclarationScope>
+					{#each declarationRegistry.overlays('clipped') as declared (declared)}
+						{@render declared.snippet(chartContext)}
+					{/each}
 					<HoverIndicator />
 					<rect
 						x="0"
@@ -1206,33 +1175,20 @@
 						fill="transparent"
 						class="interaction-target"
 					/>
-					<DeclarationScope cellId={cellChartId}>{@render interactors?.()}</DeclarationScope>
-					<!-- Declared interactors (the brushes, Toggle): after the interactors
-					     snippet, so where both draw, the declared ones take pointer events. -->
-					<DeclarationScope cellId={cellChartId}>
-						{#each cellDeclarations.overlays('interactors') as declared (declared)}
-							{@render declared.snippet(chartContext)}
-						{/each}
-					</DeclarationScope>
+					<!-- Declared interactors (the brushes, Toggle): above the hit target. -->
+					{#each declarationRegistry.overlays('interactors') as declared (declared)}
+						{@render declared.snippet(chartContext)}
+					{/each}
 				</g>
 
 				<!-- Overlays over the plot and its margins, unclipped, taking no pointer
 				     events (MarginLabel, SvgLayer clip={false}). -->
 				<g transform={layout.innerTransform} class="overlay-margins">
-					<!-- In this cell's scope: a declaration inside an overlay is this cell's. -->
-					<DeclarationScope cellId={cellChartId}>
-						{#each cellDeclarations.overlays('margins') as declared (declared)}
-							{@render declared.snippet(chartContext)}
-						{/each}
-					</DeclarationScope>
+					{#each declarationRegistry.overlays('margins') as declared (declared)}
+						{@render declared.snippet(chartContext)}
+					{/each}
 				</g>
 			</svg>
-
-			{#if overlay}
-				<div class="overlay-layer">
-					<DeclarationScope cellId={cellChartId}>{@render overlay()}</DeclarationScope>
-				</div>
-			{/if}
 
 			{#if tooltipManager}
 				<Tooltip />
@@ -1286,17 +1242,12 @@
 		height: 100%;
 	}
 
-	.svg-background,
 	.canvas-layer,
 	.svg-foreground {
 		position: absolute;
 		top: 0;
 		left: 0;
 		touch-action: none;
-	}
-
-	.svg-background {
-		z-index: 1;
 	}
 
 	.overlay-margins {
@@ -1326,19 +1277,5 @@
 
 	.crosshair {
 		cursor: crosshair;
-	}
-
-	.overlay-layer {
-		position: absolute;
-		top: 0;
-		left: 0;
-		width: 100%;
-		height: 100%;
-		z-index: 10;
-		pointer-events: none;
-	}
-
-	.overlay-layer :global(*) {
-		pointer-events: auto;
 	}
 </style>

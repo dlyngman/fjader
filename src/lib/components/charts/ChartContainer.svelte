@@ -17,14 +17,11 @@
 	import { checkFacetCells } from './facet-limits';
 	import ChartCell from './ChartCell.svelte';
 	import {
-		CHART_CHILDREN,
 		DECLARATION_CHART,
 		DECLARATION_REGISTRY,
 		DeclarationRegistry,
-		type ChartChildren,
 		type DeclarationChart
 	} from './declarations.svelte';
-	import DeclarationScope from './DeclarationScope.svelte';
 	import WebGPUCanvas from '../rendering/WebGPUCanvas.svelte';
 	import { CHART_TEXT_ATLAS, TextAtlas } from '$lib/gpu/text/TextAtlas.svelte';
 	import { categoryLabel } from '$lib/query-engine/categorical-identity';
@@ -73,19 +70,12 @@
 		 */
 		fxDomain?: DimValue[] | null;
 		columns?: number | null;
-		background?: Snippet;
-		foreground?: Snippet;
-		canvas?: Snippet;
-		canvasComponents?: Snippet;
-		overlay?: Snippet;
-		interactors?: Snippet;
 		/**
-		 * The chart's components, placed directly: marks, `Grid`, `Frame`, the
-		 * axes, overlays (`Crosshair`, `MarginLabel`), brushes, `Toggle` and
-		 * `Legend`. Each draws where it belongs, in every cell of a facet grid
-		 * (a legend once, above the plot or to its right); the chart makes its
-		 * own canvas for them. With a `canvas` snippet too, the children render
-		 * in the snippet's canvas, beside its components.
+		 * The chart's components: marks, `Grid`, `Frame`, the axes, overlays
+		 * (`Crosshair`, `MarginLabel`, `SvgLayer`), brushes, `Toggle` and
+		 * `Legend`. Each draws where it belongs, in every cell of a facet grid (a
+		 * legend once, above the plot or to its right); the chart makes its own
+		 * canvas for them.
 		 */
 		children?: Snippet;
 		wheelInteraction?: { dwellTimeMs?: number; momentumThreshold?: number; enabled?: boolean };
@@ -120,12 +110,6 @@
 		fx = null,
 		fxDomain = null,
 		columns: facetColumns = null,
-		background = undefined,
-		foreground = undefined,
-		canvas = undefined,
-		canvasComponents = undefined,
-		overlay = undefined,
-		interactors = undefined,
 		children = undefined,
 		entrance = 'auto',
 		wheelInteraction = {
@@ -579,32 +563,13 @@
 	// pass-through canvas (<Labels>, TextMark) draw in every cell.
 	setContext(CHART_TEXT_ATLAS, new TextAtlas());
 
-	// The children render in the chart's canvas, whichever makes it: a `canvas`
-	// snippet's WebGPUCanvas, or one the chart makes for them when there is no
-	// snippet. The cells render that canvas as they render the snippet (in a
-	// facet grid, once, in the hidden marks container); the canvas renders the
-	// children beside its own components (CHART_CHILDREN), so with both, the
-	// children's marks draw in the snippet's canvas.
-	const chartChildren: ChartChildren = {
-		get snippet() {
-			return children ? flatComponents : undefined;
-		}
-	};
-	setContext(CHART_CHILDREN, chartChildren);
-	// The canvas renders the children once WebGPU is ready (in a facet grid's
-	// pass-through, at once). So declarations among them, SVG overlays too,
-	// register then: without WebGPU, none (the chart shows its error box and
-	// has no marks to hover), and after any declared in snippets, which is why
-	// overlays order by zIndex, not by registration (orderOverlays).
-	const chartCanvas = $derived(canvas ?? (children ? flatCanvas : undefined));
+	// The chart's canvas, with its children as its components: the unfaceted
+	// cell renders it, or a facet grid renders it once, in the hidden marks
+	// container (the pass-through), whose marks every cell's canvas draws.
 </script>
 
-{#snippet flatComponents()}
-	<DeclarationScope cellId={null}>{@render children?.()}</DeclarationScope>
-{/snippet}
-
-{#snippet flatCanvas()}
-	<WebGPUCanvas />
+{#snippet chartCanvas()}
+	<WebGPUCanvas components={children} />
 {/snippet}
 
 <div class="figure-container" bind:clientWidth={layout.width} data-fjader-tooltip={tooltipScheme}>
@@ -623,7 +588,7 @@
 	{#if fx}
 		<!-- Faceted mode -->
 		<div class="facet-marks-container">
-			{@render chartCanvas?.()}
+			{@render chartCanvas()}
 		</div>
 
 		{#if facetRefusal}
@@ -651,11 +616,7 @@
 						{facetingProps}
 						{gpuCoordinator}
 						{wheelInteraction}
-						{background}
-						{foreground}
 						canvas={null}
-						{interactors}
-						{overlay}
 					/>
 				{/each}
 			</div>
@@ -682,11 +643,7 @@
 			{facetingProps}
 			{gpuCoordinator}
 			{wheelInteraction}
-			{background}
-			{foreground}
 			canvas={chartCanvas}
-			{interactors}
-			{overlay}
 		/>
 	{/if}
 

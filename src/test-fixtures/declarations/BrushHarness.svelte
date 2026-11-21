@@ -68,5 +68,5 @@
 	<DerivedIntervalX sourceSelection="brush" selection="derived" offset="-1yw" />
 {/if}
 {#each cells as cell, i (i)}
-	<FakeCell {registry} cellId={`cell-${i}`} chart={cell} />
+	<FakeCell {registry} chart={cell} />
 {/each}

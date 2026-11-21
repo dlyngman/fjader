@@ -38,5 +38,5 @@
 
 <Toggle field="island" selection="pick" />
 {#each cells as cell, i (i)}
-	<FakeCell {registry} cellId={`cell-${i}`} chart={cell} />
+	<FakeCell {registry} chart={cell} />
 {/each}

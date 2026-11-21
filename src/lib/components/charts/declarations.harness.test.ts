@@ -1,7 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ClauseRelay } from '$lib/interactors/relay-clauses';
 import { render } from 'svelte/server';
-import ScopeHarness from '../../../test-fixtures/declarations/ScopeHarness.svelte';
 import ToggleHarness from '../../../test-fixtures/declarations/ToggleHarness.svelte';
 import BrushHarness from '../../../test-fixtures/declarations/BrushHarness.svelte';
 import LegendHarness from '../../../test-fixtures/declarations/LegendHarness.svelte';
@@ -16,37 +15,6 @@ vi.mock('$lib/interactors/relay-clauses', () => ({
 		return { sync() {}, clear() {} };
 	})
 }));
-
-describe('DeclarationScope', () => {
-	it('scopes declarations to its cell, or to every cell', () => {
-		// Server rendering runs onDestroy at the end, which unregisters: keep what
-		// was registered, and look at the registry as it stood then.
-		const registry = new DeclarationRegistry();
-		const registered: ChartDeclaration[] = [];
-		const register = registry.register.bind(registry);
-		registry.register = (d) => {
-			registered.push(d);
-			return register(d);
-		};
-		render(ScopeHarness, { props: { registry } });
-		expect(registry.declarations).toEqual([]);
-		registry.register = register;
-		for (const d of registered) registry.register(d);
-
-		expect(registered.map((d) => ['id' in d.spec ? d.spec.id : '', d.cellId])).toEqual([
-			['bare', null],
-			['in-cell-a', 'cell-a'],
-			['in-children', null]
-		]);
-		// A cell sees every-cell declarations and its own; another cell not cell-a's.
-		expect(registry.forCell('cell-a').frames.map((f) => f.id)).toEqual([
-			'bare',
-			'in-cell-a',
-			'in-children'
-		]);
-		expect(registry.forCell('cell-b').frames.map((f) => f.id)).toEqual(['bare', 'in-children']);
-	});
-});
 
 describe('Toggle split by responsibility', () => {
 	it('registers once for the chart; each of three cells adds one activator', () => {
@@ -243,7 +211,7 @@ describe('ParallelBrushes and DerivedIntervalX split by responsibility', () => {
 });
 
 describe('Legend as a declaration', () => {
-	it("as a chart's child: declares itself at its position; in a per-cell snippet, not", () => {
+	it('in a chart: declares itself, for the chart to render at its position', () => {
 		const registry = new DeclarationRegistry();
 		const registered: ChartDeclaration[] = [];
 		const register = registry.register.bind(registry);

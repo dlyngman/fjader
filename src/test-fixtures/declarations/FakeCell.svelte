@@ -8,14 +8,10 @@
 	 * activators, its click hook), rendering its interactors slot as ChartCell
 	 * does.
 	 */
-	let {
-		registry,
-		cellId,
-		chart
-	}: { registry: DeclarationRegistry; cellId: string; chart: ChartContext } = $props();
+	let { registry, chart }: { registry: DeclarationRegistry; chart: ChartContext } = $props();
 	setContext('chart', chart);
 </script>
 
-{#each registry.forCell(cellId).overlays('interactors') as declared (declared)}
+{#each registry.overlays('interactors') as declared (declared)}
 	{@render declared.snippet(chart)}
 {/each}

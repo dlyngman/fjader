@@ -36,7 +36,7 @@
 	interface Props {
 		filterGroup: FilterGroup;
 		column: string;
-		/** Whose source this is: the chart, or the cell of a per-cell snippet. */
+		/** Whose source this is: the chart's id. */
 		owner: string;
 		/** The chart the brush skips, or null for a chart that filters its own lines. */
 		chart: object | null;

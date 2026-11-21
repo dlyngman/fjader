@@ -1,4 +1,3 @@
-export { default as WebGPUCanvas } from './WebGPUCanvas.svelte';
 export { default as Dots } from './Dots.svelte';
 export { default as Lines } from './Lines.svelte';
 export { default as Areas } from './Areas.svelte';

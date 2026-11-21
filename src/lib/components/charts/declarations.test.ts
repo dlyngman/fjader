@@ -22,17 +22,17 @@ function axis(id: string, side: 'bottom' | 'left' = 'bottom'): AxisSpec {
 }
 
 describe('DeclarationRegistry', () => {
-	it('keeps one list in registration order, and a cell reads each kind from it', () => {
+	it('keeps one list in registration order, and reads each kind from it', () => {
 		const registry = new DeclarationRegistry();
 		const bottom = axis('axis-bottom-1', 'bottom');
 		const left = axis('axis-left-1', 'left');
 		const parallel: ParallelAxesSpec = { id: 'parallel-1', ticksNumber: 5, tickFormat: null };
 		const frame: FrameSpec = { id: 'frame-1' };
 
-		registry.register({ kind: 'axis', spec: bottom, cellId: null });
-		registry.register({ kind: 'frame', spec: frame, cellId: null });
-		registry.register({ kind: 'axis', spec: left, cellId: null });
-		registry.register({ kind: 'parallel', spec: parallel, cellId: null });
+		registry.register({ kind: 'axis', spec: bottom });
+		registry.register({ kind: 'frame', spec: frame });
+		registry.register({ kind: 'axis', spec: left });
+		registry.register({ kind: 'parallel', spec: parallel });
 
 		expect(registry.declarations.map((d) => [d.kind, 'id' in d.spec ? d.spec.id : ''])).toEqual([
 			['axis', 'axis-bottom-1'],
@@ -40,51 +40,24 @@ describe('DeclarationRegistry', () => {
 			['axis', 'axis-left-1'],
 			['parallel', 'parallel-1']
 		]);
-		const cell = registry.forCell('cell-a');
-		expect(cell.axes).toEqual([bottom, left]);
-		expect(cell.parallel).toEqual([parallel]);
-		expect(cell.frames).toEqual([frame]);
-	});
-
-	it('a cell draws the declarations for every cell and its own, not another cell’s', () => {
-		const registry = new DeclarationRegistry();
-		const shared = axis('shared');
-		const a = axis('only-a');
-		const b = axis('only-b');
-		registry.register({ kind: 'axis', spec: shared, cellId: null });
-		registry.register({ kind: 'axis', spec: a, cellId: 'cell-a' });
-		registry.register({ kind: 'axis', spec: b, cellId: 'cell-b' });
-
-		expect(registry.forCell('cell-a').axes).toEqual([shared, a]);
-		expect(registry.forCell('cell-b').axes).toEqual([shared, b]);
-		expect(registry.forCell('cell-c').axes).toEqual([shared]);
-	});
-
-	it('a facet grid’s per-cell snippets give one declaration per cell, each drawn once', () => {
-		// The same <Frame /> in a per-cell snippet, rendered once per cell.
-		const registry = new DeclarationRegistry();
-		const cells = ['fx-0', 'fx-1', 'fx-2'];
-		for (const cellId of cells) {
-			registry.register({ kind: 'frame', spec: { id: `frame-${cellId}` }, cellId });
-		}
-		for (const cellId of cells) {
-			expect(registry.forCell(cellId).frames.map((f) => f.id)).toEqual([`frame-${cellId}`]);
-		}
+		expect(registry.axes).toEqual([bottom, left]);
+		expect(registry.parallel).toEqual([parallel]);
+		expect(registry.frames).toEqual([frame]);
 	});
 
 	it('unregistering replaces the list and removes only that declaration', () => {
 		const registry = new DeclarationRegistry();
 		const initial = registry.declarations;
-		const frame: ChartDeclaration = { kind: 'frame', spec: { id: 'frame-1' }, cellId: null };
+		const frame: ChartDeclaration = { kind: 'frame', spec: { id: 'frame-1' } };
 		const unregisterFrame = registry.register(frame);
 		const afterRegister = registry.declarations;
 		expect(afterRegister).not.toBe(initial);
 
-		const unregisterAxis = registry.register({ kind: 'axis', spec: axis('axis-1'), cellId: 'c' });
+		const unregisterAxis = registry.register({ kind: 'axis', spec: axis('axis-1') });
 		unregisterFrame();
 		expect(registry.declarations).not.toBe(afterRegister);
-		expect(registry.forCell('c').frames).toEqual([]);
-		expect(registry.forCell('c').axes.map((s) => s.id)).toEqual(['axis-1']);
+		expect(registry.frames).toEqual([]);
+		expect(registry.axes.map((s) => s.id)).toEqual(['axis-1']);
 
 		unregisterAxis();
 		expect(registry.declarations).toEqual([]);
@@ -111,21 +84,18 @@ describe('overlays', () => {
 		expect(ordered[1]).toBe(a);
 	});
 
-	it('a cell draws its slot only: every cell’s and its own, not another cell’s', () => {
+	it('lists a slot’s overlays only, in draw order', () => {
 		const registry = new DeclarationRegistry();
 		const crosshair = overlay('clipped');
 		const readout = overlay('margins');
-		const own = overlay('clipped', 1);
-		const other = overlay('clipped');
-		registry.register({ kind: 'overlay', spec: crosshair, cellId: null });
-		registry.register({ kind: 'overlay', spec: readout, cellId: null });
-		registry.register({ kind: 'overlay', spec: own, cellId: 'cell-a' });
-		registry.register({ kind: 'overlay', spec: other, cellId: 'cell-b' });
+		const above = overlay('clipped', 1);
 		const brush = overlay('interactors');
-		registry.register({ kind: 'overlay', spec: brush, cellId: null });
-		const cell = registry.forCell('cell-a');
-		expect(cell.overlays('clipped')).toEqual([crosshair, own]);
-		expect(cell.overlays('margins')).toEqual([readout]);
-		expect(cell.overlays('interactors')).toEqual([brush]);
+		registry.register({ kind: 'overlay', spec: above });
+		registry.register({ kind: 'overlay', spec: crosshair });
+		registry.register({ kind: 'overlay', spec: readout });
+		registry.register({ kind: 'overlay', spec: brush });
+		expect(registry.overlays('clipped')).toEqual([crosshair, above]);
+		expect(registry.overlays('margins')).toEqual([readout]);
+		expect(registry.overlays('interactors')).toEqual([brush]);
 	});
 });
