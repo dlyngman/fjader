@@ -12,23 +12,11 @@
 		DotsMark
 	} from '$lib/components';
 
-	// Toggle SVG layers to isolate jank source — judge VISUALLY, not by metrics.
+	// Toggle the SVG layer to isolate jank source — judge VISUALLY, not by metrics.
 	//
-	// The background layer (axes, frame, labels) sits BELOW the canvas at z-index 1;
-	// the foreground layer (crosshair, hover indicator, interaction rect) sits ABOVE
-	// it at z-index 3. Both repaint while the domain moves.
-	//
-	// `bgMode` walks a ladder that removes one kind of per-frame work at a time, so
-	// whichever rung goes smooth names the cost:
-	//
-	//   visible  — Svelte writes tick attrs, layout runs, layer paints
-	//   hidden   — visibility:hidden. Attrs still written, layout still runs, NO paint
-	//   none     — display:none. Attrs still written, no layout, no paint
-	//   removed  — {#if} false. Nothing at all
-	//
-	// visible -> hidden isolates paint/composite. hidden -> none isolates layout.
-	// none -> removed isolates the Svelte reactive work itself.
-	let bgMode = $state('visible');
+	// The foreground layer (crosshair, hover indicator, interaction rect) sits
+	// ABOVE the canvas at z-index 3 and repaints while the domain moves. (The axes
+	// and frame draw on the GPU; no chart has an SVG layer under its canvas.)
 
 	// The foreground carries the wheel/pointer handlers on its root <svg>, so it only
 	// gets two rungs — display:none or {#if} would make the chart uninteractive and
@@ -37,14 +25,12 @@
 	// working with nothing painted.
 	let fgMode = $state('visible');
 
-	// Candidate fix rather than a bisect: give each SVG its own compositing layer so
+	// Candidate fix rather than a bisect: give the SVG its own compositing layer so
 	// its repaint stops invalidating the shared one.
 	let promote = $state(false);
 
 	let showGrid = $state(true);
 	let showCrosshair = $state(true);
-
-	const modes = ['visible', 'hidden', 'none', 'removed'];
 
 	// --- Reference strips -------------------------------------------------------
 	//
@@ -158,20 +144,6 @@
 		Rendering &rarr; <strong>Frame Rendering Stats</strong> for the compositor's own dropped-frame count,
 		which is not the same thing as the rAF cadence.
 	</p>
-	<p style="color: #666; font-size: 13px;">
-		Walk <strong>Background</strong> down the ladder while panning. The rung where it goes smooth
-		names the cost: <em>visible&rarr;hidden</em> = paint/composite,
-		<em>hidden&rarr;none</em> = layout, <em>none&rarr;removed</em> = Svelte reactive work.
-	</p>
-
-	<div class="controls">
-		<span class="group">
-			<strong>Background</strong> (axes, frame — below canvas)
-			{#each modes as mode (mode)}
-				<label><input type="radio" bind:group={bgMode} value={mode} /> {mode}</label>
-			{/each}
-		</span>
-	</div>
 	<div class="controls">
 		<span class="group">
 			<strong>Foreground</strong> (crosshair, interaction — above canvas)
@@ -180,9 +152,7 @@
 		</span>
 	</div>
 	<div class="controls">
-		<label
-			><input type="checkbox" bind:checked={promote} /> Promote both SVGs to their own layer</label
-		>
+		<label><input type="checkbox" bind:checked={promote} /> Promote the SVG to its own layer</label>
 		<label><input type="checkbox" bind:checked={showGrid} /> Grid (GPU)</label>
 		<label><input type="checkbox" bind:checked={showCrosshair} /> Crosshair</label>
 	</div>
@@ -204,20 +174,12 @@
 <div class="strip-label">CSS strip — compositor only, no JS. The smoothness floor.</div>
 <div class="strip"><div class="stripe css-driven"></div></div>
 
-<div
-	class="chart-wrapper"
-	class:bg-hidden={bgMode === 'hidden'}
-	class:bg-none={bgMode === 'none'}
-	class:fg-hidden={fgMode === 'hidden'}
-	class:promote
->
+<div class="chart-wrapper" class:fg-hidden={fgMode === 'hidden'} class:promote>
 	<ChartContainer xLabel="delay" yLabel="time">
-		{#if bgMode !== 'removed'}
-			<Frame />
-			<AxisLeft />
-			<AxisBottom />
-			<MarginLabel />
-		{/if}
+		<Frame />
+		<AxisLeft />
+		<AxisBottom />
+		<MarginLabel />
 
 		{#if showGrid}<Grid />{/if}
 		<DotsMark table="flights" x={min('delay')} y="time" fill={avg('delay')} opacity="0.8" />
@@ -296,14 +258,6 @@
 		max-height: 600px;
 	}
 
-	.chart-wrapper.bg-hidden :global(.svg-background) {
-		visibility: hidden;
-	}
-
-	.chart-wrapper.bg-none :global(.svg-background) {
-		display: none;
-	}
-
 	/* The root <svg> carries the wheel/pointer handlers, so it stays hit-testable:
 	   a visible child of a hidden parent paints and hit-tests normally, and the
 	   interaction rect is fill="transparent" so nothing becomes visible. */
@@ -315,7 +269,6 @@
 		visibility: visible;
 	}
 
-	.chart-wrapper.promote :global(.svg-background),
 	.chart-wrapper.promote :global(.svg-foreground) {
 		will-change: transform;
 	}

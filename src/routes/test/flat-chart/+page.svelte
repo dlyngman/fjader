@@ -1,7 +1,9 @@
 <script>
 	/**
-	 * Flat charts: a chart's components as ChartContainer's children, no
-	 * snippets. Each case says what should happen; compare 1 with 2 and 3.
+	 * Flat charts: a chart's components as ChartContainer's children. Each case
+	 * says what should happen. (Cases 1, 4, 5 and 8 compared children with the
+	 * chart snippets, which are gone; the numbers of the rest stay, as notes and
+	 * PRs refer to them.)
 	 *
 	 *   ?paintlog=1  puts a tall facet grid (12 cells, most below the fold) first,
 	 *              with a paint counter per cell: does a canvas scrolled out of
@@ -156,24 +158,9 @@
 
 		<div class="charts-grid">
 			<div class="chart-panel">
-				<h3>1. Snippets (reference)</h3>
-				<p class="desc">background + canvas snippets, as charts are written today.</p>
-				<div class="chart-wrapper">
-					<ChartContainer xLabel="island" yLabel="count">
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<Grid axis="y" />
-						<BarMarkY table="penguins" x="island" y={count()} fill="island" />
-					</ChartContainer>
-				</div>
-			</div>
-
-			<div class="chart-panel">
 				<h3>2. Flat children</h3>
 				<p class="desc">
-					The same chart, no snippets, plus a crosshair and the hover readout as children. No SVG
-					under the canvas.
+					A bar chart with a crosshair and the hover readout as children. No SVG under the canvas.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="island" yLabel="count">
@@ -208,36 +195,6 @@
 			</div>
 
 			<div class="chart-panel">
-				<h3>4. Flat children + a foreground snippet</h3>
-				<p class="desc">Mixing works: the crosshair stays in its snippet until overlays move.</p>
-				<div class="chart-wrapper">
-					<ChartContainer xLabel="island" yLabel="count">
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<BarMarkY table="penguins" x="island" y={count()} fill="island" />
-						<Crosshair />
-					</ChartContainer>
-				</div>
-			</div>
-
-			<div class="chart-panel">
-				<h3>5. canvas snippet + children</h3>
-				<p class="desc">
-					Mixing works: the children render in the snippet's canvas. The bars (children) draw on the
-					grid (snippet), with axes and frame. No warning.
-				</p>
-				<div class="chart-wrapper">
-					<ChartContainer xLabel="island" yLabel="count">
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<BarMarkY table="penguins" x="island" y={count()} fill="island" />
-					</ChartContainer>
-				</div>
-			</div>
-
-			<div class="chart-panel">
 				<h3>7. Labels and TextMark, not faceted (control)</h3>
 				<p class="desc">
 					Counts inside the bars' tops (&lt;Labels anchor="inside-end"&gt;) and island names above
@@ -257,27 +214,8 @@
 			</div>
 
 			<div class="chart-panel wide">
-				<h3>8. Labels and TextMark, faceted, with snippets</h3>
-				<p class="desc">
-					As charts are written today. Counts (&lt;Labels&gt;) and island names (TextMark) in every
-					species cell, each cell its own.
-				</p>
-				<div class="chart-wrapper">
-					<ChartContainer xLabel="island" yLabel="count" fx="species">
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<BarMarkY table="penguins" x="island" y={count()} fill="island"
-							><Labels anchor="inside-end" /></BarMarkY
-						>
-						<TextMark table="penguins" x="island" y={count()} text="island" dy={-14} fontSize={9} />
-					</ChartContainer>
-				</div>
-			</div>
-
-			<div class="chart-panel wide">
 				<h3>9. Labels and TextMark, faceted, as children</h3>
-				<p class="desc">The same, flat.</p>
+				<p class="desc">Case 7 faceted by species: the counts and island names in every cell.</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="island" yLabel="count" fx="species">
 						<Frame />

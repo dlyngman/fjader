@@ -33,7 +33,6 @@ Three things to know before using it in a deployed app:
 	import {
 		initFjader,
 		ChartContainer,
-		WebGPUCanvas,
 		AxisLeft,
 		AxisBottom,
 		Grid,
@@ -57,30 +56,16 @@ Three things to know before using it in a deployed app:
 {#if loaded}
 	<div style="height: 400px">
 		<ChartContainer xLabel="island" yLabel="count">
-			{#snippet background()}
-				<AxisLeft />
-				<AxisBottom />
-			{/snippet}
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<Grid />
-						<BarMarkY
-							table="penguins"
-							x="island"
-							y={count()}
-							fill="species"
-							transforms={[stack()]}
-						/>
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
+			<AxisLeft />
+			<AxisBottom />
+			<Grid />
+			<BarMarkY table="penguins" x="island" y={count()} fill="species" transforms={[stack()]} />
 		</ChartContainer>
 	</div>
 {/if}
 ```
 
-A chart is a container with layers: axes in the background, marks on the GPU canvas. It fills its parent, so give the parent a height; the Python widget and Streamlit set one for you (400 and 500 px). The same chart can be written as a JSON spec and rendered with `Fjader.render(element, spec)`; the npm package ships Svelte source, so this needs a build that compiles Svelte, such as Vite with the Svelte plugin.
+A chart is a container, and everything in it is its child: axes, grid, marks, and the crosshair, brushes, toggles and legend when you add them; each draws where it belongs. It fills its parent, so give the parent a height; the Python widget and Streamlit set one for you (400 and 500 px). The same chart can be written as a JSON spec and rendered with `Fjader.render(element, spec)`; the npm package ships Svelte source, so this needs a build that compiles Svelte, such as Vite with the Svelte plugin.
 
 ## Python
 

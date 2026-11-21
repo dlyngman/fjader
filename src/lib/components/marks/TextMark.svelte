@@ -36,8 +36,8 @@
 	 * through every morph and reorder, in the same frame as the marks they
 	 * label, with no per-frame work on the main thread.
 	 *
-	 * A canvas mark: place it in `canvasComponents`, next to the marks it
-	 * labels. Needs HTML-in-Canvas (Chrome 157+).
+	 * A canvas mark: place it as a child of `<ChartContainer>`, next to the
+	 * marks it labels. Needs HTML-in-Canvas (Chrome 157+).
 	 */
 
 	interface Props extends BaseMarkProps, ContinuousScaleTypeProps {
@@ -92,7 +92,7 @@
 	const textAtlas = getContext<TextAtlas | undefined>('text-atlas');
 	if (!webGPUContext || !textAtlas) {
 		throw new Error(
-			"TextMark draws on the GPU: place it in a WebGPUCanvas (the chart's `canvasComponents` snippet), next to the marks it labels, not in `foreground`."
+			'TextMark draws on the GPU: place it as a child of <ChartContainer>, next to the marks it labels.'
 		);
 	}
 
