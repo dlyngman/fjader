@@ -2,11 +2,15 @@
  * What a chart draws because a component declared it, rather than rendered it
  * where it was placed: axes, parallel axes, the plot border, and SVG overlays.
  *
- * A declaration component registers its settings here and reads no chart
- * context where it is placed: what it needs per cell runs in what each cell
- * draws it with. GPU declarations (`AxisLeft`, `AxisBottom`, `ParallelAxes`,
- * `Frame`) register getters over their props, drawn in the cell's
- * `WebGPUCanvas` (`GpuAxis`, `GpuParallelAxes`, `PlotBorderRenderer`). Overlays
+ * A declaration component registers its settings here. Where it is placed it
+ * reads no CELL context (a cell's size, hover point, place in the grid: in a
+ * facet grid a declaration sits in the hidden pass-through, in no cell), only
+ * the chart's (`DeclarationChart`: its config and shared scales); what it
+ * needs per cell runs in what each cell draws it with.
+ *
+ * GPU declarations (`AxisLeft`, `AxisBottom`, `ParallelAxes`, `Frame`)
+ * register getters over their props, drawn in the cell's `WebGPUCanvas`
+ * (`GpuAxis`, `GpuParallelAxes`, `PlotBorderRenderer`). Overlays
  * (`Crosshair`, `MarginLabel`, `AxisCenter`, `SvgLayer`, the brushes, `Toggle`)
  * register a snippet the cell renders in its foreground SVG (`declareOverlay`).
  *
@@ -18,7 +22,8 @@
  */
 import { getContext, onDestroy, type Snippet } from 'svelte';
 import type { AxisSpec, ParallelAxesSpec } from '../axes/axis-spec';
-import type { ChartContext } from '$lib/types';
+import type { ChartContext, ScaleStateInstance } from '$lib/types';
+import type { ChartConfig } from '$lib/config';
 
 /** A plot border around the inner plot area (`<Frame/>`). */
 export interface FrameSpec {
@@ -70,6 +75,33 @@ export type ChartDeclaration = {
 export const DECLARATION_REGISTRY = 'declaration-registry';
 /** Set by `DeclarationScope`: the cell a declaration placed inside is for. */
 export const DECLARATION_SCOPE = 'declaration-scope';
+/**
+ * Set by `ChartContainer`: what a declaration may read of its chart
+ * (`DeclarationChart`). Not the 'chart' context, which is a cell's or the facet
+ * pass-through's depending on where the declaration is placed, and so holds
+ * cell fields (innerWidth, the hover point) that would be wrong in a grid.
+ */
+export const DECLARATION_CHART = 'declaration-chart';
+
+/** A chart as a declaration sees it: what every cell shares, nothing of one cell. */
+export interface DeclarationChart {
+	readonly chartId: string;
+	/** The chart's config: what a selection's own-chart rule (`chart:`) names. */
+	readonly config: ChartConfig;
+	readonly xScaleState: ScaleStateInstance | null | undefined;
+	readonly yScaleState: ScaleStateInstance | null | undefined;
+}
+
+/** The chart this declaration is placed in. Call during component initialisation. */
+export function getDeclarationChart(component: string): DeclarationChart {
+	const chart = getContext<DeclarationChart | undefined>(DECLARATION_CHART);
+	if (!chart)
+		throw new Error(
+			`<${component}> declares itself in a chart: place it inside a <ChartContainer>.`
+		);
+	return chart;
+}
+
 /** Set by `ChartCell`: what its canvas draws (`DeclarationRegistry.forCell`). */
 export const CELL_DECLARATIONS = 'cell-declarations';
 /**
@@ -204,7 +236,12 @@ export function declareOverlay(
 /**
  * Declare `spec` in the chart this component is placed in, for the cell its
  * scope names (or every cell), until the component is destroyed. Call during
- * component initialisation. Outside a chart, nothing is declared.
+ * component initialisation.
+ *
+ * Outside a chart: a declaration that only declares (an axis, Frame, an
+ * overlay) declares nothing and draws nothing, as its SVG ancestor did; one
+ * that needs the chart to work (a Toggle: its registrations name the chart)
+ * throws, through getDeclarationChart, since it could never do anything there.
  */
 export function declareInChart<K extends DeclarationKind>(kind: K, spec: Specs[K]): void {
 	const registry = getContext<DeclarationRegistry | undefined>(DECLARATION_REGISTRY);
