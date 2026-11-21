@@ -783,12 +783,22 @@
 
 	// The press under way, for reroutePress: its pointer, where it is now, and
 	// whether it was re-routed (then never a click, which would clear a brush).
+	// One press per cell at a time: while it lasts, other pointers' presses,
+	// moves and releases are ignored (otherPointer), so a second finger or pen
+	// can't take over the press, move the hover point or end a pan.
 	let pressPointerId: number | null = null;
+
+	/** Whether `event` is another pointer's than the press under way's. */
+	const otherPointer = (event: PointerEvent) =>
+		pressPointerId != null && event.pointerId !== pressPointerId;
 	let pressClientX = 0;
 	let pressClientY = 0;
 	let pressRerouted = false;
+	/** Where the press was last routed: the element a press's taker captures on. */
+	let pressTarget: Element | null = null;
 
 	function handlePointerDown(event: PointerEvent) {
+		if (otherPointer(event)) return;
 		hoverSettle.hold(true);
 		event.preventDefault();
 		chartCellEl?.focus({ preventScroll: true });
@@ -822,6 +832,7 @@
 	 * even just outside the plot area, where its edge handles reach.
 	 */
 	function routePress(target: Element, pointerId: number, clientX: number, clientY: number) {
+		pressTarget = target;
 		pointerBuffer.x = clientX - svgLeft;
 		pointerBuffer.y = clientY - svgTop;
 		const { xInBounds, yInBounds, innerPoint } = layout.getActiveAxes(pointerBuffer);
@@ -894,6 +905,7 @@
 	}
 
 	function processPointerMove(event: PointerEvent) {
+		if (otherPointer(event)) return;
 		if (event.pointerId === pressPointerId) {
 			pressClientX = event.clientX;
 			pressClientY = event.clientY;
@@ -966,6 +978,7 @@
 	}
 
 	function handlePointerUp(event: PointerEvent) {
+		if (otherPointer(event)) return;
 		const rerouted = pressRerouted && event.pointerId === pressPointerId;
 		if (event.pointerId === pressPointerId) {
 			pressPointerId = null;
@@ -989,11 +1002,19 @@
 	 * Capture lost. Before the press's release (the release clears
 	 * pressPointerId), the release may never come here: end an interactor's drag
 	 * as it stands rather than leave it waiting, which for a brush shared by
-	 * every cell would block it in all of them.
+	 * every cell would block it in all of them. The press is over then too, so
+	 * other pointers are no longer ignored.
 	 */
 	function handleLostPointerCapture(event: PointerEvent) {
+		if (otherPointer(event)) return;
 		hoverSettle.hold(false);
-		if (event.pointerId === pressPointerId && !isPanning) chartContext.onInteractorDragEnd?.();
+		if (event.pointerId !== pressPointerId) return;
+		// Handed over, not lost: a re-routed press captured on the element under
+		// the pointer now, and the one that had it reports the loss.
+		if (event.target !== pressTarget && pressTarget?.hasPointerCapture?.(event.pointerId)) return;
+		if (!isPanning) chartContext.onInteractorDragEnd?.();
+		pressPointerId = null;
+		pressRerouted = false;
 	}
 
 	function stopPan() {

@@ -240,6 +240,19 @@ describe('IntervalDrag2D', () => {
 		expect(round(sink.range.mock.lastCall!)).toEqual([20, 70, 20, 70]);
 	});
 
+	it('belongs to the pointer that pressed: a second pointer in the same cell is not the drag', () => {
+		const sink = { range: vi.fn((..._: number[]) => true), clear: vi.fn() };
+		const drag = new IntervalDrag2D(sink);
+		drag.press(A, 1, 40, 160, null);
+		drag.move(A, 1, 100, 100, scale, yScale);
+		expect(drag.move(A, 7, 180, 20, scale, yScale)).toBe(false);
+		expect(drag.release(A, 7)).toBe(false);
+		expect(drag.owns(A, 7)).toBe(false);
+		drag.release(A, 1);
+		expect(sink.range).toHaveBeenCalledTimes(1);
+		expect(drag.held).toBe(false);
+	});
+
 	it('resizes by screen side: the top edge on an inverted y, kept when dragged past', () => {
 		const sink = { range: vi.fn((..._: number[]) => true), clear: vi.fn() };
 		const drag = new IntervalDrag2D(sink);
