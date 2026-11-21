@@ -10,4 +10,4 @@
 	let { selection = 'brush', field }: Props = $props();
 </script>
 
-<Interval1D {selection} {field} axis="x" component="IntervalX" />
+<Interval1D {selection} {field} axis="x" />

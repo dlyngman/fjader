@@ -7,8 +7,8 @@
  * draws it with. GPU declarations (`AxisLeft`, `AxisBottom`, `ParallelAxes`,
  * `Frame`) register getters over their props, drawn in the cell's
  * `WebGPUCanvas` (`GpuAxis`, `GpuParallelAxes`, `PlotBorderRenderer`). Overlays
- * (`Crosshair`, `MarginLabel`, `AxisCenter`, `SvgLayer`) register a snippet the
- * cell renders in its foreground SVG (`declareOverlay`).
+ * (`Crosshair`, `MarginLabel`, `AxisCenter`, `SvgLayer`, the brushes, `Toggle`)
+ * register a snippet the cell renders in its foreground SVG (`declareOverlay`).
  *
  * One registry per chart (`ChartContainer`). A declaration is for every cell
  * of the chart, or for one: `ChartCell` renders its per-cell snippets
@@ -28,10 +28,12 @@ export interface FrameSpec {
 /**
  * Where in a cell's foreground SVG an overlay draws: `clipped`, inside the plot
  * clip, under the hover dot and the hit target (Crosshair, AxisCenter,
- * SvgLayer); `margins`, unclipped, over the plot and its margins, taking no
- * pointer events (MarginLabel, SvgLayer clip={false}).
+ * SvgLayer); `interactors`, inside the clip, above the hit target, so a brush's
+ * handles take pointer events (the brushes, Toggle); `margins`, unclipped, over
+ * the plot and its margins, taking no pointer events (MarginLabel, SvgLayer
+ * clip={false}).
  */
-export type OverlaySlot = 'clipped' | 'margins';
+export type OverlaySlot = 'clipped' | 'interactors' | 'margins';
 
 /**
  * An SVG overlay (`declareOverlay`): a snippet each cell renders in its
@@ -87,8 +89,8 @@ export interface DeclarationScopeContext {
 	readonly cellId: string | null;
 	/**
 	 * Placed directly in a chart (`ChartContainer`'s children), not in one of
-	 * its snippets. Read by the components that can't be placed there yet
-	 * (`warnIfInChildren`): the toggles, the brushes, the legend.
+	 * its snippets. Read by the component that can't be placed there yet
+	 * (`warnIfInChildren`): the legend.
 	 */
 	readonly inChildren: boolean;
 }
@@ -160,9 +162,9 @@ export function orderOverlays(overlays: readonly OverlaySpec[]): OverlaySpec[] {
 }
 
 /**
- * For a component that still renders its own SVG or HTML where it is placed
- * (a brush, a toggle, a legend; the crosshair and the readout are declared
- * overlays now): warn when it is a direct child of a chart. Children render
+ * For a component that still renders its own HTML where it is placed (the
+ * legend; the overlays, brushes and toggles are declarations now): warn when
+ * it is a direct child of a chart. Children render
  * inside the chart's canvas layer, where such a component can't draw or take
  * pointer events; it belongs in its snippet until it is a declaration too.
  * Call during component initialisation.

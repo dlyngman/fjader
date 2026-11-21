@@ -121,8 +121,11 @@ describe('overlays', () => {
 		registry.register({ kind: 'overlay', spec: readout, cellId: null });
 		registry.register({ kind: 'overlay', spec: own, cellId: 'cell-a' });
 		registry.register({ kind: 'overlay', spec: other, cellId: 'cell-b' });
+		const brush = overlay('interactors');
+		registry.register({ kind: 'overlay', spec: brush, cellId: null });
 		const cell = registry.forCell('cell-a');
 		expect(cell.overlays('clipped')).toEqual([crosshair, own]);
 		expect(cell.overlays('margins')).toEqual([readout]);
+		expect(cell.overlays('interactors')).toEqual([brush]);
 	});
 });

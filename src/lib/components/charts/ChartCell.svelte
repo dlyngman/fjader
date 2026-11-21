@@ -1164,6 +1164,13 @@
 						class="interaction-target"
 					/>
 					<DeclarationScope cellId={cellChartId}>{@render interactors?.()}</DeclarationScope>
+					<!-- Declared interactors (the brushes, Toggle): after the interactors
+					     snippet, so where both draw, the declared ones take pointer events. -->
+					<DeclarationScope cellId={cellChartId}>
+						{#each cellDeclarations.overlays('interactors') as declared (declared)}
+							{@render declared.snippet(chartContext)}
+						{/each}
+					</DeclarationScope>
 				</g>
 
 				<!-- Overlays over the plot and its margins, unclipped, taking no pointer
