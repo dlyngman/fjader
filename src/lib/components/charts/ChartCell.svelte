@@ -4,6 +4,7 @@
 	import type { ChartHover } from './ChartHover.svelte';
 	import { setContext, getContext, onMount } from 'svelte';
 	import { DECLARATION_REGISTRY, type DeclarationRegistry } from './declarations.svelte';
+	import InCell from './InCell.svelte';
 	import type { Snippet } from 'svelte';
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
 	import type { Margin } from '$lib/types';
@@ -1163,9 +1164,11 @@
 				>
 					<!-- Declared overlays (Crosshair, AxisCenter, SvgLayer), keyed by the
 					     declaration, so another one coming or going remounts none. -->
-					{#each declarationRegistry.overlays('clipped') as declared (declared)}
-						{@render declared.snippet(chartContext)}
-					{/each}
+					<InCell>
+						{#each declarationRegistry.overlays('clipped') as declared (declared)}
+							{@render declared.snippet(chartContext)}
+						{/each}
+					</InCell>
 					<HoverIndicator />
 					<rect
 						x="0"
@@ -1176,17 +1179,21 @@
 						class="interaction-target"
 					/>
 					<!-- Declared interactors (the brushes, Toggle): above the hit target. -->
-					{#each declarationRegistry.overlays('interactors') as declared (declared)}
-						{@render declared.snippet(chartContext)}
-					{/each}
+					<InCell>
+						{#each declarationRegistry.overlays('interactors') as declared (declared)}
+							{@render declared.snippet(chartContext)}
+						{/each}
+					</InCell>
 				</g>
 
 				<!-- Overlays over the plot and its margins, unclipped, taking no pointer
 				     events (MarginLabel, SvgLayer clip={false}). -->
 				<g transform={layout.innerTransform} class="overlay-margins">
-					{#each declarationRegistry.overlays('margins') as declared (declared)}
-						{@render declared.snippet(chartContext)}
-					{/each}
+					<InCell>
+						{#each declarationRegistry.overlays('margins') as declared (declared)}
+							{@render declared.snippet(chartContext)}
+						{/each}
+					</InCell>
 				</g>
 			</svg>
 

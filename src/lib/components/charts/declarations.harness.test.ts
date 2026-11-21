@@ -4,6 +4,7 @@ import { render } from 'svelte/server';
 import ToggleHarness from '../../../test-fixtures/declarations/ToggleHarness.svelte';
 import BrushHarness from '../../../test-fixtures/declarations/BrushHarness.svelte';
 import LegendHarness from '../../../test-fixtures/declarations/LegendHarness.svelte';
+import InCellHarness from '../../../test-fixtures/declarations/InCellHarness.svelte';
 import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 import type { ChartContext } from '$lib/types';
 import { DeclarationRegistry, type ChartDeclaration } from './declarations.svelte';
@@ -232,5 +233,32 @@ describe('Legend as a declaration', () => {
 		for (const d of registered) registry.register(d);
 		expect(registry.legends('top')).toEqual([registered[0].spec]);
 		expect(registry.legends('right')).toEqual([registered[1].spec]);
+	});
+});
+
+describe('Declarations inside what a cell renders per cell (InCell)', () => {
+	it('declareInChart skips one there, with a warning; a chart child still declares', () => {
+		const registry = new DeclarationRegistry();
+		const registered: ChartDeclaration[] = [];
+		const register = registry.register.bind(registry);
+		registry.register = (d) => {
+			registered.push(d);
+			return register(d);
+		};
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			render(InCellHarness, { props: { registry, probe: 'declare' } });
+			expect(registered.map((d) => ('id' in d.spec ? d.spec.id : ''))).toEqual(['child']);
+			expect(warn).toHaveBeenCalledTimes(1);
+			expect(String(warn.mock.calls[0][0])).toContain('inside an overlay');
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it('getDeclarationChart throws there: a Toggle or brush would register once per cell', () => {
+		expect(() =>
+			render(InCellHarness, { props: { registry: new DeclarationRegistry(), probe: 'chart' } })
+		).toThrow(/not inside an overlay/);
 	});
 });

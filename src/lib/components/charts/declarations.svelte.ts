@@ -16,8 +16,10 @@
  *
  * One registry per chart (`ChartContainer`), and every declaration in it is
  * the chart's: a facet grid draws it in each cell. A declaring component is
- * placed as the chart's child. Not inside what a cell renders per cell (an
- * `SvgLayer`'s content): there it would declare once per cell.
+ * placed as the chart's child. Inside what a cell renders per cell (an
+ * `SvgLayer`'s content, marked by `InCell`) it would declare once per cell, so
+ * there `declareInChart` skips it with a warning, and `getDeclarationChart`
+ * throws.
  */
 import { getContext, onDestroy, type Snippet } from 'svelte';
 import type { AxisSpec, ParallelAxesSpec } from '../axes/axis-spec';
@@ -108,8 +110,27 @@ export interface DeclarationChart {
 	readonly parallelScales: ChartContext['parallelScales'];
 }
 
+/**
+ * Set by `InCell` around what a cell renders per cell (its overlays): a
+ * declaring component placed there (in an `SvgLayer`'s content) would declare
+ * once per cell, multiplying in a facet grid.
+ */
+export const IN_CELL = 'declaration-in-cell';
+
+const warnedInCell = new Set<string>();
+
+/** Whether this component is inside what a cell renders per cell. */
+function inCell(): boolean {
+	return getContext<boolean | undefined>(IN_CELL) === true;
+}
+
 /** The chart this declaration is placed in. Call during component initialisation. */
 export function getDeclarationChart(component: string): DeclarationChart {
+	if (inCell())
+		throw new Error(
+			`<${component}> declares itself in a chart: place it as a child of <ChartContainer>, ` +
+				'not inside an overlay (an SvgLayer), which every cell renders.'
+		);
 	const chart = getContext<DeclarationChart | undefined>(DECLARATION_CHART);
 	if (!chart)
 		throw new Error(
@@ -167,8 +188,8 @@ export class DeclarationRegistry {
 /**
  * Overlays in draw order: by zIndex, and by registration order among equals.
  * Registration order alone is not stable: an overlay in a toggled {#if}
- * registers again at the end. A zIndex is the only guaranteed order. A new array; the specs themselves, so a keyed {#each}
- * keeps each overlay mounted.
+ * registers again at the end. A zIndex is the only guaranteed order. A new
+ * array; the specs themselves, so a keyed {#each} keeps each overlay mounted.
  */
 export function orderOverlays(overlays: readonly OverlaySpec[]): OverlaySpec[] {
 	return overlays
@@ -227,6 +248,19 @@ export function declareLegend(
  * throws, through getDeclarationChart, since it could never do anything there.
  */
 export function declareInChart<K extends DeclarationKind>(kind: K, spec: Specs[K]): void {
+	// Inside what a cell renders per cell: it would declare once per cell, and
+	// each cell would draw every copy. Skipped, with one warning per kind.
+	if (inCell()) {
+		if (!warnedInCell.has(kind)) {
+			warnedInCell.add(kind);
+			console.warn(
+				`fjader: a ${kind} declared inside an overlay (an SvgLayer) is skipped: every cell ` +
+					'renders an overlay, so it would declare once per cell. Place it as a child of ' +
+					'<ChartContainer>.'
+			);
+		}
+		return;
+	}
 	const registry = getContext<DeclarationRegistry | undefined>(DECLARATION_REGISTRY);
 	const unregister = registry?.register({ kind, spec } as ChartDeclaration);
 	onDestroy(() => unregister?.());

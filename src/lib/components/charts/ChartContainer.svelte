@@ -78,6 +78,16 @@
 		 * canvas for them.
 		 */
 		children?: Snippet;
+		/**
+		 * Removed in 0.3.0, with `canvas`, `foreground`, `interactors` and
+		 * `overlay`: place the components as the chart's children. Typed never so
+		 * an upgrade fails to type-check rather than render a blank chart.
+		 */
+		background?: never;
+		canvas?: never;
+		foreground?: never;
+		interactors?: never;
+		overlay?: never;
 		wheelInteraction?: { dwellTimeMs?: number; momentumThreshold?: number; enabled?: boolean };
 		xZoomLimit?: number;
 		yZoomLimit?: number;
@@ -111,6 +121,11 @@
 		fxDomain = null,
 		columns: facetColumns = null,
 		children = undefined,
+		background: removedBackground,
+		canvas: removedCanvas,
+		foreground: removedForeground,
+		interactors: removedInteractors,
+		overlay: removedOverlay,
 		entrance = 'auto',
 		wheelInteraction = {
 			dwellTimeMs: 250,
@@ -129,6 +144,31 @@
 		useYSelection = false,
 		tooltipScheme = undefined
 	}: Props = $props();
+
+	// The chart snippets removed in 0.3.0. Svelte ignores an unknown prop, so a
+	// chart upgraded as is would render blank with nothing said: say it, once.
+	{
+		const removed = Object.entries({
+			background: removedBackground,
+			canvas: removedCanvas,
+			foreground: removedForeground,
+			interactors: removedInteractors,
+			overlay: removedOverlay
+		})
+			.filter(([, v]) => v !== undefined)
+			.map(([k]) => k);
+		const verb =
+			removed.length > 1
+				? 'props were removed in 0.3.0 and draw'
+				: 'prop was removed in 0.3.0 and draws';
+		if (removed.length > 0)
+			console.warn(
+				`fjader: <ChartContainer>'s ${removed.map((k) => `\`${k}\``).join(', ')} snippet ` +
+					`${verb} ` +
+					'nothing: place the components directly inside the chart, as its children ' +
+					'(a canvas snippet: the contents of its canvasComponents).'
+			);
+	}
 
 	const defaultMargin = { top: 30, right: 50, bottom: 35, left: 75 };
 	const cellMargin = { ...defaultMargin, ...marginOverride };

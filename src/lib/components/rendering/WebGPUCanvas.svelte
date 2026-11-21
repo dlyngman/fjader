@@ -449,11 +449,12 @@
 	{/if}
 {/if}
 <!--
-	The chart's components, at once: not behind the context, so their queries, scales and declarations start while
-	WebGPU comes up, and legends and interactors are there even if it never
-	does. Their renderers wait for the canvas themselves
-	(WebGPUCanvasContext.ready). Only the GPU-only declarations above (border,
-	axes) wait for it. The faceted pass-through renders them above.
+	The chart's components, at once: not behind the context, so their queries,
+	scales and declarations start while WebGPU comes up, and legends and
+	interactors are there even if it never does. Their renderers wait for the
+	canvas themselves (WebGPUCanvasContext.ready). Only the GPU-only
+	declarations above (border, axes) wait for it. The faceted pass-through
+	renders them above.
 -->
 {#if !isFaceted}{@render components?.()}{/if}
 
