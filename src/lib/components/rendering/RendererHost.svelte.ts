@@ -1,4 +1,4 @@
-import { untrack } from 'svelte';
+import { onDestroy, untrack } from 'svelte';
 import { BaseGPURenderer, type InitConfig } from './BaseGPURenderer.svelte';
 import type { GPUCoordinator } from '$lib/gpu';
 import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
@@ -63,10 +63,6 @@ export interface RendererMount {
 	ready?(renderer: BaseGPURenderer): void | Promise<void>;
 }
 
-/** How long to wait for the canvas to come up: 100 tries, 50ms apart. */
-const DEVICE_POLL_LIMIT = 100;
-const DEVICE_POLL_MS = 50;
-
 export class RendererHost {
 	/**
 	 * The renderer, once it exists. `$state`, so a component's `$derived` and
@@ -79,6 +75,13 @@ export class RendererHost {
 
 	#options: RendererHostOptions;
 	#mounted = false;
+	/**
+	 * Its component was destroyed. `mount` awaits the canvas, which can take all
+	 * of WebGPU start-up: a component gone by then destroyed `renderer` while it
+	 * was still null, so a renderer built after that would never be destroyed
+	 * and would keep drawing as a stray layer.
+	 */
+	#destroyed = false;
 
 	/**
 	 * Construct during component initialisation — at the top of `<script>`, not
@@ -88,6 +91,9 @@ export class RendererHost {
 	 */
 	constructor(options: RendererHostOptions) {
 		this.#options = options;
+		onDestroy(() => {
+			this.#destroyed = true;
+		});
 
 		// The pipeline is compiled for the chart's scale types, and a chart does
 		// not always know them when its marks mount: a mark that infers its axis
@@ -107,7 +113,7 @@ export class RendererHost {
 	}
 
 	/**
-	 * Wait for the device, then build the renderer. Call once, from `onMount`.
+	 * Wait for the canvas (its `ready`), then build the renderer. Call once, from `onMount`.
 	 *
 	 * Resolves when the renderer is usable, or when it is not: a canvas that
 	 * never initialises leaves `renderer` null and every gated effect inert,
@@ -128,10 +134,17 @@ export class RendererHost {
 			);
 			return;
 		}
-		for (let i = 0; i < DEVICE_POLL_LIMIT && !ctx.isInitialized(); i++) {
-			await new Promise((r) => setTimeout(r, DEVICE_POLL_MS));
+		// However long the canvas takes to configure (thirty at once, a slow
+		// adapter, a background tab), a mark waits for it rather than giving up
+		// on a timer of its own. It rejects when the canvas never will be usable,
+		// which includes the canvas's own 5 s wait for the GPU coordinator
+		// running out (WebGPUCanvas shows its error then).
+		try {
+			await ctx.ready;
+		} catch {
+			return;
 		}
-		if (!ctx.isInitialized()) return;
+		if (this.#destroyed) return;
 
 		const {
 			markType,
@@ -156,6 +169,10 @@ export class RendererHost {
 			// the coordinator can reach it as soon as `ready` registers a layer.
 			this.renderer = renderer;
 			await renderer.initialize(m.init);
+			// Destroyed while initialising: the component has already destroyed
+			// (or retained) the renderer it saw published above; registering a
+			// layer for it now would draw a destroyed renderer.
+			if (this.#destroyed) return;
 			await m.ready?.(renderer);
 		} catch (error) {
 			const what = this.#options.label ?? markType;

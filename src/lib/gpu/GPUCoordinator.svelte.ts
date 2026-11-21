@@ -2319,12 +2319,16 @@ export class GPUCoordinator {
 			entranceGateOff: null
 		};
 		chartConfig.immediateRows = new Uint32Array(chartConfig.immediates.buffer);
-		// The gate opens on a mark's data or a timeout, neither of which need
-		// redraw this chart. Without a frame the entrance would wait for one.
-		chartConfig.entranceGateOff =
-			chartConfig.entranceGate?.onOpen(() => this.invalidateChart(chartId)) ?? null;
 
 		this.#registeredCharts.set(chartId, chartConfig);
+		// The gate opens on a mark's data or a timeout, neither of which need
+		// redraw this chart. Without a frame the entrance would wait for one.
+		// After the chart is registered: a gate already open (its marks' data
+		// came before the canvas was ready) calls back at once, and
+		// invalidateChart ignores a chart it doesn't know, so subscribing first
+		// lost that frame and the chart never drew.
+		chartConfig.entranceGateOff =
+			chartConfig.entranceGate?.onOpen(() => this.invalidateChart(chartId)) ?? null;
 
 		// Observe canvas for viewport visibility
 		if (this.#visibilityObserver) {

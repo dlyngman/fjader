@@ -87,6 +87,28 @@
 	let contextConfigured = $state(isFaceted);
 	let initializationError = $state<string | null>(null);
 
+	/**
+	 * When the canvas can be drawn to (WebGPUCanvasContext.ready). A rejection
+	 * is reported by the canvas itself (its error box); the renderers awaiting
+	 * it just skip setting up, so it is marked handled here.
+	 */
+	let resolveReady!: () => void;
+	let rejectReady!: (reason: unknown) => void;
+	const ready = new Promise<void>((resolve, reject) => {
+		resolveReady = resolve;
+		rejectReady = reject;
+	});
+	ready.catch(() => {});
+	// The pass-through draws through its facet cells' canvases: ready when the device is.
+	if (isFaceted) {
+		if (!gpuCoordinator) rejectReady(new Error('GPUCoordinator not found'));
+		else
+			gpuCoordinator.ready.then(
+				(ok) => (ok ? resolveReady() : rejectReady(new Error('WebGPU unavailable'))),
+				rejectReady
+			);
+	}
+
 	const chartId = c.chartId;
 
 	// Enhanced initialization with comprehensive error handling
@@ -115,10 +137,18 @@
 			// Register with coordinator after context is ready
 			registerWithCoordinator();
 
+			// setupCanvas reports its own failure through initializationError,
+			// which takes the canvas out of the DOM: not ready, then.
+			if (initializationError) {
+				rejectReady(new Error(initializationError));
+				return;
+			}
 			console.log(`✅ WebGPUCanvas ${chartId} initialized successfully`);
+			resolveReady();
 		} catch (error) {
 			console.error(`❌ WebGPUCanvas ${chartId} initialization failed:`, error);
 			initializationError = (error as Error).message;
+			rejectReady(error);
 			throw error;
 		}
 	}
@@ -255,6 +285,8 @@
 		isInitialized() {
 			return contextConfigured && gpuCoordinator?.isInitialized;
 		},
+
+		ready,
 
 		invalidate() {
 			chartControl?.invalidate();
@@ -408,8 +440,6 @@
 		{/if}
 	</canvas>
 	{#if contextConfigured}
-		{@render canvasComponents?.()}
-		{#if ownsChildren}{@render chartChildren?.snippet?.()}{/if}
 		{#if (declarations?.frames.length ?? 0) > 0}
 			<PlotBorderRenderer />
 		{/if}
@@ -424,6 +454,18 @@
 			<p>Initializing WebGPU context for chart {chartId}...</p>
 		</div>
 	{/if}
+{/if}
+<!--
+	The chart's components (its children, or a canvas snippet's), at once: not
+	behind the context, so their queries, scales and declarations start while
+	WebGPU comes up, and legends and interactors are there even if it never
+	does. Their renderers wait for the canvas themselves
+	(WebGPUCanvasContext.ready). Only the GPU-only declarations above (border,
+	axes) wait for it. The faceted pass-through renders them above.
+-->
+{#if !isFaceted}
+	{@render canvasComponents?.()}
+	{#if ownsChildren}{@render chartChildren?.snippet?.()}{/if}
 {/if}
 
 <style>

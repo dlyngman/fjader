@@ -2,7 +2,7 @@
 	import { ScaleGeneration } from '$lib/scales/ScaleGeneration.svelte';
 	import { ChartVisibility } from './ChartVisibility.svelte';
 	import { ChartHover } from './ChartHover.svelte';
-	import { setContext, getContext, onDestroy } from 'svelte';
+	import { setContext, getContext, onDestroy, untrack } from 'svelte';
 	import type { Snippet } from 'svelte';
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
 	import type { Margin } from '$lib/types';
@@ -267,6 +267,44 @@
 	}
 	let pendingScaleRegistrations: PendingRegistration[] = [];
 
+	/**
+	 * Register a mark's scale requirement, or queue it until ChartScales exists.
+	 * The one entry point for every context a mark can get (this container's,
+	 * the cells'): a mark that registers from its constructor mounts before the
+	 * scales are created, and a dropped registration leaves its chart with no
+	 * scales at all.
+	 */
+	const registerScaleType: ChartContext['registerScaleType'] = (
+		dimension,
+		type,
+		priority,
+		markId,
+		config,
+		columnName
+	) => {
+		const dim = dimension as 'x' | 'y';
+		if (scales) {
+			scales.registerScaleType(dim, type, priority, markId, config, columnName);
+		} else {
+			pendingScaleRegistrations.push({
+				dimension: dim,
+				type,
+				priority,
+				markId,
+				config,
+				columnName
+			});
+		}
+	};
+	/** Unregister, or drop the queued registration of a mark gone before the scales came. */
+	const unregisterScaleType: ChartContext['unregisterScaleType'] = (dimension, markId) => {
+		if (scales) scales.unregisterScaleType(dimension, markId);
+		else
+			pendingScaleRegistrations = pendingScaleRegistrations.filter(
+				(r) => r.dimension !== dimension || r.markId !== markId
+			);
+	};
+
 	$effect(() => {
 		const x = xLabel;
 		const y = yLabel;
@@ -291,17 +329,22 @@
 			entranceGate: chartConfig.entrance
 		});
 
-		// Replay any scale registrations that were queued before scales existed
-		for (const reg of pendingScaleRegistrations) {
-			newScales.registerScaleType(
-				reg.dimension,
-				reg.type,
-				reg.priority,
-				reg.markId,
-				reg.config,
-				reg.columnName
-			);
-		}
+		// Replay any scale registrations that were queued before scales existed.
+		// Untracked: they run inside the effect that creates the scales, and
+		// whatever a registration reads must not become a reason to rebuild the
+		// chart's scales from empty.
+		untrack(() => {
+			for (const reg of pendingScaleRegistrations) {
+				newScales.registerScaleType(
+					reg.dimension,
+					reg.type,
+					reg.priority,
+					reg.markId,
+					reg.config,
+					reg.columnName
+				);
+			}
+		});
 		pendingScaleRegistrations = [];
 
 		scales = newScales;
@@ -446,24 +489,11 @@
 			return scales?.yBandwidth;
 		},
 
-		registerScaleType: (dimension, type, priority, markId, config, columnName) => {
-			const dim = dimension as 'x' | 'y';
-			if (scales) {
-				scales.registerScaleType(dim, type, priority, markId, config, columnName);
-			} else {
-				pendingScaleRegistrations.push({
-					dimension: dim,
-					type,
-					priority,
-					markId,
-					config,
-					columnName
-				});
-			}
-		},
-		unregisterScaleType: (dimension, markId) =>
-			scales?.unregisterScaleType(dimension as 'x' | 'y', markId),
+		registerScaleType,
+		unregisterScaleType,
 
+		// Not queued, unlike registerScaleType: a facet pass-through mark that sets
+		// columns before the scales exist loses them (no page facets parallel coordinates).
 		setParallelColumns: (markId, columns) => scales?.setParallelColumns(markId, columns),
 		reorderParallelAxis: (from, to) => scales?.reorderParallelAxis(from, to),
 		get parallelReorderState() {
@@ -612,6 +642,8 @@
 						facetLabel={String(categoryLabel(cat))}
 						margin={{ top: 20, right: 10, bottom: 35, left: 55 }}
 						{scales}
+						{registerScaleType}
+						{unregisterScaleType}
 						{scaleGeneration}
 						{chartVisibility}
 						{chartHover}
@@ -630,13 +662,19 @@
 		{:else}
 			<div class="facet-loading">Discovering facet categories...</div>
 		{/if}
-	{:else}
-		<!-- Normal (non-faceted) mode -->
+	{:else if scales}
+		<!-- Normal (non-faceted) mode. Once the chart's scales exist (the effect
+		     above, right after the first render): the cell's marks mount without
+		     waiting for WebGPU, and everything they hand the chart's scales
+		     (requirements, parallel columns) needs them there. Replaced, never
+		     unset, so this does not remount the cell. -->
 		<ChartCell
 			cellChartId={layout.chartId}
 			margin={cellMargin}
 			{clipPadding}
 			{scales}
+			{registerScaleType}
+			{unregisterScaleType}
 			{scaleGeneration}
 			{chartVisibility}
 			{chartHover}
