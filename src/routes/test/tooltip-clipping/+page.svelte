@@ -1,14 +1,7 @@
 <script>
 	import { initFjader } from '$lib';
 	import { onMount } from 'svelte';
-	import {
-		ChartContainer,
-		Frame,
-		AxisLeft,
-		AxisBottom,
-		WebGPUCanvas,
-		DotsMark
-	} from '$lib/components';
+	import { ChartContainer, Frame, AxisLeft, AxisBottom, DotsMark } from '$lib/components';
 
 	const { queryEngine } = initFjader();
 
@@ -49,18 +42,10 @@
 {#snippet chart(tooltipScheme = undefined)}
 	<div class="chart">
 		<ChartContainer {tooltipScheme}>
-			{#snippet background()}
-				<Frame />
-				<AxisLeft />
-				<AxisBottom />
-			{/snippet}
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<DotsMark table="tt_points" x="x" y="y" fill="site" />
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
+			<Frame />
+			<AxisLeft />
+			<AxisBottom />
+			<DotsMark table="tt_points" x="x" y="y" fill="site" />
 		</ChartContainer>
 	</div>
 {/snippet}

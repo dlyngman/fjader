@@ -9,7 +9,6 @@
 		AxisBottom,
 		MarginLabel,
 		Crosshair,
-		WebGPUCanvas,
 		DotsMark
 	} from '$lib/components';
 
@@ -213,27 +212,17 @@
 	class:promote
 >
 	<ChartContainer xLabel="delay" yLabel="time">
-		{#snippet background()}
-			{#if bgMode !== 'removed'}
-				<Frame />
-				<AxisLeft />
-				<AxisBottom />
-				<MarginLabel />
-			{/if}
-		{/snippet}
+		{#if bgMode !== 'removed'}
+			<Frame />
+			<AxisLeft />
+			<AxisBottom />
+			<MarginLabel />
+		{/if}
 
-		{#snippet canvas()}
-			<WebGPUCanvas>
-				{#snippet canvasComponents()}
-					{#if showGrid}<Grid />{/if}
-					<DotsMark table="flights" x={min('delay')} y="time" fill={avg('delay')} opacity="0.8" />
-				{/snippet}
-			</WebGPUCanvas>
-		{/snippet}
+		{#if showGrid}<Grid />{/if}
+		<DotsMark table="flights" x={min('delay')} y="time" fill={avg('delay')} opacity="0.8" />
 
-		{#snippet foreground()}
-			{#if showCrosshair}<Crosshair />{/if}
-		{/snippet}
+		{#if showCrosshair}<Crosshair />{/if}
 	</ChartContainer>
 </div>
 

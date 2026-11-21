@@ -7,7 +7,6 @@
 		AxisBottom,
 		ParallelAxes,
 		ParallelBrushes,
-		WebGPUCanvas,
 		DotsMark,
 		ParallelCoordinatesMark
 	} from '$lib/components';
@@ -34,29 +33,19 @@
 			</div>
 			<div class="chart-body">
 				<ChartContainer clipPadding={30}>
-					{#snippet background()}
-						<Frame />
-						<ParallelAxes />
-					{/snippet}
+					<Frame />
+					<ParallelAxes />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<ParallelCoordinatesMark
-									table="penguins"
-									{columns}
-									stroke="species"
-									opacity={0.5}
-									curve="bump-x"
-									selection="brush"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<ParallelCoordinatesMark
+						table="penguins"
+						{columns}
+						stroke="species"
+						opacity={0.5}
+						curve="bump-x"
+						selection="brush"
+					/>
 
-					{#snippet interactors()}
-						<ParallelBrushes selection="brush" />
-					{/snippet}
+					<ParallelBrushes selection="brush" />
 				</ChartContainer>
 			</div>
 		</div>
@@ -67,29 +56,19 @@
 			</div>
 			<div class="chart-body">
 				<ChartContainer xLabel="bill_length" yLabel="bill_depth">
-					{#snippet background()}
-						<Frame />
-					{/snippet}
+					<Frame />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<DotsMark
-									table="penguins"
-									x="bill_length"
-									y="bill_depth"
-									fill="species"
-									selection="brush"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<DotsMark
+						table="penguins"
+						x="bill_length"
+						y="bill_depth"
+						fill="species"
+						selection="brush"
+					/>
 
-					{#snippet foreground()}
-						<AxisLeft />
-						<AxisBottom />
-					{/snippet}
+					<AxisLeft />
+					<AxisBottom />
 				</ChartContainer>
 			</div>
 		</div>

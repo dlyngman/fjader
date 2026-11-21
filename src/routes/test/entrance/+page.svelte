@@ -24,7 +24,6 @@
 		Frame,
 		AxisLeft,
 		AxisBottom,
-		WebGPUCanvas,
 		BarMarkY,
 		BarMarkX,
 		RectYMark,
@@ -119,16 +118,10 @@
 					<h2>Bars, with labels (grow / fade)</h2>
 					<div class="chart">
 						<ChartContainer xLabel="species" yLabel="count" entrance={mode}>
-							{#snippet background()}<Frame /><AxisLeft /><AxisBottom />{/snippet}
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										<Grid />
-										<BarMarkY table="penguins" x="species" y={count()} />
-										<TextMark table="penguins" x="species" y={count()} text={count()} dy={-8} />
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
+							<Frame /><AxisLeft /><AxisBottom />
+							<Grid />
+							<BarMarkY table="penguins" x="species" y={count()} />
+							<TextMark table="penguins" x="species" y={count()} text={count()} dy={-8} />
 						</ChartContainer>
 					</div>
 				</section>
@@ -137,14 +130,8 @@
 					<h2>Stacked bars (grow as one block)</h2>
 					<div class="chart">
 						<ChartContainer xLabel="island" yLabel="count" entrance={mode}>
-							{#snippet background()}<Frame /><AxisLeft /><AxisBottom />{/snippet}
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										<BarMarkY table="penguins" x="island" y={count()} fill="species" />
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
+							<Frame /><AxisLeft /><AxisBottom />
+							<BarMarkY table="penguins" x="island" y={count()} fill="species" />
 						</ChartContainer>
 					</div>
 				</section>
@@ -153,14 +140,8 @@
 					<h2>Horizontal bars (grow along x)</h2>
 					<div class="chart">
 						<ChartContainer xLabel="mean body mass" yLabel="species" entrance={mode}>
-							{#snippet background()}<Frame /><AxisLeft /><AxisBottom />{/snippet}
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										<BarMarkX table="penguins" y="species" x={avg('body_mass')} />
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
+							<Frame /><AxisLeft /><AxisBottom />
+							<BarMarkX table="penguins" y="species" x={avg('body_mass')} />
 						</ChartContainer>
 					</div>
 				</section>
@@ -169,19 +150,8 @@
 					<h2>Histogram (grow)</h2>
 					<div class="chart">
 						<ChartContainer xLabel="body_mass" yLabel="count" entrance={mode}>
-							{#snippet background()}<Frame /><AxisLeft /><AxisBottom />{/snippet}
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										<RectYMark
-											fitDomain={false}
-											table="penguins"
-											x={bin('body_mass')}
-											y={count()}
-										/>
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
+							<Frame /><AxisLeft /><AxisBottom />
+							<RectYMark fitDomain={false} table="penguins" x={bin('body_mass')} y={count()} />
 						</ChartContainer>
 					</div>
 				</section>
@@ -190,22 +160,16 @@
 					<h2>Stacked area with outline (grow)</h2>
 					<div class="chart">
 						<ChartContainer xLabel="date" yLabel="unemployed" entrance={mode}>
-							{#snippet background()}<Frame /><AxisLeft /><AxisBottom />{/snippet}
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										<AreaMarkY
-											table="unemployment"
-											x="date"
-											y="unemployed"
-											fill="industry"
-											fillOpacity={0.6}
-											stroke="#333"
-											strokeWidth={0.5}
-										/>
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
+							<Frame /><AxisLeft /><AxisBottom />
+							<AreaMarkY
+								table="unemployment"
+								x="date"
+								y="unemployed"
+								fill="industry"
+								fillOpacity={0.6}
+								stroke="#333"
+								strokeWidth={0.5}
+							/>
 						</ChartContainer>
 					</div>
 				</section>
@@ -214,22 +178,16 @@
 					<h2>Lines with a reference rule (fade)</h2>
 					<div class="chart">
 						<ChartContainer xLabel="date" yLabel="unemployed" entrance={mode}>
-							{#snippet background()}<Frame /><AxisLeft /><AxisBottom />{/snippet}
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										<Grid />
-										<LineMark
-											table="unemployment"
-											x="date"
-											y="unemployed"
-											stroke="industry"
-											strokeWidth={1.5}
-										/>
-										<RuleMarkY table="unemployment" y={avg('unemployed')} stroke="#c00" />
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
+							<Frame /><AxisLeft /><AxisBottom />
+							<Grid />
+							<LineMark
+								table="unemployment"
+								x="date"
+								y="unemployed"
+								stroke="industry"
+								strokeWidth={1.5}
+							/>
+							<RuleMarkY table="unemployment" y={avg('unemployed')} stroke="#c00" />
 						</ChartContainer>
 					</div>
 				</section>
@@ -238,20 +196,8 @@
 					<h2>Scatter (fade)</h2>
 					<div class="chart">
 						<ChartContainer xLabel="bill_length" yLabel="bill_depth" entrance={mode}>
-							{#snippet background()}<Frame /><AxisLeft /><AxisBottom />{/snippet}
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										<DotsMark
-											table="penguins"
-											x="bill_length"
-											y="bill_depth"
-											fill="species"
-											r={3}
-										/>
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
+							<Frame /><AxisLeft /><AxisBottom />
+							<DotsMark table="penguins" x="bill_length" y="bill_depth" fill="species" r={3} />
 						</ChartContainer>
 					</div>
 				</section>
@@ -262,20 +208,9 @@
 							<h2>{variant.title}</h2>
 							<div class="chart">
 								<ChartContainer xLabel="species" yLabel="count" entrance={mode}>
-									{#snippet background()}<Frame /><AxisLeft /><AxisBottom />{/snippet}
-									{#snippet canvas()}
-										<WebGPUCanvas>
-											{#snippet canvasComponents()}
-												<BarMarkY table="penguins" x="species" y={count()} />
-												<RuleMarkY
-													table="slow_rule"
-													y="v"
-													stroke="#c00"
-													holdsEntrance={variant.holds}
-												/>
-											{/snippet}
-										</WebGPUCanvas>
-									{/snippet}
+									<Frame /><AxisLeft /><AxisBottom />
+									<BarMarkY table="penguins" x="species" y={count()} />
+									<RuleMarkY table="slow_rule" y="v" stroke="#c00" holdsEntrance={variant.holds} />
 								</ChartContainer>
 							</div>
 						</section>
@@ -286,20 +221,14 @@
 					<h2>Facets, histograms per species (every cell grows on one curve)</h2>
 					<div class="chart">
 						<ChartContainer fx="species" entrance={mode}>
-							{#snippet background()}<Frame /><AxisLeft /><AxisBottom />{/snippet}
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										<RectYMark
-											fitDomain={false}
-											table="penguins"
-											x={bin('flipper_length')}
-											y={count()}
-											fill="sex"
-										/>
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
+							<Frame /><AxisLeft /><AxisBottom />
+							<RectYMark
+								fitDomain={false}
+								table="penguins"
+								x={bin('flipper_length')}
+								y={count()}
+								fill="sex"
+							/>
 						</ChartContainer>
 					</div>
 				</section>

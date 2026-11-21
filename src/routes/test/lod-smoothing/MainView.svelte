@@ -1,5 +1,5 @@
 <script>
-	import { ChartContainer, Grid, Crosshair, WebGPUCanvas, LineMark } from '$lib/components';
+	import { ChartContainer, Grid, Crosshair, LineMark } from '$lib/components';
 
 	let smoothWindow = $state(0);
 	let pollInterval = null;
@@ -22,54 +22,38 @@
 
 	<div class="chart-wrapper">
 		<ChartContainer xLabel="time" yLabel="value" xZoomLimit={10000} yZoomLimit={10000}>
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<Grid />
-						<LineMark
-							table="noisy_timeseries"
-							x="time"
-							y="value"
-							stroke="series"
-							strokeWidth={1.5}
-							lod
-							onMarkLOD={(surface) => {
-								clearInterval(pollInterval);
-								pollInterval = null;
-								if (surface) {
-									pollInterval = setInterval(() => {
-										const rungs = surface.getRungs();
-										const smooth = rungs.find((r) => r.name === 'smooth');
-										smoothWindow = smooth ? (smooth.props.window ?? 0) : 0;
-									}, 100);
-								}
-							}}
-						/>
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
+			<Grid />
+			<LineMark
+				table="noisy_timeseries"
+				x="time"
+				y="value"
+				stroke="series"
+				strokeWidth={1.5}
+				lod
+				onMarkLOD={(surface) => {
+					clearInterval(pollInterval);
+					pollInterval = null;
+					if (surface) {
+						pollInterval = setInterval(() => {
+							const rungs = surface.getRungs();
+							const smooth = rungs.find((r) => r.name === 'smooth');
+							smoothWindow = smooth ? (smooth.props.window ?? 0) : 0;
+						}, 100);
+					}
+				}}
+			/>
 
-			{#snippet foreground()}
-				<Crosshair />
-			{/snippet}
+			<Crosshair />
 		</ChartContainer>
 	</div>
 
 	<h3>Single series (no stroke grouping)</h3>
 	<div class="chart-wrapper">
 		<ChartContainer xLabel="time" yLabel="value" xZoomLimit={10000} yZoomLimit={10000}>
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<Grid />
-						<LineMark table="noisy_timeseries" x="time" y="value" strokeWidth={1} lod />
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
+			<Grid />
+			<LineMark table="noisy_timeseries" x="time" y="value" strokeWidth={1} lod />
 
-			{#snippet foreground()}
-				<Crosshair />
-			{/snippet}
+			<Crosshair />
 		</ChartContainer>
 	</div>
 </div>

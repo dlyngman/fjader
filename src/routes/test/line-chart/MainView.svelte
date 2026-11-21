@@ -7,7 +7,6 @@
 		AxisBottom,
 		MarginLabel,
 		Crosshair,
-		WebGPUCanvas,
 		LineMark
 	} from '$lib/components';
 	import { filter } from '$lib/transforms';
@@ -22,25 +21,17 @@
 		<div class="chart-wrapper">
 			<h3>Multi-Series (color by series)</h3>
 			<ChartContainer xLabel="x" yLabel="y">
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							<LineMark
-								table="timeseries"
-								x="x"
-								y="y"
-								stroke="series"
-								strokeWidth={2}
-								tooltipProximity="x"
-							/>
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Grid />
+				<LineMark
+					table="timeseries"
+					x="x"
+					y="y"
+					stroke="series"
+					strokeWidth={2}
+					tooltipProximity="x"
+				/>
 
-				{#snippet foreground()}
-					<Crosshair />
-				{/snippet}
+				<Crosshair />
 			</ChartContainer>
 		</div>
 
@@ -48,25 +39,10 @@
 		<div class="chart-wrapper">
 			<h3>Thick Lines (strokeWidth=5, constant color, z=series)</h3>
 			<ChartContainer xLabel="x" yLabel="y">
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							<LineMark
-								table="timeseries"
-								x="x"
-								y="y"
-								z="series"
-								stroke="#2196f3"
-								strokeWidth={5}
-							/>
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Grid />
+				<LineMark table="timeseries" x="x" y="y" z="series" stroke="#2196f3" strokeWidth={5} />
 
-				{#snippet foreground()}
-					<Crosshair />
-				{/snippet}
+				<Crosshair />
 			</ChartContainer>
 		</div>
 
@@ -74,28 +50,20 @@
 		<div class="chart-wrapper">
 			<h3>Single Series (SQL filter: series = 'Series A')</h3>
 			<ChartContainer xLabel="x" yLabel="y">
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							<LineMark
-								table="timeseries"
-								x="x"
-								y="y"
-								transforms={[filter(eq('series', literal('Series A')))]}
-								strokeWidth={3}
-								stroke="#e63946"
-							/>
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Grid />
+				<LineMark
+					table="timeseries"
+					x="x"
+					y="y"
+					transforms={[filter(eq('series', literal('Series A')))]}
+					strokeWidth={3}
+					stroke="#e63946"
+				/>
 
-				{#snippet foreground()}
-					<!-- <AxisLeft /> -->
-					<!-- <AxisBottom /> -->
-					<!-- <MarginLabel /> -->
-					<Crosshair />
-				{/snippet}
+				<!-- <AxisLeft /> -->
+				<!-- <AxisBottom /> -->
+				<!-- <MarginLabel /> -->
+				<Crosshair />
 			</ChartContainer>
 		</div>
 	</div>

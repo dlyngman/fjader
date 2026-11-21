@@ -1,7 +1,6 @@
 <script>
 	import {
 		ChartContainer,
-		WebGPUCanvas,
 		DotsMark,
 		LineMark,
 		Grid,
@@ -30,68 +29,46 @@
 	<div class="charts-wrapper">
 		<div class="chart-wrapper">
 			<ChartContainer xLabel="date" yLabel="avg response time (ms)">
-				{#snippet background()}
-					<Frame />
-					<AxisLeft />
-					<AxisBottom />
-					<MarginLabel />
-				{/snippet}
+				<Frame />
+				<AxisLeft />
+				<AxisBottom />
+				<MarginLabel />
 
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							<LineMark
-								table="web_events"
-								x="date"
-								y={avg('response_time')}
-								stroke="region"
-								strokeWidth={1.5}
-								selection="brush"
-								lod
-							/>
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Grid />
+				<LineMark
+					table="web_events"
+					x="date"
+					y={avg('response_time')}
+					stroke="region"
+					strokeWidth={1.5}
+					selection="brush"
+					lod
+				/>
 
-				{#snippet foreground()}
-					<Crosshair />
-				{/snippet}
+				<Crosshair />
 			</ChartContainer>
 		</div>
 
 		<div class="chart-wrapper">
 			<ChartContainer xLabel="payload size (bytes)" yLabel="response time (ms)">
-				{#snippet background()}
-					<Frame />
-					<AxisLeft />
-					<AxisBottom />
-					<MarginLabel />
-				{/snippet}
+				<Frame />
+				<AxisLeft />
+				<AxisBottom />
+				<MarginLabel />
 
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							<DotsMark
-								table="web_events"
-								x="payload_size"
-								y="response_time"
-								fill="region"
-								opacity={0.05}
-								selection="brush"
-							/>
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Grid />
+				<DotsMark
+					table="web_events"
+					x="payload_size"
+					y="response_time"
+					fill="region"
+					opacity={0.05}
+					selection="brush"
+				/>
 
-				{#snippet foreground()}
-					<Crosshair />
-				{/snippet}
+				<Crosshair />
 
-				{#snippet interactors()}
-					<Interval1D selection="brush" axis="x" />
-				{/snippet}
+				<Interval1D selection="brush" axis="x" />
 			</ChartContainer>
 		</div>
 	</div>

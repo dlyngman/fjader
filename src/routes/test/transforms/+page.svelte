@@ -3,7 +3,7 @@
 	import { onMount } from 'svelte';
 	import { loadParquet, sum, count, avg, gt } from '@uwdata/mosaic-sql';
 	import { initFjader } from '$lib';
-	import { ChartContainer, DotsMark, WebGPUCanvas, BarMarkX, RectXMark } from '$lib/components';
+	import { ChartContainer, DotsMark, BarMarkX, RectXMark } from '$lib/components';
 	import { filter, topN, normalize, stack } from '$lib/transforms';
 	import { bin } from '$lib/sql/bin';
 
@@ -29,20 +29,14 @@
 			<p>Should show ~12 bins</p>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="bill_length_bin" yLabel="count">
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<DotsMark
-									table="penguins"
-									selection="brush"
-									x={bin('bill_length', { step: 5 })}
-									y={count()}
-									fill="species"
-									r={12}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<DotsMark
+						table="penguins"
+						selection="brush"
+						x={bin('bill_length', { step: 5 })}
+						y={count()}
+						fill="species"
+						r={12}
+					/>
 				</ChartContainer>
 			</div>
 		</div> -->
@@ -52,21 +46,15 @@
 			<p>Should show fewer bins (lighter penguins filtered out)</p>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="bill_length_bin" yLabel="count">
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<DotsMark
-									table="penguins"
-									selection="brush"
-									x={bin('bill_length', { step: 5 })}
-									y={count()}
-									fill="species"
-									r={8}
-									transforms={[filter(gt('body_mass', 4500))]}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<DotsMark
+						table="penguins"
+						selection="brush"
+						x={bin('bill_length', { step: 5 })}
+						y={count()}
+						fill="species"
+						r={8}
+						transforms={[filter(gt('body_mass', 4500))]}
+					/>
 				</ChartContainer>
 			</div>
 		</div> -->
@@ -76,21 +64,15 @@
 			<p>Should show even fewer bins</p>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="bill_length_bin" yLabel="count">
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<DotsMark
-									table="penguins"
-									selection="brush"
-									x={bin('bill_length', { step: 5 })}
-									y={count()}
-									fill="species"
-									r={8}
-									transforms={[filter(gt('body_mass', 5000))]}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<DotsMark
+						table="penguins"
+						selection="brush"
+						x={bin('bill_length', { step: 5 })}
+						y={count()}
+						fill="species"
+						r={8}
+						transforms={[filter(gt('body_mass', 5000))]}
+					/>
 				</ChartContainer>
 			</div>
 		</div> -->
@@ -103,22 +85,16 @@
 			</p>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="bill_length_bin" yLabel="count">
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<DotsMark
-									table="penguins"
-									selection="brush"
-									x={bin('bill_length', { step: 5 })}
-									y={count()}
-									fill="species"
-									opacity="1"
-									r={12}
-									transforms={[topN(5)]}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<DotsMark
+						table="penguins"
+						selection="brush"
+						x={bin('bill_length', { step: 5 })}
+						y={count()}
+						fill="species"
+						opacity="1"
+						r={12}
+						transforms={[topN(5)]}
+					/>
 				</ChartContainer>
 			</div>
 		</div> -->
@@ -128,22 +104,16 @@
 			<p>Each bin shows percentage of total</p>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="count" yLabel="body_mass">
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<DotsMark
-									table="penguins"
-									selection="brush"
-									x={bin('bill_length', { step: 5 })}
-									y={count()}
-									fill="species"
-									r={8}
-									opacity="1"
-									transforms={[normalize()]}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<DotsMark
+						table="penguins"
+						selection="brush"
+						x={bin('bill_length', { step: 5 })}
+						y={count()}
+						fill="species"
+						r={8}
+						opacity="1"
+						transforms={[normalize()]}
+					/>
 				</ChartContainer>
 			</div>
 		</div> -->
@@ -157,20 +127,14 @@
 			</p>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="count" yLabel="body_mass">
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<RectXMark
-									table="penguins"
-									selection="brush"
-									y={bin('body_mass', { step: 500 })}
-									x={count()}
-									fill="species"
-									transforms={[stack({ direction: 'horizontal' })]}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<RectXMark
+						table="penguins"
+						selection="brush"
+						y={bin('body_mass', { step: 500 })}
+						x={count()}
+						fill="species"
+						transforms={[stack({ direction: 'horizontal' })]}
+					/>
 				</ChartContainer>
 			</div>
 		</div>

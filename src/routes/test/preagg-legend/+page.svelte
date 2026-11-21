@@ -39,7 +39,6 @@
 		ParallelBrushes,
 		ParallelCoordinatesMark,
 		MarginLabel,
-		WebGPUCanvas,
 		BarMarkY,
 		RectYMark,
 		IntervalX,
@@ -216,30 +215,20 @@
 			<div class="panel">
 				<h3>Delay (brush)</h3>
 				<ChartContainer xLabel="delay" yLabel="count">
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<RectYMark
-									table="preagg_flights"
-									x={bin('delay', { steps: 50 })}
-									y={count()}
-									inset={0.5}
-									fill="steelblue"
-									selection="brush"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet interactors()}
-						<IntervalX selection="brush" />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
+					<Grid />
+					<RectYMark
+						table="preagg_flights"
+						x={bin('delay', { steps: 50 })}
+						y={count()}
+						inset={0.5}
+						fill="steelblue"
+						selection="brush"
+					/>
+					<IntervalX selection="brush" />
 				</ChartContainer>
 			</div>
 
@@ -247,55 +236,35 @@
 				<h3>Carrier (Toggle and legend)</h3>
 				<ChartContainer xLabel="carrier" yLabel="count">
 					<Legend color="carrier" selection="brush" />
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<BarMarkY
-									table="preagg_flights"
-									x="carrier"
-									y={count()}
-									fill="carrier"
-									selection="brush"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet interactors()}
-						<Toggle selection="brush" field="carrier" />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
+					<Grid />
+					<BarMarkY
+						table="preagg_flights"
+						x="carrier"
+						y={count()}
+						fill="carrier"
+						selection="brush"
+					/>
+					<Toggle selection="brush" field="carrier" />
 				</ChartContainer>
 			</div>
 
 			<div class="panel">
 				<h3>Parallel axes (brush; 5,000-row sample)</h3>
 				<ChartContainer clipPadding={30}>
-					{#snippet background()}
-						<Frame />
-						<ParallelAxes />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<ParallelCoordinatesMark
-									table="preagg_flights_sample"
-									columns={['delay', 'distance', 'time']}
-									stroke="carrier"
-									opacity={0.2}
-									selection="brush"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet interactors()}
-						<ParallelBrushes selection="brush" />
-					{/snippet}
+					<Frame />
+					<ParallelAxes />
+					<ParallelCoordinatesMark
+						table="preagg_flights_sample"
+						columns={['delay', 'distance', 'time']}
+						stroke="carrier"
+						opacity={0.2}
+						selection="brush"
+					/>
+					<ParallelBrushes selection="brush" />
 				</ChartContainer>
 			</div>
 
@@ -303,24 +272,16 @@
 				<h3>Time (continuous legend; 5,000-row sample)</h3>
 				<ChartContainer xLabel="distance" yLabel="delay">
 					<Legend color="time" selection="brush" />
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<DotsMark
-									table="preagg_flights_sample"
-									x="distance"
-									y="delay"
-									fill="time"
-									selection="brush"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<DotsMark
+						table="preagg_flights_sample"
+						x="distance"
+						y="delay"
+						fill="time"
+						selection="brush"
+					/>
 				</ChartContainer>
 			</div>
 
@@ -328,55 +289,39 @@
 				<h3>Delay by carrier (selectionResponse="filter")</h3>
 				<ChartContainer xLabel="delay" yLabel="count">
 					<Legend color="carrier" selection="brush" />
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<RectYMark
-									table="preagg_flights"
-									x={bin('delay', { steps: 50 })}
-									y={count()}
-									inset={0.5}
-									fill="carrier"
-									selection="brush"
-									selectionResponse="filter"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
+					<Grid />
+					<RectYMark
+						table="preagg_flights"
+						x={bin('delay', { steps: 50 })}
+						y={count()}
+						inset={0.5}
+						fill="carrier"
+						selection="brush"
+						selectionResponse="filter"
+					/>
 				</ChartContainer>
 			</div>
 
 			<div class="panel">
 				<h3>Distance (filtered)</h3>
 				<ChartContainer xLabel="distance" yLabel="count">
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<RectYMark
-									table="preagg_flights"
-									x={bin('distance', { steps: 50 })}
-									y={count()}
-									inset={0.5}
-									fill="seagreen"
-									selection="brush"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
+					<Grid />
+					<RectYMark
+						table="preagg_flights"
+						x={bin('distance', { steps: 50 })}
+						y={count()}
+						inset={0.5}
+						fill="seagreen"
+						selection="brush"
+					/>
 				</ChartContainer>
 			</div>
 		</div>

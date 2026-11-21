@@ -8,7 +8,6 @@
 		AxisLeft,
 		AxisBottom,
 		MarginLabel,
-		WebGPUCanvas,
 		BarMarkY
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
@@ -69,29 +68,13 @@
 				<p class="desc">Toggle on region, default group. Click one or more regions.</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Region" yLabel="Revenue">
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkY
-										table="top_n_by_region"
-										x="region"
-										y={sum('revenue')}
-										fill="region"
-										tooltip
-									/>
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
-						{#snippet interactors()}
-							<Toggle field="region" />
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<BarMarkY table="top_n_by_region" x="region" y={sum('revenue')} fill="region" tooltip />
+						<Toggle field="region" />
 					</ChartContainer>
 				</div>
 			</div>
@@ -105,29 +88,21 @@
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue">
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkY
-										table="top_n_by_region"
-										x="category"
-										y={sum('revenue')}
-										selection="whole"
-										contributeDomain={false}
-										opacity={0.25}
-										tooltip
-									/>
-									<BarMarkY table="top_n_by_region" x="category" y={sum('revenue')} tooltip />
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<BarMarkY
+							table="top_n_by_region"
+							x="category"
+							y={sum('revenue')}
+							selection="whole"
+							contributeDomain={false}
+							opacity={0.25}
+							tooltip
+						/>
+						<BarMarkY table="top_n_by_region" x="category" y={sum('revenue')} tooltip />
 					</ChartContainer>
 				</div>
 			</div>
@@ -141,36 +116,28 @@
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue">
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkY
-										table="top_n_by_region"
-										x="category"
-										y={sum('revenue')}
-										selection="whole"
-										contributeDomain={false}
-										opacity={0.25}
-										tooltip
-									/>
-									<BarMarkY
-										table="top_n_by_region"
-										x="category"
-										y={sum('revenue')}
-										sort={byRevenue}
-										transforms={top5}
-										tooltip
-									/>
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<BarMarkY
+							table="top_n_by_region"
+							x="category"
+							y={sum('revenue')}
+							selection="whole"
+							contributeDomain={false}
+							opacity={0.25}
+							tooltip
+						/>
+						<BarMarkY
+							table="top_n_by_region"
+							x="category"
+							y={sum('revenue')}
+							sort={byRevenue}
+							transforms={top5}
+							tooltip
+						/>
 					</ChartContainer>
 				</div>
 			</div>
@@ -184,36 +151,28 @@
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue">
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkY
-										table="top_n_by_region"
-										x="category"
-										y={sum('revenue')}
-										selection="whole"
-										contributeDomain={false}
-										opacity={0.25}
-										tooltip
-									/>
-									<BarMarkY
-										table="top_n_by_region"
-										x="category"
-										y={sum('revenue')}
-										sort={byRevenue}
-										transforms={top5Other}
-										tooltip
-									/>
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<BarMarkY
+							table="top_n_by_region"
+							x="category"
+							y={sum('revenue')}
+							selection="whole"
+							contributeDomain={false}
+							opacity={0.25}
+							tooltip
+						/>
+						<BarMarkY
+							table="top_n_by_region"
+							x="category"
+							y={sum('revenue')}
+							sort={byRevenue}
+							transforms={top5Other}
+							tooltip
+						/>
 					</ChartContainer>
 				</div>
 			</div>

@@ -9,7 +9,6 @@
 		AxisBottom,
 		MarginLabel,
 		Crosshair,
-		WebGPUCanvas,
 		AreaMarkY,
 		AreaMarkX,
 		Legend
@@ -51,25 +50,15 @@
 		<div class="charts">
 			<div class="chart-wrapper">
 				<ChartContainer>
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<AreaMarkY table="aapl" x="Date" y="Close" curve="monotone" strokeWidth={2} />
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<AreaMarkY table="aapl" x="Date" y="Close" curve="monotone" strokeWidth={2} />
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -81,32 +70,15 @@
 		<div class="charts">
 			<div class="chart-wrapper">
 				<ChartContainer>
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<AreaMarkY
-									table="sftemp"
-									x="date"
-									y1="low"
-									y2="high"
-									curve="monotone"
-									strokeWidth={2}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<AreaMarkY table="sftemp" x="date" y1="low" y2="high" curve="monotone" strokeWidth={2} />
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -118,25 +90,15 @@
 		<div class="charts">
 			<div class="chart-wrapper">
 				<ChartContainer>
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<AreaMarkY table="random_walk" x="i" y="value" curve="monotone" />
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<AreaMarkY table="random_walk" x="i" y="value" curve="monotone" />
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -148,32 +110,22 @@
 		<div class="charts">
 			<div class="chart-wrapper">
 				<ChartContainer>
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<AreaMarkX
-									table="aapl"
-									y="Date"
-									x="Close"
-									fillOpacity={0.3}
-									curve="monotone"
-									strokeWidth={2}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<AreaMarkX
+						table="aapl"
+						y="Date"
+						x="Close"
+						fillOpacity={0.3}
+						curve="monotone"
+						strokeWidth={2}
+					/>
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -186,32 +138,22 @@
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="date (unemployment)">
 					<Legend color="industry" />
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<AreaMarkY
-									table="unemployment"
-									x="date"
-									y="unemployed"
-									fill="industry"
-									fillOpacity={1}
-									curve="monotone"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<AreaMarkY
+						table="unemployment"
+						x="date"
+						y="unemployed"
+						fill="industry"
+						fillOpacity={1}
+						curve="monotone"
+					/>
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -224,33 +166,23 @@
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="date (unemployment)">
 					<Legend color="industry" />
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<AreaMarkY
-									table="unemployment"
-									x="date"
-									y="unemployed"
-									fill="industry"
-									fillOpacity={1}
-									curve="monotone"
-									transforms={[stackY({ offset: 'center' })]}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<AreaMarkY
+						table="unemployment"
+						x="date"
+						y="unemployed"
+						fill="industry"
+						fillOpacity={1}
+						curve="monotone"
+						transforms={[stackY({ offset: 'center' })]}
+					/>
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -263,35 +195,25 @@
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="date (unemployment)">
 					<Legend color="industry" />
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<AreaMarkY
-									table="unemployment"
-									x="date"
-									y1={0}
-									y2="unemployed"
-									z="industry"
-									fill="industry"
-									fillOpacity={0.1}
-									curve="monotone"
-									strokeWidth={1}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<AreaMarkY
+						table="unemployment"
+						x="date"
+						y1={0}
+						y2="unemployed"
+						z="industry"
+						fill="industry"
+						fillOpacity={0.1}
+						curve="monotone"
+						strokeWidth={1}
+					/>
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -303,31 +225,21 @@
 		<div class="charts">
 			<div class="chart-wrapper">
 				<ChartContainer>
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<AreaMarkY
-									table="aapl"
-									x="Date"
-									y={msql.sql`CASE WHEN EXTRACT(MONTH FROM ${msql.column('Date')}) < 4 THEN NULL ELSE ${msql.column('Close')} END`}
-									curve="monotone"
-									strokeWidth={2}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<AreaMarkY
+						table="aapl"
+						x="Date"
+						y={msql.sql`CASE WHEN EXTRACT(MONTH FROM ${msql.column('Date')}) < 4 THEN NULL ELSE ${msql.column('Close')} END`}
+						curve="monotone"
+						strokeWidth={2}
+					/>
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -340,33 +252,23 @@
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="Date (aapl-vfill)">
 					<Legend color="Volume" />
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<AreaMarkY
-									table="aapl"
-									x="Date"
-									y="Close"
-									fill={{ field: 'Volume', type: 'log' }}
-									fillOpacity={1}
-									scheme="turbo"
-									curve="monotone"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<AreaMarkY
+						table="aapl"
+						x="Date"
+						y="Close"
+						fill={{ field: 'Volume', type: 'log' }}
+						fillOpacity={1}
+						scheme="turbo"
+						curve="monotone"
+					/>
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>

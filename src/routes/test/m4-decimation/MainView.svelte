@@ -1,5 +1,5 @@
 <script>
-	import { ChartContainer, Grid, Crosshair, WebGPUCanvas, LineMark } from '$lib/components';
+	import { ChartContainer, Grid, Crosshair, LineMark } from '$lib/components';
 </script>
 
 <div class="main-view-container">
@@ -10,70 +10,46 @@
 		<div class="chart-wrapper">
 			<h3>M4 Enabled (decimate=true)</h3>
 			<ChartContainer xLabel="x" yLabel="y" xZoomLimit={10000} yZoomLimit={10000}>
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							<LineMark
-								table="dense_timeseries"
-								x="x"
-								y="y"
-								stroke="series"
-								curve="monotone"
-								strokeWidth={1.5}
-								lod={{ decimate: true, dots: false }}
-								dotRadius={0}
-							/>
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Grid />
+				<LineMark
+					table="dense_timeseries"
+					x="x"
+					y="y"
+					stroke="series"
+					curve="monotone"
+					strokeWidth={1.5}
+					lod={{ decimate: true, dots: false }}
+					dotRadius={0}
+				/>
 
-				{#snippet foreground()}
-					<Crosshair />
-				{/snippet}
+				<Crosshair />
 			</ChartContainer>
 		</div>
 
 		<div class="chart-wrapper">
 			<h3>M4 Disabled (decimate=false) - Reference</h3>
 			<ChartContainer xLabel="x" yLabel="y">
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							<LineMark
-								table="dense_timeseries"
-								x="x"
-								y="y"
-								stroke="series"
-								strokeWidth={1.5}
-								lod={{ decimate: false }}
-							/>
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Grid />
+				<LineMark
+					table="dense_timeseries"
+					x="x"
+					y="y"
+					stroke="series"
+					strokeWidth={1.5}
+					lod={{ decimate: false }}
+				/>
 
-				{#snippet foreground()}
-					<Crosshair />
-				{/snippet}
+				<Crosshair />
 			</ChartContainer>
 		</div>
 
 		<div class="chart-wrapper">
 			<h3>M4 Auto (default)</h3>
 			<ChartContainer xLabel="x" yLabel="y">
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							<LineMark table="dense_timeseries" x="x" y="y" stroke="series" strokeWidth={1.5} />
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Grid />
+				<LineMark table="dense_timeseries" x="x" y="y" stroke="series" strokeWidth={1.5} />
 
-				{#snippet foreground()}
-					<Crosshair />
-				{/snippet}
+				<Crosshair />
 			</ChartContainer>
 		</div>
 	</div>

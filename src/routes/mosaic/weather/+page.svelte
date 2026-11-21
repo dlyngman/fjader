@@ -9,7 +9,6 @@
 		AxisBottom,
 		MarginLabel,
 		Crosshair,
-		WebGPUCanvas,
 		DotsMark,
 		IntervalX,
 		Legend
@@ -48,80 +47,56 @@
 			<div class="chart-wrapper">
 				<ChartContainer>
 					<Legend color="weather" selection="brush" />
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<DotsMark
-									table="weather"
-									x={dateMonthDay('date')}
-									y="temp_max"
-									fill="weather"
-									r="precipitation"
-									preferredXScaleType="time"
-									selection="brush"
-									domain={{ y: ['sun', 'fog', 'drizzle', 'rain', 'snow'] }}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<DotsMark
+						table="weather"
+						x={dateMonthDay('date')}
+						y="temp_max"
+						fill="weather"
+						r="precipitation"
+						preferredXScaleType="time"
+						selection="brush"
+						domain={{ y: ['sun', 'fog', 'drizzle', 'rain', 'snow'] }}
+					/>
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 
-					{#snippet interactors()}
-						<IntervalX selection="brush" field={dateMonthDay('date')} />
-					{/snippet}
+					<IntervalX selection="brush" field={dateMonthDay('date')} />
 				</ChartContainer>
 			</div>
 
 			<div class="chart-wrapper">
 				<ChartContainer>
 					<!-- <Legend color="weather" selection="brush" /> -->
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<!--
-									Sorted by count, so a brush on the dots above re-ranks the
-									bars and they race into their new order. The ranking is a
-									column in the mark's own query, so it follows the brush. No
-									explicit domain: one would win over the sort.
-								-->
-								<BarMarkX
-									table="weather"
-									x={count()}
-									y="weather"
-									fill="weather"
-									selection="brush"
-									sort={{ y: 'x', order: 'desc' }}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<!--
+						Sorted by count, so a brush on the dots above re-ranks the
+						bars and they race into their new order. The ranking is a
+						column in the mark's own query, so it follows the brush. No
+						explicit domain: one would win over the sort.
+					-->
+					<BarMarkX
+						table="weather"
+						x={count()}
+						y="weather"
+						fill="weather"
+						selection="brush"
+						sort={{ y: 'x', order: 'desc' }}
+					/>
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 
-					{#snippet interactors()}
-						<Toggle selection="brush" field="weather" />
-					{/snippet}
+					<Toggle selection="brush" field="weather" />
 				</ChartContainer>
 			</div>
 		</div>

@@ -1,6 +1,6 @@
 <script>
 	import { count } from '@uwdata/mosaic-sql';
-	import { ChartContainer, Grid, Crosshair, WebGPUCanvas, RectYMark } from '$lib/components';
+	import { ChartContainer, Grid, Crosshair, RectYMark } from '$lib/components';
 	import { bin } from '$lib/sql/bin';
 
 	// LOD rung diagnostics (polled periodically)
@@ -46,25 +46,17 @@
 				<h3>Histogram with AdaptiveBinRung (auto-created for binned marks)</h3>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="value" yLabel="count">
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<RectYMark
-										table="histogram_data"
-										x={bin('value', { steps: 50 })}
-										y2={count()}
-										fill="steelblue"
-										onMarkLOD={(surface) => {
-											lodSurface = surface;
-										}}
-									/>
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
-						{#snippet foreground()}
-							<Crosshair />
-						{/snippet}
+						<Grid />
+						<RectYMark
+							table="histogram_data"
+							x={bin('value', { steps: 50 })}
+							y2={count()}
+							fill="steelblue"
+							onMarkLOD={(surface) => {
+								lodSurface = surface;
+							}}
+						/>
+						<Crosshair />
 					</ChartContainer>
 				</div>
 			</div>

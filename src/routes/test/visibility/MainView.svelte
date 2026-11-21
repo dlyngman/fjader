@@ -1,13 +1,5 @@
 <script>
-	import {
-		ChartContainer,
-		Grid,
-		Crosshair,
-		WebGPUCanvas,
-		LineMark,
-		DotsMark,
-		BarMarkY
-	} from '$lib/components';
+	import { ChartContainer, Grid, Crosshair, LineMark, DotsMark, BarMarkY } from '$lib/components';
 	import { IntervalX } from '$lib/interactors';
 	import { count } from '@uwdata/mosaic-sql';
 
@@ -34,35 +26,17 @@
 		<div class="chart-row">
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="x" yLabel="y">
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<LineMark table="timeseries" x="x" y="y" strokeWidth={1.5} />
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
-					{#snippet interactors()}
-						<IntervalX selection="brush" />
-					{/snippet}
+					<Grid />
+					<LineMark table="timeseries" x="x" y="y" strokeWidth={1.5} />
+					<Crosshair />
+					<IntervalX selection="brush" />
 				</ChartContainer>
 			</div>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="x" yLabel="y2">
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<LineMark table="timeseries" x="x" y="y2" strokeWidth={1.5} selection="brush" />
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Grid />
+					<LineMark table="timeseries" x="x" y="y2" strokeWidth={1.5} selection="brush" />
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -85,17 +59,9 @@
 			{#if !collapsedA}
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="bill_length" yLabel="bill_depth">
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<DotsMark table="penguins" x="bill_length" y="bill_depth" fill="species" r={4} />
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
-						{#snippet foreground()}
-							<Crosshair />
-						{/snippet}
+						<Grid />
+						<DotsMark table="penguins" x="bill_length" y="bill_depth" fill="species" r={4} />
+						<Crosshair />
 					</ChartContainer>
 				</div>
 			{/if}
@@ -108,14 +74,8 @@
 			{#if !collapsedB}
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="species" yLabel="count">
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkY table="penguins" x="species" y={count()} fill="island" />
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<Grid />
+						<BarMarkY table="penguins" x="species" y={count()} fill="island" />
 					</ChartContainer>
 				</div>
 			{/if}
@@ -143,56 +103,32 @@
 		<div class="chart-row">
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="x" yLabel="y (filtered)">
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<LineMark table="timeseries" x="x" y="y" strokeWidth={1.5} selection="brush" />
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Grid />
+					<LineMark table="timeseries" x="x" y="y" strokeWidth={1.5} selection="brush" />
+					<Crosshair />
 				</ChartContainer>
 			</div>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="x" yLabel="y2 (filtered)">
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<LineMark table="timeseries" x="x" y="y2" strokeWidth={1.5} selection="brush" />
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Grid />
+					<LineMark table="timeseries" x="x" y="y2" strokeWidth={1.5} selection="brush" />
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
 
 		<div class="chart-wrapper">
 			<ChartContainer xLabel="bill_length" yLabel="body_mass">
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							<DotsMark
-								table="penguins"
-								x="bill_length"
-								y="body_mass"
-								fill="species"
-								r={3}
-								opacity={0.7}
-							/>
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
-				{#snippet foreground()}
-					<Crosshair />
-				{/snippet}
+				<Grid />
+				<DotsMark
+					table="penguins"
+					x="bill_length"
+					y="body_mass"
+					fill="species"
+					r={3}
+					opacity={0.7}
+				/>
+				<Crosshair />
 			</ChartContainer>
 		</div>
 	</section>

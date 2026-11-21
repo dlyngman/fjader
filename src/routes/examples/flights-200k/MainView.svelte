@@ -9,7 +9,6 @@
 		AxisBottom,
 		MarginLabel,
 		Crosshair,
-		WebGPUCanvas,
 		DotsMark,
 		RectYMark,
 		IntervalX
@@ -20,34 +19,24 @@
 <div class="main-view-container">
 	<div class="chart-wrapper">
 		<ChartContainer xLabel="delay" yLabel="time" xZoomLimit={10000} yZoomLimit={10000}>
-			{#snippet background()}
-				<!-- <Grid /> -->
-				<Frame />
-				<AxisLeft />
-				<AxisBottom />
-				<MarginLabel />
-			{/snippet}
+			<!-- <Grid /> -->
+			<Frame />
+			<AxisLeft />
+			<AxisBottom />
+			<MarginLabel />
 
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<Grid />
+			<Grid />
 
-						<DotsMark
-							table="flights"
-							selection="brush"
-							x={min('delay')}
-							y="time"
-							fill={avg('delay')}
-							opacity="0.8"
-						/>
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
+			<DotsMark
+				table="flights"
+				selection="brush"
+				x={min('delay')}
+				y="time"
+				fill={avg('delay')}
+				opacity="0.8"
+			/>
 
-			{#snippet foreground()}
-				<Crosshair />
-			{/snippet}
+			<Crosshair />
 		</ChartContainer>
 	</div>
 </div>
@@ -55,38 +44,26 @@
 <div class="main-view-container">
 	<div class="chart-wrapper" style="max-height: 300px;">
 		<ChartContainer xLabel="distance">
-			{#snippet background()}
-				<!-- <Grid /> -->
-				<Frame />
-				<AxisLeft />
-				<AxisBottom />
-				<MarginLabel />
-			{/snippet}
+			<!-- <Grid /> -->
+			<Frame />
+			<AxisLeft />
+			<AxisBottom />
+			<MarginLabel />
 
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<Grid />
+			<Grid />
 
-						<RectYMark
-							table="flights"
-							x={bin('distance', { steps: 50 })}
-							y={count()}
-							fill="red"
-							fitDomain
-							selection="brush"
-						/>
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
+			<RectYMark
+				table="flights"
+				x={bin('distance', { steps: 50 })}
+				y={count()}
+				fill="red"
+				fitDomain
+				selection="brush"
+			/>
 
-			{#snippet foreground()}
-				<Crosshair />
-			{/snippet}
+			<Crosshair />
 
-			{#snippet interactors()}
-				<IntervalX selection="brush" />
-			{/snippet}
+			<IntervalX selection="brush" />
 		</ChartContainer>
 	</div>
 </div>

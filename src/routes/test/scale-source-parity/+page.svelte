@@ -37,7 +37,6 @@
 		Frame,
 		AxisLeft,
 		AxisBottom,
-		WebGPUCanvas,
 		BarMarkX,
 		BarMarkY,
 		DotsMark,
@@ -498,21 +497,9 @@
 					<h2>Dots, linear × linear</h2>
 					<div class="chart">
 						<ChartContainer>
-							{#snippet background()}<Frame /><AxisLeft /><AxisBottom />{/snippet}
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										<Grid />
-										<DotsMark
-											table="penguins"
-											x="bill_length"
-											y="bill_depth"
-											fill="species"
-											r={3}
-										/>
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
+							<Frame /><AxisLeft /><AxisBottom />
+							<Grid />
+							<DotsMark table="penguins" x="bill_length" y="bill_depth" fill="species" r={3} />
 						</ChartContainer>
 					</div>
 				</section>
@@ -521,21 +508,15 @@
 					<h2>Bars, band x sorted by count</h2>
 					<div class="chart">
 						<ChartContainer>
-							{#snippet background()}<Frame /><AxisLeft /><AxisBottom />{/snippet}
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										<Grid />
-										<BarMarkY
-											table="penguins"
-											x="island"
-											y={count()}
-											fill="island"
-											sort={{ x: 'y', order: 'desc' }}
-										/>
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
+							<Frame /><AxisLeft /><AxisBottom />
+							<Grid />
+							<BarMarkY
+								table="penguins"
+								x="island"
+								y={count()}
+								fill="island"
+								sort={{ x: 'y', order: 'desc' }}
+							/>
 						</ChartContainer>
 					</div>
 				</section>
@@ -544,14 +525,8 @@
 					<h2>Bars, band y</h2>
 					<div class="chart">
 						<ChartContainer>
-							{#snippet background()}<Frame /><AxisLeft /><AxisBottom />{/snippet}
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										<BarMarkX table="penguins" x={count()} y="species" fill="species" />
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
+							<Frame /><AxisLeft /><AxisBottom />
+							<BarMarkX table="penguins" x={count()} y="species" fill="species" />
 						</ChartContainer>
 					</div>
 				</section>
@@ -560,21 +535,15 @@
 					<h2>Dots, log x × symlog y</h2>
 					<div class="chart">
 						<ChartContainer>
-							{#snippet background()}<Frame /><AxisLeft /><AxisBottom />{/snippet}
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										<DotsMark
-											table="parity_series"
-											x="grows"
-											y="signed"
-											r={3}
-											preferredXScaleType="log"
-											preferredYScaleType="symlog"
-										/>
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
+							<Frame /><AxisLeft /><AxisBottom />
+							<DotsMark
+								table="parity_series"
+								x="grows"
+								y="signed"
+								r={3}
+								preferredXScaleType="log"
+								preferredYScaleType="symlog"
+							/>
 						</ChartContainer>
 					</div>
 				</section>
@@ -583,20 +552,14 @@
 					<h2>Line, log y</h2>
 					<div class="chart">
 						<ChartContainer>
-							{#snippet background()}<Frame /><AxisLeft /><AxisBottom />{/snippet}
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										<LineMark
-											table="parity_series"
-											x="step"
-											y="grows"
-											strokeWidth={2}
-											preferredYScaleType="log"
-										/>
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
+							<Frame /><AxisLeft /><AxisBottom />
+							<LineMark
+								table="parity_series"
+								x="step"
+								y="grows"
+								strokeWidth={2}
+								preferredYScaleType="log"
+							/>
 						</ChartContainer>
 					</div>
 				</section>
@@ -605,20 +568,8 @@
 					<h2>Area with auto-dots (reads the raw params)</h2>
 					<div class="chart">
 						<ChartContainer>
-							{#snippet background()}<Frame /><AxisLeft /><AxisBottom />{/snippet}
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										<AreaMarkY
-											table="parity_series"
-											x="step"
-											y="wave"
-											fillOpacity={0.4}
-											dotRadius={-3}
-										/>
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
+							<Frame /><AxisLeft /><AxisBottom />
+							<AreaMarkY table="parity_series" x="step" y="wave" fillOpacity={0.4} dotRadius={-3} />
 						</ChartContainer>
 					</div>
 				</section>
@@ -627,21 +578,15 @@
 					<h2>Line, M4 decimating (200k points, 3 series)</h2>
 					<div class="chart">
 						<ChartContainer>
-							{#snippet background()}<Frame /><AxisLeft /><AxisBottom />{/snippet}
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										<LineMark
-											table="parity_dense"
-											x="x"
-											y="y"
-											stroke="series"
-											strokeWidth={1}
-											lod={{ decimate: true, dots: false }}
-										/>
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
+							<Frame /><AxisLeft /><AxisBottom />
+							<LineMark
+								table="parity_dense"
+								x="x"
+								y="y"
+								stroke="series"
+								strokeWidth={1}
+								lod={{ decimate: true, dots: false }}
+							/>
 						</ChartContainer>
 					</div>
 				</section>
@@ -650,19 +595,13 @@
 					<h2>Parallel coordinates (4 axes, a scale each)</h2>
 					<div class="chart">
 						<ChartContainer clipPadding={30}>
-							{#snippet background()}<Frame /><ParallelAxes />{/snippet}
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										<ParallelCoordinatesMark
-											table="penguins"
-											columns={['bill_length', 'bill_depth', 'flipper_length', 'body_mass']}
-											stroke="species"
-											opacity={0.5}
-										/>
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
+							<Frame /><ParallelAxes />
+							<ParallelCoordinatesMark
+								table="penguins"
+								columns={['bill_length', 'bill_depth', 'flipper_length', 'body_mass']}
+								stroke="species"
+								opacity={0.5}
+							/>
 						</ChartContainer>
 					</div>
 				</section>
@@ -671,14 +610,8 @@
 					<h2>Facet grid, fx = species</h2>
 					<div class="chart wide">
 						<ChartContainer fx="species">
-							{#snippet background()}<Frame /><AxisLeft /><AxisBottom />{/snippet}
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										<DotsMark table="penguins" x="flipper_length" y="body_mass" fill="sex" r={3} />
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
+							<Frame /><AxisLeft /><AxisBottom />
+							<DotsMark table="penguins" x="flipper_length" y="body_mass" fill="sex" r={3} />
 						</ChartContainer>
 					</div>
 				</section>

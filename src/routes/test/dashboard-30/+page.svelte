@@ -58,7 +58,6 @@
 		Frame,
 		AxisLeft,
 		AxisBottom,
-		WebGPUCanvas,
 		BarMarkY,
 		BarMarkX,
 		RectYMark,
@@ -669,143 +668,120 @@
 					<h3>{c.id}. {c.title}</h3>
 					<div class="chart">
 						<ChartContainer xLabel={xLabelOf(c)} yLabel={yLabelOf(c)}>
-							{#snippet background()}
-								<Frame />
-								{#if AXES}<AxisLeft ticksNumber={4} /><AxisBottom ticksNumber={4} />{/if}
-							{/snippet}
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										{#if c.kind === 'barY'}
-											<BarMarkY
-												table="dash"
-												x={c.cat}
-												y={measureOf(c)}
-												fill="steelblue"
-												transforms={transformsOf(c)}
-												sort={{ x: 'y', order }}
-												selection="brush"
-											>
-												{#if ATTACHED}
-													<Labels fontSize={9} format={c.measure ? fmtMean : fmtCount} />
-												{/if}
-											</BarMarkY>
-										{:else if c.kind === 'barX'}
-											<BarMarkX
-												table="dash"
-												x={count()}
-												y={c.cat}
-												fill="seagreen"
-												transforms={transformsOf(c)}
-												sort={{ y: 'x', order }}
-												selection="brush"
-											>
-												{#if ATTACHED}<Labels fontSize={9} format={fmtCount} />{/if}
-											</BarMarkX>
-										{:else if c.kind === 'stackY'}
-											<BarMarkY
-												table="dash"
-												x={c.cat}
-												y={count()}
-												fill={c.fill}
-												selection="brush"
-											/>
-										{:else if c.kind === 'hist'}
-											<RectYMark
-												fitDomain={false}
-												table="dash"
-												x={bin(c.x, c.steps ? { steps: c.steps } : {})}
-												y={count()}
-												inset={0.5}
-												fill="steelblue"
-												selection="brush"
-											/>
-										{:else if c.kind === 'histStack'}
-											<RectYMark
-												fitDomain={false}
-												table="dash"
-												x={bin(c.x)}
-												y={count()}
-												fill={c.fill}
-												inset={0.5}
-												transforms={[stackY()]}
-												selection="brush"
-											/>
-										{:else if c.kind === 'line'}
-											<LineMark table="dash" x={bin(c.x)} y={avg(c.y)} selection="brush" />
-										{:else if c.kind === 'area'}
-											<AreaMarkY
-												table="dash"
-												x={bin(c.x)}
-												y={count()}
-												fillOpacity={0.6}
-												selection="brush"
-											/>
-										{:else if c.kind === 'areaStack'}
-											<AreaMarkY
-												table="dash"
-												x={bin(c.x)}
-												y={count()}
-												fill={c.fill}
-												transforms={[stackY()]}
-												selection="brush"
-											/>
-										{:else if c.kind === 'dots'}
-											<DotsMark
-												table="dash"
-												x={c.x}
-												y={c.y}
-												r={1}
-												opacity={0.25}
-												selection="brush"
-											/>
-										{/if}
-										{#if textLabelled(c)}
-											{#if c.kind === 'barY'}
-												<TextMark
-													table="dash"
-													x={c.cat}
-													y={measureOf(c)}
-													text={measureOf(c)}
-													format={c.measure ? fmtMean : fmtCount}
-													transforms={transformsOf(c)}
-													dy={-6}
-													fontSize={9}
-													selection="brush"
-												/>
-											{:else if c.kind === 'barX'}
-												<TextMark
-													table="dash"
-													x={count()}
-													y={c.cat}
-													text={count()}
-													format={fmtCount}
-													transforms={transformsOf(c)}
-													textAnchor="start"
-													dx={3}
-													fontSize={9}
-													selection="brush"
-												/>
-											{:else if c.kind === 'hist'}
-												<TextMark
-													table="dash"
-													x={bin(c.x, c.steps ? { steps: c.steps } : {})}
-													y={count()}
-													text={count()}
-													format={fmtCount}
-													dy={-6}
-													fontSize={8}
-													selection="brush"
-												/>
-											{/if}
-										{/if}
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
-							{#snippet interactors()}
-								{#if c.toggle}<Toggle selection="brush" field={c.cat} />{/if}
-								{#if c.brush}<IntervalX selection="brush" />{/if}
-							{/snippet}
+							<Frame />
+							{#if AXES}<AxisLeft ticksNumber={4} /><AxisBottom ticksNumber={4} />{/if}
+							{#if c.kind === 'barY'}
+								<BarMarkY
+									table="dash"
+									x={c.cat}
+									y={measureOf(c)}
+									fill="steelblue"
+									transforms={transformsOf(c)}
+									sort={{ x: 'y', order }}
+									selection="brush"
+								>
+									{#if ATTACHED}
+										<Labels fontSize={9} format={c.measure ? fmtMean : fmtCount} />
+									{/if}
+								</BarMarkY>
+							{:else if c.kind === 'barX'}
+								<BarMarkX
+									table="dash"
+									x={count()}
+									y={c.cat}
+									fill="seagreen"
+									transforms={transformsOf(c)}
+									sort={{ y: 'x', order }}
+									selection="brush"
+								>
+									{#if ATTACHED}<Labels fontSize={9} format={fmtCount} />{/if}
+								</BarMarkX>
+							{:else if c.kind === 'stackY'}
+								<BarMarkY table="dash" x={c.cat} y={count()} fill={c.fill} selection="brush" />
+							{:else if c.kind === 'hist'}
+								<RectYMark
+									fitDomain={false}
+									table="dash"
+									x={bin(c.x, c.steps ? { steps: c.steps } : {})}
+									y={count()}
+									inset={0.5}
+									fill="steelblue"
+									selection="brush"
+								/>
+							{:else if c.kind === 'histStack'}
+								<RectYMark
+									fitDomain={false}
+									table="dash"
+									x={bin(c.x)}
+									y={count()}
+									fill={c.fill}
+									inset={0.5}
+									transforms={[stackY()]}
+									selection="brush"
+								/>
+							{:else if c.kind === 'line'}
+								<LineMark table="dash" x={bin(c.x)} y={avg(c.y)} selection="brush" />
+							{:else if c.kind === 'area'}
+								<AreaMarkY
+									table="dash"
+									x={bin(c.x)}
+									y={count()}
+									fillOpacity={0.6}
+									selection="brush"
+								/>
+							{:else if c.kind === 'areaStack'}
+								<AreaMarkY
+									table="dash"
+									x={bin(c.x)}
+									y={count()}
+									fill={c.fill}
+									transforms={[stackY()]}
+									selection="brush"
+								/>
+							{:else if c.kind === 'dots'}
+								<DotsMark table="dash" x={c.x} y={c.y} r={1} opacity={0.25} selection="brush" />
+							{/if}
+							{#if textLabelled(c)}
+								{#if c.kind === 'barY'}
+									<TextMark
+										table="dash"
+										x={c.cat}
+										y={measureOf(c)}
+										text={measureOf(c)}
+										format={c.measure ? fmtMean : fmtCount}
+										transforms={transformsOf(c)}
+										dy={-6}
+										fontSize={9}
+										selection="brush"
+									/>
+								{:else if c.kind === 'barX'}
+									<TextMark
+										table="dash"
+										x={count()}
+										y={c.cat}
+										text={count()}
+										format={fmtCount}
+										transforms={transformsOf(c)}
+										textAnchor="start"
+										dx={3}
+										fontSize={9}
+										selection="brush"
+									/>
+								{:else if c.kind === 'hist'}
+									<TextMark
+										table="dash"
+										x={bin(c.x, c.steps ? { steps: c.steps } : {})}
+										y={count()}
+										text={count()}
+										format={fmtCount}
+										dy={-6}
+										fontSize={8}
+										selection="brush"
+									/>
+								{/if}
+							{/if}
+							{#if c.toggle}<Toggle selection="brush" field={c.cat} />{/if}
+							{#if c.brush}<IntervalX selection="brush" />{/if}
 						</ChartContainer>
 					</div>
 				</section>

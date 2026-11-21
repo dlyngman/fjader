@@ -8,7 +8,6 @@
 		AxisLeft,
 		AxisBottom,
 		MarginLabel,
-		WebGPUCanvas,
 		BarMarkY,
 		BarMarkX
 	} from '$lib/components';
@@ -55,20 +54,12 @@
 				<p class="desc">Wide ticks (41,250 and the like) run into the title.</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue">
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkY table="axis_title_sales" x="category" y={sum('revenue')} />
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<BarMarkY table="axis_title_sales" x="category" y={sum('revenue')} />
 					</ChartContainer>
 				</div>
 			</div>
@@ -80,20 +71,12 @@
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue">
-						{#snippet background()}
-							<Frame />
-							<AxisLeft titleOffset="auto" />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkY table="axis_title_sales" x="category" y={sum('revenue')} />
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<Frame />
+						<AxisLeft titleOffset="auto" />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<BarMarkY table="axis_title_sales" x="category" y={sum('revenue')} />
 					</ChartContainer>
 				</div>
 			</div>
@@ -105,20 +88,12 @@
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Revenue" yLabel="Category" margin={{ left: 170 }}>
-						{#snippet background()}
-							<Frame />
-							<AxisLeft titleOffset="auto" />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkX table="axis_title_sales" x={sum('revenue')} y="category" />
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<Frame />
+						<AxisLeft titleOffset="auto" />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<BarMarkX table="axis_title_sales" x={sum('revenue')} y="category" />
 					</ChartContainer>
 				</div>
 			</div>
@@ -131,20 +106,12 @@
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Revenue" yLabel="Category">
-						{#snippet background()}
-							<Frame />
-							<AxisLeft titleOffset="auto" />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkX table="axis_title_sales" x={sum('revenue')} y="category" />
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<Frame />
+						<AxisLeft titleOffset="auto" />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<BarMarkX table="axis_title_sales" x={sum('revenue')} y="category" />
 					</ChartContainer>
 				</div>
 			</div>
@@ -154,20 +121,12 @@
 				<p class="desc">No title on either axis. The labels still name the scales.</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue">
-						{#snippet background()}
-							<Frame />
-							<AxisLeft title={false} />
-							<AxisBottom title={false} />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkY table="axis_title_sales" x="category" y={sum('revenue')} />
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<Frame />
+						<AxisLeft title={false} />
+						<AxisBottom title={false} />
+						<MarginLabel />
+						<Grid />
+						<BarMarkY table="axis_title_sales" x="category" y={sum('revenue')} />
 					</ChartContainer>
 				</div>
 			</div>
@@ -177,20 +136,12 @@
 				<p class="desc">A number is taken as given: titleOffset is 60.</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue">
-						{#snippet background()}
-							<Frame />
-							<AxisLeft titleOffset={60} />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkY table="axis_title_sales" x="category" y={sum('revenue')} />
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<Frame />
+						<AxisLeft titleOffset={60} />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<BarMarkY table="axis_title_sales" x="category" y={sum('revenue')} />
 					</ChartContainer>
 				</div>
 			</div>
@@ -202,20 +153,12 @@
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue">
-						{#snippet background()}
-							<Frame />
-							<AxisLeft titlePlacement="top" />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkY table="axis_title_sales" x="category" y={sum('revenue')} />
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<Frame />
+						<AxisLeft titlePlacement="top" />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<BarMarkY table="axis_title_sales" x="category" y={sum('revenue')} />
 					</ChartContainer>
 				</div>
 			</div>
@@ -225,20 +168,12 @@
 				<p class="desc">The x title at the plot's start edge.</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue">
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom titleAnchor="start" />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkY table="axis_title_sales" x="category" y={sum('revenue')} />
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom titleAnchor="start" />
+						<MarginLabel />
+						<Grid />
+						<BarMarkY table="axis_title_sales" x="category" y={sum('revenue')} />
 					</ChartContainer>
 				</div>
 			</div>
@@ -248,20 +183,12 @@
 				<p class="desc">The x title at the plot's end edge.</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue">
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom titleAnchor="end" />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkY table="axis_title_sales" x="category" y={sum('revenue')} />
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom titleAnchor="end" />
+						<MarginLabel />
+						<Grid />
+						<BarMarkY table="axis_title_sales" x="category" y={sum('revenue')} />
 					</ChartContainer>
 				</div>
 			</div>

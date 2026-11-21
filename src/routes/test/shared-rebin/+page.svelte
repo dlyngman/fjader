@@ -21,7 +21,6 @@
 		AxisLeft,
 		AxisBottom,
 		MarginLabel,
-		WebGPUCanvas,
 		RectYMark
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
@@ -74,27 +73,19 @@
 			<h3>{chart.title}</h3>
 			<div class="panel">
 				<ChartContainer xLabel="ts" yLabel="events">
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<RectYMark
-									table={chart.table}
-									x={bin('ts')}
-									y={count()}
-									fill="grp"
-									inset={0.5}
-									transforms={[stackY()]}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
+					<Grid />
+					<RectYMark
+						table={chart.table}
+						x={bin('ts')}
+						y={count()}
+						fill="grp"
+						inset={0.5}
+						transforms={[stackY()]}
+					/>
 				</ChartContainer>
 			</div>
 		{/each}

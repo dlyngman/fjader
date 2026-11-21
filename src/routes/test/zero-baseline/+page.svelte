@@ -4,7 +4,6 @@
 	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
-		WebGPUCanvas,
 		BarMarkY,
 		Frame,
 		AxisLeft,
@@ -80,27 +79,19 @@
 					</p>
 					<div class="chart">
 						<ChartContainer xLabel="category" yLabel="loss amount">
-							{#snippet background()}
-								<Frame />
-								<AxisLeft />
-								<AxisBottom />
-								<MarginLabel />
-							{/snippet}
+							<Frame />
+							<AxisLeft />
+							<AxisBottom />
+							<MarginLabel />
 
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										<Grid axis="y" />
-										<BarMarkY
-											table="losses"
-											x="category"
-											y={sum('amount')}
-											fill="steelblue"
-											opacity={0.8}
-										/>
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
+							<Grid axis="y" />
+							<BarMarkY
+								table="losses"
+								x="category"
+								y={sum('amount')}
+								fill="steelblue"
+								opacity={0.8}
+							/>
 						</ChartContainer>
 					</div>
 					<p class="expected">✅ Expected: Y-axis from ~[-50, 0]</p>
@@ -115,26 +106,18 @@
 					</p>
 					<div class="chart">
 						<ChartContainer xLabel="quarter" yLabel="profit/loss">
-							{#snippet background()}
-								<Frame />
-								<AxisLeft />
-								<AxisBottom />
-								<MarginLabel />
-							{/snippet}
+							<Frame />
+							<AxisLeft />
+							<AxisBottom />
+							<MarginLabel />
 
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										<BarMarkY
-											table="profit_loss"
-											x="quarter"
-											y={sum('value')}
-											fill="orange"
-											opacity={0.8}
-										/>
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
+							<BarMarkY
+								table="profit_loss"
+								x="quarter"
+								y={sum('value')}
+								fill="orange"
+								opacity={0.8}
+							/>
 						</ChartContainer>
 					</div>
 					<p class="expected">✅ Expected: Y-axis from ~[-30, 30] with zero visible</p>
@@ -148,26 +131,12 @@
 					</p>
 					<div class="chart">
 						<ChartContainer xLabel="region" yLabel="sales">
-							{#snippet background()}
-								<Frame />
-								<AxisLeft />
-								<AxisBottom />
-								<MarginLabel />
-							{/snippet}
+							<Frame />
+							<AxisLeft />
+							<AxisBottom />
+							<MarginLabel />
 
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										<BarMarkY
-											table="revenue"
-											x="region"
-											y={sum('sales')}
-											fill="green"
-											opacity={0.8}
-										/>
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
+							<BarMarkY table="revenue" x="region" y={sum('sales')} fill="green" opacity={0.8} />
 						</ChartContainer>
 					</div>
 					<p class="expected">✅ Expected: Y-axis from [0, ~150]</p>

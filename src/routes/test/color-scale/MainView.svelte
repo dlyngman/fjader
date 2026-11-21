@@ -1,14 +1,6 @@
 <script>
 	import { sum } from '@uwdata/mosaic-sql';
-	import {
-		ChartContainer,
-		WebGPUCanvas,
-		DotsMark,
-		BarMarkY,
-		Crosshair,
-		Grid,
-		Legend
-	} from '$lib/components';
+	import { ChartContainer, DotsMark, BarMarkY, Crosshair, Grid, Legend } from '$lib/components';
 
 	// Color configuration state
 	let colorField = $state('distance');
@@ -222,40 +214,32 @@
 		<ChartContainer>
 			<Legend position={legendPosition} color={colorField} selection="legend" />
 
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						{#if markType === 'dots'}
-							<Grid />
-							<DotsMark
-								table="flights"
-								x="delay"
-								y="time"
-								fill={fillProp}
-								scheme={colorScheme}
-								opacity={0.5}
-								r={2}
-								limit={50000}
-								selection="legend"
-							/>
-						{:else}
-							<!-- Bar chart with origin on X axis and colored by configurable field -->
-							<BarMarkY
-								table="flights"
-								x="origin"
-								y={sum('delay')}
-								fill={fillProp}
-								scheme={colorScheme}
-								selection="legend"
-							/>
-						{/if}
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
+			{#if markType === 'dots'}
+				<Grid />
+				<DotsMark
+					table="flights"
+					x="delay"
+					y="time"
+					fill={fillProp}
+					scheme={colorScheme}
+					opacity={0.5}
+					r={2}
+					limit={50000}
+					selection="legend"
+				/>
+			{:else}
+				<!-- Bar chart with origin on X axis and colored by configurable field -->
+				<BarMarkY
+					table="flights"
+					x="origin"
+					y={sum('delay')}
+					fill={fillProp}
+					scheme={colorScheme}
+					selection="legend"
+				/>
+			{/if}
 
-			{#snippet foreground()}
-				<Crosshair />
-			{/snippet}
+			<Crosshair />
 		</ChartContainer>
 	</div>
 </div>

@@ -4,7 +4,6 @@
 	import {
 		Interval2D,
 		ChartContainer,
-		WebGPUCanvas,
 		DotsMark,
 		BarMarkY,
 		Grid,
@@ -32,32 +31,22 @@
 		<div class="chart-wrapper">
 			<h2>Scatter Plot (with 2D Brush)</h2>
 			<ChartContainer xLabel="bill_length" yLabel="bill_depth">
-				{#snippet background()}
-					<Frame />
-					<AxisLeft />
-					<AxisBottom />
-					<MarginLabel />
-				{/snippet}
+				<Frame />
+				<AxisLeft />
+				<AxisBottom />
+				<MarginLabel />
 
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							<DotsMark
-								table="penguins"
-								x="bill_length"
-								y="bill_depth"
-								fill="species"
-								opacity={0.6}
-								selection="brush"
-							/>
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Grid />
+				<DotsMark
+					table="penguins"
+					x="bill_length"
+					y="bill_depth"
+					fill="species"
+					opacity={0.6}
+					selection="brush"
+				/>
 
-				{#snippet interactors()}
-					<Interval2D selection="brush" />
-				{/snippet}
+				<Interval2D selection="brush" />
 			</ChartContainer>
 		</div>
 
@@ -65,20 +54,12 @@
 		<div class="chart-wrapper">
 			<h2>Bar Chart (Cross-Filtered)</h2>
 			<ChartContainer xLabel="species" yLabel="count">
-				{#snippet background()}
-					<Frame />
-					<AxisLeft />
-					<!-- <AxisBottom /> -->
-					<MarginLabel />
-				{/snippet}
+				<Frame />
+				<AxisLeft />
+				<!-- <AxisBottom /> -->
+				<MarginLabel />
 
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<BarMarkY table="penguins" x="species" y={count()} fill="species" selection="brush" />
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<BarMarkY table="penguins" x="species" y={count()} fill="species" selection="brush" />
 			</ChartContainer>
 		</div>
 	</div>

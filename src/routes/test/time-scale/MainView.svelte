@@ -1,7 +1,6 @@
 <script>
 	import {
 		ChartContainer,
-		WebGPUCanvas,
 		Grid,
 		DotsMark,
 		Crosshair,
@@ -16,30 +15,13 @@
 
 	<div class="chart-wrapper">
 		<ChartContainer xLabel="timestamp" yLabel="value">
-			{#snippet background()}
-				<AxisLeft />
-				<AxisBottom />
-			{/snippet}
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<Grid />
-						<DotsMark
-							table="timeseries"
-							x="timestamp"
-							y="value"
-							fill="sensor"
-							opacity={0.6}
-							r={5}
-						/>
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
+			<AxisLeft />
+			<AxisBottom />
+			<Grid />
+			<DotsMark table="timeseries" x="timestamp" y="value" fill="sensor" opacity={0.6} r={5} />
 
-			{#snippet foreground()}
-				<Crosshair />
-				<MarginLabel />
-			{/snippet}
+			<Crosshair />
+			<MarginLabel />
 		</ChartContainer>
 	</div>
 </div>

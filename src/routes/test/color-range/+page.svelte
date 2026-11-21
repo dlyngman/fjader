@@ -19,7 +19,6 @@
 		AxisLeft,
 		AxisBottom,
 		MarginLabel,
-		WebGPUCanvas,
 		BarMarkY,
 		Legend
 	} from '$lib/components';
@@ -79,26 +78,18 @@
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Team" yLabel="Games">
 						<Legend color={chart.field} />
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<BarMarkY
-										table="games"
-										x="team"
-										y={count()}
-										fill={chart.color}
-										transforms={[stack()]}
-										tooltip
-									/>
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+						<BarMarkY
+							table="games"
+							x="team"
+							y={count()}
+							fill={chart.color}
+							transforms={[stack()]}
+							tooltip
+						/>
 					</ChartContainer>
 				</div>
 			</div>

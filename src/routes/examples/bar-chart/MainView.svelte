@@ -10,7 +10,6 @@
 		AxisBottom,
 		MarginLabel,
 		Crosshair,
-		WebGPUCanvas,
 		DotsMark,
 		BarMarkX,
 		BarMarkY
@@ -218,45 +217,35 @@
 			xLabel={selectedStackMode === 'none' ? 'bill_length' : 'count'}
 			yLabel="species"
 		>
-			{#snippet background()}
-				<!-- <Frame /> -->
-				<MarginLabel />
-			{/snippet}
+			<!-- <Frame /> -->
+			<MarginLabel />
 
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<!-- GPU Grid Lines (both axes, Y is band scale) -->
-						<Grid />
+			<!-- GPU Grid Lines (both axes, Y is band scale) -->
+			<Grid />
 
-						{#if selectedStackMode === 'none'}
-							<BarMarkX
-								table="penguins"
-								x1={min('bill_length')}
-								x2={max('bill_length')}
-								y="species"
-								fill={colorProp}
-								scheme={schemeProp}
-								opacity={1}
-							/>
-						{:else}
-							<BarMarkX
-								table="penguins"
-								x={count()}
-								y="species"
-								fill={colorProp}
-								scheme={schemeProp}
-								opacity={1}
-								{transforms}
-							/>
-						{/if}
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
+			{#if selectedStackMode === 'none'}
+				<BarMarkX
+					table="penguins"
+					x1={min('bill_length')}
+					x2={max('bill_length')}
+					y="species"
+					fill={colorProp}
+					scheme={schemeProp}
+					opacity={1}
+				/>
+			{:else}
+				<BarMarkX
+					table="penguins"
+					x={count()}
+					y="species"
+					fill={colorProp}
+					scheme={schemeProp}
+					opacity={1}
+					{transforms}
+				/>
+			{/if}
 
-			{#snippet foreground()}
-				<Crosshair />
-			{/snippet}
+			<Crosshair />
 		</ChartContainer>
 	</div>
 	<div class="chart-wrapper">
@@ -264,82 +253,62 @@
 			xLabel={selectedStackMode === 'none' ? 'bill_length' : 'count'}
 			yLabel="species"
 		>
-			{#snippet background()}
-				<!-- <Frame /> -->
-				<MarginLabel />
-			{/snippet}
+			<!-- <Frame /> -->
+			<MarginLabel />
 
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						{#if selectedStackMode === 'none'}
-							<BarMarkX
-								table="penguins"
-								x1={min('bill_length')}
-								x2={max('bill_length')}
-								y="species"
-								fill={colorProp}
-								scheme={schemeProp}
-								opacity={1}
-							/>
-						{:else}
-							<BarMarkX
-								table="penguins"
-								x={count()}
-								y="species"
-								fill={colorProp}
-								scheme={schemeProp}
-								opacity={1}
-								{transforms}
-							/>
-						{/if}
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
+			{#if selectedStackMode === 'none'}
+				<BarMarkX
+					table="penguins"
+					x1={min('bill_length')}
+					x2={max('bill_length')}
+					y="species"
+					fill={colorProp}
+					scheme={schemeProp}
+					opacity={1}
+				/>
+			{:else}
+				<BarMarkX
+					table="penguins"
+					x={count()}
+					y="species"
+					fill={colorProp}
+					scheme={schemeProp}
+					opacity={1}
+					{transforms}
+				/>
+			{/if}
 
-			{#snippet foreground()}
-				<Crosshair />
-			{/snippet}
+			<Crosshair />
 		</ChartContainer>
 	</div>
 	<!-- <div class="chart-wrapper">
 		<ChartContainer xLabel={selectedStackMode === 'none' ? 'bill_length' : 'count'} yLabel="species">
-			{#snippet background()}
-				<Frame />
-				<MarginLabel />
-			{/snippet}
+			<Frame />
+			<MarginLabel />
 
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						{#if selectedStackMode === 'none'}
-							<BarMarkY
-								table="penguins"
-								y1={min('bill_length')}
-								y2={max('bill_length')}
-								x="species"
-								fill={colorProp}
-								scheme={schemeProp}
-								opacity={1}
-							/>
-						{:else}
-							<BarMarkY
-								table="penguins"
-								y={count()}
-								x="species"
-								fill={colorProp}
-								scheme={schemeProp}
-								opacity={1}
-								{transforms}
-							/>
-						{/if}
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
+			{#if selectedStackMode === 'none'}
+				<BarMarkY
+					table="penguins"
+					y1={min('bill_length')}
+					y2={max('bill_length')}
+					x="species"
+					fill={colorProp}
+					scheme={schemeProp}
+					opacity={1}
+				/>
+			{:else}
+				<BarMarkY
+					table="penguins"
+					y={count()}
+					x="species"
+					fill={colorProp}
+					scheme={schemeProp}
+					opacity={1}
+					{transforms}
+				/>
+			{/if}
 
-			{#snippet foreground()}
-				<Crosshair />
-			{/snippet}
+			<Crosshair />
 		</ChartContainer>
 	</div> -->
 </div>

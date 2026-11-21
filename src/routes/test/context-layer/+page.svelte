@@ -27,7 +27,6 @@
 		AxisLeft,
 		AxisBottom,
 		MarginLabel,
-		WebGPUCanvas,
 		BarMarkY,
 		RectYMark,
 		IntervalX,
@@ -78,30 +77,20 @@
 			<div class="panel">
 				<h3>Delay (brush)</h3>
 				<ChartContainer xLabel="delay" yLabel="flights by delay">
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<RectYMark
-									table="context_flights"
-									x={bin('delay', { steps: 50 })}
-									y={count()}
-									inset={0.5}
-									fill="steelblue"
-									selection="brush"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet interactors()}
-						<IntervalX selection="brush" />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
+					<Grid />
+					<RectYMark
+						table="context_flights"
+						x={bin('delay', { steps: 50 })}
+						y={count()}
+						inset={0.5}
+						fill="steelblue"
+						selection="brush"
+					/>
+					<IntervalX selection="brush" />
 				</ChartContainer>
 			</div>
 
@@ -109,180 +98,136 @@
 				<h3>Carrier: whole (ignore) behind part</h3>
 				<ChartContainer xLabel="carrier" yLabel="flights by carrier">
 					<Legend color="carrier" selection="brush" />
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<BarMarkY
-									table="context_flights"
-									x="carrier"
-									y={count()}
-									fill="#999"
-									fillOpacity={0.25}
-									selection="brush"
-									selectionResponse="ignore"
-								/>
-								<BarMarkY
-									table="context_flights"
-									x="carrier"
-									y={count()}
-									fill="carrier"
-									selection="brush"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet interactors()}
-						<Toggle selection="brush" field="carrier" />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
+					<Grid />
+					<BarMarkY
+						table="context_flights"
+						x="carrier"
+						y={count()}
+						fill="#999"
+						fillOpacity={0.25}
+						selection="brush"
+						selectionResponse="ignore"
+					/>
+					<BarMarkY
+						table="context_flights"
+						x="carrier"
+						y={count()}
+						fill="carrier"
+						selection="brush"
+					/>
+					<Toggle selection="brush" field="carrier" />
 				</ChartContainer>
 			</div>
 
 			<div class="panel">
 				<h3>Distance: whole (ignore) behind part</h3>
 				<ChartContainer xLabel="distance" yLabel="flights by distance">
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<RectYMark
-									table="context_flights"
-									x={bin('distance', { steps: 40 })}
-									y={count()}
-									inset={0.5}
-									fill="#999"
-									fillOpacity={0.25}
-									selection="brush"
-									selectionResponse="ignore"
-								/>
-								<RectYMark
-									table="context_flights"
-									x={bin('distance', { steps: 40 })}
-									y={count()}
-									inset={0.5}
-									fill="steelblue"
-									selection="brush"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
+					<Grid />
+					<RectYMark
+						table="context_flights"
+						x={bin('distance', { steps: 40 })}
+						y={count()}
+						inset={0.5}
+						fill="#999"
+						fillOpacity={0.25}
+						selection="brush"
+						selectionResponse="ignore"
+					/>
+					<RectYMark
+						table="context_flights"
+						x={bin('distance', { steps: 40 })}
+						y={count()}
+						inset={0.5}
+						fill="steelblue"
+						selection="brush"
+					/>
 				</ChartContainer>
 			</div>
 
 			<div class="panel">
 				<h3>Top 4, ranked over the whole (front follows the axis)</h3>
 				<ChartContainer xLabel="carrier, top 4 whole" yLabel="flights, top 4 whole">
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<BarMarkY
-									table="context_flights"
-									x="carrier"
-									y={count()}
-									fill="#999"
-									fillOpacity={0.25}
-									transforms={[topN(4)]}
-									selection="brush"
-									selectionResponse="ignore"
-								/>
-								<BarMarkY
-									table="context_flights"
-									x="carrier"
-									y={count()}
-									fill="carrier"
-									contributeDomain={false}
-									selection="brush"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
+					<Grid />
+					<BarMarkY
+						table="context_flights"
+						x="carrier"
+						y={count()}
+						fill="#999"
+						fillOpacity={0.25}
+						transforms={[topN(4)]}
+						selection="brush"
+						selectionResponse="ignore"
+					/>
+					<BarMarkY
+						table="context_flights"
+						x="carrier"
+						y={count()}
+						fill="carrier"
+						contributeDomain={false}
+						selection="brush"
+					/>
 				</ChartContainer>
 			</div>
 
 			<div class="panel">
 				<h3>Top 4, re-ranked within the selection (whole follows the axis)</h3>
 				<ChartContainer xLabel="carrier, top 4 part" yLabel="flights, top 4 part">
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<BarMarkY
-									table="context_flights"
-									x="carrier"
-									y={count()}
-									fill="#999"
-									fillOpacity={0.25}
-									contributeDomain={false}
-									selection="brush"
-									selectionResponse="ignore"
-								/>
-								<BarMarkY
-									table="context_flights"
-									x="carrier"
-									y={count()}
-									fill="carrier"
-									transforms={[topN(4)]}
-									selection="brush"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
+					<Grid />
+					<BarMarkY
+						table="context_flights"
+						x="carrier"
+						y={count()}
+						fill="#999"
+						fillOpacity={0.25}
+						contributeDomain={false}
+						selection="brush"
+						selectionResponse="ignore"
+					/>
+					<BarMarkY
+						table="context_flights"
+						x="carrier"
+						y={count()}
+						fill="carrier"
+						transforms={[topN(4)]}
+						selection="brush"
+					/>
 				</ChartContainer>
 			</div>
 
 			<div class="panel">
 				<h3>Top 4 + Other (ignore only): click Other twice</h3>
 				<ChartContainer xLabel="carrier, top 4" yLabel="flights, top 4">
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<BarMarkY
-									table="context_flights"
-									x="carrier"
-									y={count()}
-									fill="#888"
-									transforms={[topN(4, { includeOthers: true })]}
-									selection="brush"
-									selectionResponse="ignore"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet interactors()}
-						<Toggle selection="brush" field="carrier" />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
+					<Grid />
+					<BarMarkY
+						table="context_flights"
+						x="carrier"
+						y={count()}
+						fill="#888"
+						transforms={[topN(4, { includeOthers: true })]}
+						selection="brush"
+						selectionResponse="ignore"
+					/>
+					<Toggle selection="brush" field="carrier" />
 				</ChartContainer>
 			</div>
 		</div>

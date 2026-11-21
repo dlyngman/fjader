@@ -9,7 +9,6 @@
 		AxisBottom,
 		MarginLabel,
 		Crosshair,
-		WebGPUCanvas,
 		BarMarkX,
 		DotsMark,
 		LineMark,
@@ -47,35 +46,25 @@
 		<div class="charts">
 			<div class="chart-wrapper">
 				<ChartContainer>
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<BarMarkX table="penguins" x={msql.count()} y="species" />
-								<TextMark
-									table="penguins"
-									x={msql.count()}
-									y="species"
-									text={msql.count()}
-									dx={-8}
-									textAnchor="end"
-									fontSize={12}
-									fill="white"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<BarMarkX table="penguins" x={msql.count()} y="species" />
+					<TextMark
+						table="penguins"
+						x={msql.count()}
+						y="species"
+						text={msql.count()}
+						dx={-8}
+						textAnchor="end"
+						fontSize={12}
+						fill="white"
+					/>
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -86,34 +75,24 @@
 		<div class="charts">
 			<div class="chart-wrapper-tall">
 				<ChartContainer>
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<DotsMark table="penguins" x="bill_length" y="body_mass" fill="species" />
-								<TextMark
-									table="penguins"
-									x="bill_length"
-									y="body_mass"
-									text="species"
-									dy={-10}
-									fontSize={9}
-									fill="species"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<DotsMark table="penguins" x="bill_length" y="body_mass" fill="species" />
+					<TextMark
+						table="penguins"
+						x="bill_length"
+						y="body_mass"
+						text="species"
+						dy={-10}
+						fontSize={9}
+						fill="species"
+					/>
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -124,30 +103,22 @@
 		<div class="charts">
 			<div class="chart-wrapper-tall">
 				<ChartContainer>
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<LineMark
-									table="driving"
-									x="miles"
-									y="gas"
-									order="year"
-									strokeWidth={1}
-									curve="catmull-rom"
-								/>
-								<DotsMark table="driving" x="miles" y="gas" r={2} />
-								<TextMark table="driving" x="miles" y="gas" text="year" fontSize={9} dy={-8} />
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<LineMark
+						table="driving"
+						x="miles"
+						y="gas"
+						order="year"
+						strokeWidth={1}
+						curve="catmull-rom"
+					/>
+					<DotsMark table="driving" x="miles" y="gas" r={2} />
+					<TextMark table="driving" x="miles" y="gas" text="year" fontSize={9} dy={-8} />
 				</ChartContainer>
 			</div>
 		</div>

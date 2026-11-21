@@ -27,7 +27,6 @@
 		Frame,
 		AxisLeft,
 		AxisBottom,
-		WebGPUCanvas,
 		RectYMark,
 		DotsMark,
 		AreaMarkY,
@@ -255,58 +254,45 @@
 					<h2>{chart.name}</h2>
 					<div class="chart">
 						<ChartContainer xLabel={chart.x} yLabel={chart.y ?? 'count'}>
-							{#snippet background()}<Frame /><AxisLeft /><AxisBottom />{/snippet}
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										{#if chart.kind === 'bars'}
-											<BarMarkY
-												table={chart.table ?? 'flights'}
-												x={chart.x}
-												y={count()}
-												selection="brush"
-												transforms={chart.top ? [topN(chart.top, { includeOthers: true })] : []}
-											/>
-										{:else if chart.kind === 'hist'}
-											<RectYMark
-												fitDomain={false}
-												table={chart.table ?? 'flights'}
-												x={bin(chart.x, chart.steps ? { steps: chart.steps } : {})}
-												y={count()}
-												selection="brush"
-											/>
-										{:else if chart.kind === 'dots'}
-											<DotsMark
-												table={chart.table ?? 'flights'}
-												x={chart.x}
-												y={chart.y}
-												r={1}
-												opacity={0.3}
-												selection="brush"
-												{tooltip}
-											/>
-										{:else if chart.kind === 'area'}
-											<AreaMarkY
-												table="flights"
-												x={bin(chart.x)}
-												y={count()}
-												fillOpacity={0.6}
-												selection="brush"
-											/>
-										{:else}
-											<LineMark
-												table="flights"
-												x={bin(chart.x)}
-												y={avg(chart.y)}
-												selection="brush"
-											/>
-										{/if}
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
-							{#snippet interactors()}
-								{#if chart.brush}<IntervalX selection="brush" />{/if}
-							{/snippet}
+							<Frame /><AxisLeft /><AxisBottom />
+							{#if chart.kind === 'bars'}
+								<BarMarkY
+									table={chart.table ?? 'flights'}
+									x={chart.x}
+									y={count()}
+									selection="brush"
+									transforms={chart.top ? [topN(chart.top, { includeOthers: true })] : []}
+								/>
+							{:else if chart.kind === 'hist'}
+								<RectYMark
+									fitDomain={false}
+									table={chart.table ?? 'flights'}
+									x={bin(chart.x, chart.steps ? { steps: chart.steps } : {})}
+									y={count()}
+									selection="brush"
+								/>
+							{:else if chart.kind === 'dots'}
+								<DotsMark
+									table={chart.table ?? 'flights'}
+									x={chart.x}
+									y={chart.y}
+									r={1}
+									opacity={0.3}
+									selection="brush"
+									{tooltip}
+								/>
+							{:else if chart.kind === 'area'}
+								<AreaMarkY
+									table="flights"
+									x={bin(chart.x)}
+									y={count()}
+									fillOpacity={0.6}
+									selection="brush"
+								/>
+							{:else}
+								<LineMark table="flights" x={bin(chart.x)} y={avg(chart.y)} selection="brush" />
+							{/if}
+							{#if chart.brush}<IntervalX selection="brush" />{/if}
 						</ChartContainer>
 					</div>
 				</section>
