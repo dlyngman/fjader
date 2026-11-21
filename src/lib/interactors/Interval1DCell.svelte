@@ -1,130 +1,45 @@
 <script lang="ts">
 	/**
-	 * One cell's part: each cell renders it from what Interval1D declares
-	 * (charts/declarations), in its interactors slot, with its own pointer
-	 * events and chart context.
+	 * An Interval1D in one cell: hooks the cell's pointer events into the
+	 * brush's drag (IntervalShared, held once for the chart), through this
+	 * cell's scale, and draws the range. What needs the cell stays here: its
+	 * pointer capture, scale, inner size and pan-mode keys.
 	 */
-	import { getContext, onMount, untrack } from 'svelte';
-	import { isBetween } from '@uwdata/mosaic-sql';
-	import { BrushState1D } from './brush-state.svelte';
+	import { getContext, onDestroy, onMount } from 'svelte';
 	import BrushOverlay from './BrushOverlay.svelte';
-	import {
-		buildColumnRef,
-		closeTo,
-		isDragging,
-		scaleBrushExtent1D,
-		createPanModeHandlers,
-		brushHandleAt,
-		WHEEL_SENSITIVITY
-	} from './brush-utils';
-	import type { ChartContext, FieldRef, Point, D3Scale } from '$lib/types';
-	import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
-	import type { SourceHandle } from '$lib/query-engine/FilterGroup.svelte';
-	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
-
-	/** Helper: cast D3Scale to one with invert() for continuous scales. */
-	type InvertibleScale = D3Scale & { invert(v: number): number | Date };
+	import { createPanModeHandlers, brushHandleAt, WHEEL_SENSITIVITY } from './brush-utils';
+	import type { ChartContext, Point } from '$lib/types';
+	import type { IntervalDrag1D, IntervalShared } from './interval-drag.svelte';
 
 	interface Props {
-		/** Filter group name — selects which FilterGroup this brush writes to. */
-		selection?: string;
-		field?: FieldRef;
-		axis?: 'x' | 'y';
+		shared: IntervalShared<IntervalDrag1D>;
+		axis: 'x' | 'y';
 	}
 
-	let { selection, field, axis = 'x' }: Props = $props();
-
-	const filterGroups = getContext<FilterGroupRegistry>('filter-groups');
-	const filterGroup = filterGroups.get(selection);
-
+	const { shared, axis }: Props = $props();
 	const chart = getContext<ChartContext>('chart');
-	const brush = new BrushState1D();
+	const { drag } = shared;
+	const { brush } = drag;
 	const isX = axis === 'x';
 
-	// Axis-dependent references
-	// Use a getter instead of $derived — the D3 scale object identity never changes
-	// (domain is mutated in place), so $derived would swallow updates.
-	function getScale() {
-		return isX ? chart.xScale : chart.yScale;
-	}
-	const scaleState = $derived(isX ? chart.xScaleState : chart.yScaleState);
-	const resolvedField = $derived(
-		field ?? (isX ? chart.xColumnName : chart.yColumnName) ?? (isX ? chart.xLabel : chart.yLabel)
-	);
+	/** This cell's scale on the brush's axis; read on each event (mutated in place). */
+	const scale = () => (isX ? chart.xScale : chart.yScale);
 
-	// Resize edge names
-	const edgeStart = isX ? 'left' : 'top';
-	const edgeEnd = isX ? 'right' : 'bottom';
+	/** This cell measures the brush's pixels from now on (IntervalShared.activeCell). */
+	const activate = () => {
+		shared.activeCell = chart;
+		shared.activate();
+	};
+	chart.activators.add(activate);
 
-	// Source string — single definition used everywhere
-	const source = `interval-${axis}-${chart.chartId}`;
-
-	const columnRef = $derived.by(() =>
-		buildColumnRef(
-			resolvedField,
-			scaleState && 't0' in scaleState ? (scaleState as { t0?: Date | null }) : null
-		)
-	);
-
-	const brushHandle: SourceHandle = filterGroup.register(source, {
-		// Its own chart is not filtered by it (crossfilter).
-		chart: chart.config,
-		activeDims: () => {
-			const scale = getScale();
-			if (!scale || !columnRef) return [];
-			return [
-				{
-					kind: 'bin',
-					columnRef,
-					// Where the spring is heading, so a table built while it is still
-					// moving fits the view it settles on.
-					domain:
-						scaleState instanceof LinearScaleState
-							? scaleState.domain.target
-							: (scale.domain() as [number, number]),
-					pixelExtent: isX ? chart.innerWidth : chart.innerHeight,
-					// For the size guard: how many bins the data spans at this zoom.
-					extent: scaleState instanceof LinearScaleState ? scaleState.effectiveExtent : undefined
-				}
-			];
-		},
-		// Read on every query: the scale state's target buffer is reused, so this
-		// allocates nothing. The target, like activeDims, not the animated domain.
-		view: (out) => {
-			if (!(scaleState instanceof LinearScaleState)) return;
-			const domain = scaleState.domain.targetBuffer;
-			out[0] = domain[0];
-			out[1] = domain[1];
-			out[2] = isX ? chart.innerWidth : chart.innerHeight;
-		},
-		augment: (value) => ({
-			kind: 'range',
-			column: typeof resolvedField === 'string' ? resolvedField : (resolvedField?.toString() ?? ''),
-			label: typeof resolvedField === 'string' ? resolvedField : resolvedField?.toString(),
-			values: value ? [(value as number[])[0], (value as number[])[1]] : []
-		}),
-		// The clause was removed from outside (clearAll, a filter pill): take the
-		// rectangle down too, which only this control holds.
-		onCleared: () => {
-			if (brush.active) clearBrush();
-		}
+	onDestroy(() => {
+		chart.activators.delete(activate);
+		// A drag this cell held ends here; another cell measures from now on.
+		drag.abandon(chart);
+		if (shared.activeCell === chart) shared.activeCell = null;
 	});
 
-	// Pointer state (reused to avoid GC)
-	let anchor = 0;
-	let current = 0;
-	let isCapturing = false;
-	let hasDragged = false;
 	let isPanModeActive = false;
-
-	// Reusable point object to reduce GC pressure
-	const point = { x: 0, y: 0 };
-
-	// Deduplication (skip redundant updates)
-	let lastEmittedMin: number | null = null;
-	let lastEmittedMax: number | null = null;
-
-	// Keyboard handlers for Space key pan mode
 	const { handleKeyDown, handleKeyUp, handleBlur } = createPanModeHandlers(
 		(active) => {
 			isPanModeActive = active;
@@ -132,209 +47,58 @@
 		() => chart.reroutePress()
 	);
 
-	// Scale validation
-	// Always validate as 'linear': Fjader time scales use float offsets, not Dates,
-	// so the 'time' validation (requires Date instances) would incorrectly clear the brush.
-	$effect(() => {
-		const s = getScale();
-		if (brush.active && s && !brush.validate(s as { domain: () => number[] }, 'linear')) {
-			clearBrush();
-		}
-	});
+	// Reused for pointer conversion.
+	const point = { x: 0, y: 0 };
 
-	// Watch for external selection changes (from detail chart pan/zoom)
-	// to keep brush visual in sync and update Mosaic filter.
-	// Tracks only the selection extent and its source. The rest runs untracked:
-	// emitting the clause reads state it then writes (the filter group's
-	// selection, the scales' active values), which made this effect re-run
-	// itself without end while a detail chart was panned.
-	$effect(() => {
-		if (!(scaleState instanceof LinearScaleState)) return;
-		const extent = scaleState.selectionExtent;
-		const source = scaleState.selectionSource;
-		untrack(() => {
-			if (extent && source === 'external') {
-				brush.setExtent(extent[0], extent[1]);
-				lastEmittedMin = extent[0];
-				lastEmittedMax = extent[1];
-				emitFilterClause(extent[0], extent[1]);
-			} else if (!extent && brush.active) {
-				// Selection was cleared externally (e.g. detail chart reset) — clear brush
-				clearBrush();
-			}
-		});
-	});
-
-	// Derived screen coordinates — read chart.xScale/yScale directly so the
-	// domainForReactivity getter registers as a dependency (the D3 scale object
-	// identity never changes, so an intermediate $derived would swallow updates).
+	// The range in this cell's pixels. Reads chart.xScale/yScale directly so the
+	// domain getter registers as a dependency (the D3 scale object's identity
+	// never changes, so an intermediate $derived would swallow updates).
 	const brushScreen = $derived.by(() => {
 		const s = isX ? chart.xScale : chart.yScale;
 		if (!brush.active || !s) return null;
 		const [min, max] = brush.screenExtent(s);
-		// Clamp screen coordinates to chart bounds for rendering only —
-		// the underlying data extent is preserved so the brush retains its
-		// full size when dragged back from beyond the edge.
+		// Clamped for drawing only: the data range is kept, so a brush dragged
+		// past the edge keeps its size when dragged back.
 		const dim = isX ? chart.innerWidth : chart.innerHeight;
-		const clampedMin = Math.max(0, min);
-		const clampedMax = Math.min(dim, max);
-		if (clampedMax <= clampedMin) return null;
-		return { pos: clampedMin, size: clampedMax - clampedMin };
+		const lo = Math.max(0, min);
+		const hi = Math.min(dim, max);
+		return hi > lo ? { pos: lo, size: hi - lo } : null;
 	});
-
-	// Read the axis-relevant inner coordinate from a point
-	function innerCoord(innerPoint: Point) {
-		return isX ? innerPoint.x : innerPoint.y;
-	}
-
-	function emitFilterClause(dataMin: number, dataMax: number) {
-		if (!columnRef) return;
-		brushHandle.update(isBetween(columnRef, [dataMin, dataMax]), [dataMin, dataMax]);
-	}
-
-	// Update scale selectionExtent and optionally emit Mosaic clause
-	function emitUpdate() {
-		if (!brush.active) return;
-
-		const dataMin = Math.min(brush.dataMin as number, brush.dataMax as number);
-		const dataMax = Math.max(brush.dataMin as number, brush.dataMax as number);
-
-		if (closeTo(dataMin, lastEmittedMin) && closeTo(dataMax, lastEmittedMax)) {
-			return;
-		}
-
-		lastEmittedMin = dataMin;
-		lastEmittedMax = dataMax;
-
-		// Always set selectionExtent on the scale (for useXSelection consumers)
-		if (scaleState instanceof LinearScaleState) {
-			scaleState.setSelectionExtent(dataMin, dataMax, 'brush');
-		}
-
-		emitFilterClause(dataMin, dataMax);
-	}
-
-	function handleWheel(event: WheelEvent) {
-		if (!event.shiftKey) return;
-
-		event.preventDefault();
-		event.stopPropagation();
-
-		const scaleFactor = 1 + event.deltaY * WHEEL_SENSITIVITY;
-
-		const min = Math.min(brush.dataMin as number, brush.dataMax as number);
-		const max = Math.max(brush.dataMin as number, brush.dataMax as number);
-
-		const [newMin, newMax] = scaleBrushExtent1D(min, max, scaleFactor);
-		brush.setExtent(newMin, newMax);
-
-		emitUpdate();
-	}
-
-	function clearBrush() {
-		brush.clear();
-		lastEmittedMin = null;
-		lastEmittedMax = null;
-
-		if (scaleState instanceof LinearScaleState) {
-			scaleState.clearSelectionExtent();
-		}
-
-		brushHandle.clear();
-	}
-
-	// --- Pointer Event Handlers (registered as chart context callbacks) ---
 
 	/** A press: move or resize on the brush's handles, else draw; decline in pan mode. */
 	function handlePointerDown(target: Element, pointerId: number, innerPoint: Point) {
-		if (brush.phase !== 'idle') return false;
 		if (isPanModeActive) return false;
-
-		target.setPointerCapture(pointerId);
-		isCapturing = true;
-		hasDragged = false;
-
-		anchor = innerCoord(innerPoint);
-		current = anchor;
-
 		const hit = brushHandleAt(target);
-		if (hit?.handle === 'move') {
-			brush.phase = 'moving';
-		} else if (hit) {
-			brush.phase = 'resizing';
-			brush.resizeEdge = hit.handle === edgeStart ? 'start' : 'end';
-		}
+		if (!drag.press(chart, isX ? innerPoint.x : innerPoint.y, hit?.handle ?? null)) return false;
+		shared.activeCell = chart;
+		target.setPointerCapture(pointerId);
 		return true;
 	}
 
 	function handlePointerMove(event: PointerEvent) {
-		if (!isCapturing) return false;
-
+		if (!drag.owns(chart)) return false;
 		point.x = event.offsetX;
 		point.y = event.offsetY;
-		const innerCoords = chart.toInnerCoordinates(point);
-		current = innerCoord(innerCoords);
-
-		if (!hasDragged && isDragging(anchor, current)) {
-			hasDragged = true;
-			if (brush.phase === 'idle') {
-				if (brush.active) {
-					clearBrush();
-				}
-				brush.phase = 'creating';
-			}
-		}
-
-		const s = getScale() as InvertibleScale;
-		if (brush.phase === 'creating') {
-			brush.setFromScreen(anchor, current, s);
-		} else if (brush.phase === 'moving') {
-			const delta = current - anchor;
-			brush.shiftByScreen(delta, s);
-			anchor = current;
-		} else if (brush.phase === 'resizing') {
-			const anchorData = brush.resizeEdge === 'start' ? brush.dataMax : brush.dataMin;
-			const currentData = s.invert(current);
-			brush.setExtent(
-				Math.min(anchorData as number, currentData as number),
-				Math.max(anchorData as number, currentData as number)
-			);
-		}
-
-		emitUpdate();
-		return true;
+		const inner = chart.toInnerCoordinates(point);
+		return drag.move(chart, isX ? inner.x : inner.y, scale());
 	}
 
 	function handlePointerUp(event: PointerEvent) {
-		if (!isCapturing) return false;
-
+		if (!drag.owns(chart)) return false;
 		(event.target as Element).releasePointerCapture(event.pointerId);
-		isCapturing = false;
-
-		// A press that never moved is a click, which clears the brush.
-		if (!hasDragged && brush.active && (brush.phase === 'idle' || brush.phase === 'moving')) {
-			clearBrush();
-			return true;
-		}
-
-		endDrag();
-		return true;
-	}
-
-	/** Keep what the drag did and go idle. */
-	function endDrag() {
-		if (brush.phase !== 'idle') {
-			emitUpdate();
-			brush.phase = 'idle';
-		}
-		hasDragged = false;
+		return drag.release(chart);
 	}
 
 	/** The chart re-routes the press: end the drag as it stands, never as a click. */
 	function handleDragEnd() {
-		if (!isCapturing) return;
-		isCapturing = false;
-		endDrag();
+		drag.abandon(chart);
+	}
+
+	function handleWheel(event: WheelEvent) {
+		if (!event.shiftKey) return;
+		event.preventDefault();
+		event.stopPropagation();
+		drag.zoom(1 + event.deltaY * WHEEL_SENSITIVITY);
 	}
 
 	// Register pointer callbacks; the keys are on <svelte:window> below.
@@ -350,7 +114,6 @@
 		chart.onInteractorPointerMove = handlePointerMove;
 		chart.onInteractorPointerUp = handlePointerUp;
 		chart.onInteractorDragEnd = handleDragEnd;
-		chart.activators.add(brushHandle.activate);
 
 		return () => {
 			// Only if they are still this brush's: another brush in the cell may
@@ -361,8 +124,6 @@
 				chart.onInteractorPointerUp = null;
 				chart.onInteractorDragEnd = null;
 			}
-			chart.activators.delete(brushHandle.activate);
-			brushHandle.destroy();
 		};
 	});
 </script>

@@ -27,7 +27,7 @@
 		MarginLabel,
 		SvgLayer
 	} from '$lib/components';
-	import { Toggle, IntervalX } from '$lib/interactors';
+	import { Toggle, IntervalX, Interval2D } from '$lib/interactors';
 	import { Legend } from '$lib/components/guides';
 	import { Grid } from '$lib/components/guides';
 
@@ -393,9 +393,10 @@
 			<div class="chart-panel wide">
 				<h3>12. A brush across facet cells</h3>
 				<p class="desc">
-					An IntervalX among the children: one brush per cell, each its own clause. Brush in one
-					cell, then another. The chart below counts what is selected: brushes in two cells AND
-					together, so it empties (the follow-up is one brush per chart).
+					An IntervalX among the children: one brush for the chart. Brush in one cell: every cell
+					draws the range, and the chart below counts what it selects. Brush in another cell: the
+					new range replaces it (one clause, not one per cell). Press in a second cell while
+					dragging: declined until the drag ends.
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="bill_length" yLabel="bill_depth" fx="species">
@@ -412,6 +413,31 @@
 						<AxisLeft />
 						<AxisBottom />
 						<BarMarkY table="penguins" x="species" y={count()} selection="facetbrush" />
+					</ChartContainer>
+				</div>
+			</div>
+
+			<div class="chart-panel wide">
+				<h3>13. A 2D brush across facet cells</h3>
+				<p class="desc">
+					An Interval2D among the children: one rectangle for the chart, drawn in every cell. Move
+					it, resize it by a corner, shift-wheel it; click the plot to clear it.
+				</p>
+				<div class="chart-wrapper">
+					<ChartContainer xLabel="bill_length" yLabel="bill_depth" fx="species">
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<DotsMark table="penguins" x="bill_length" y="bill_depth" fill="species" />
+						<Interval2D selection="facetbrush2d" />
+					</ChartContainer>
+				</div>
+				<div class="chart-wrapper small">
+					<ChartContainer xLabel="species" yLabel="count">
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<BarMarkY table="penguins" x="species" y={count()} selection="facetbrush2d" />
 					</ChartContainer>
 				</div>
 			</div>

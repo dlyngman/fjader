@@ -14,8 +14,10 @@ export class BrushState1D {
 	phase: BrushPhase = $state('idle');
 	resizeEdge: ResizeEdge = $state(null);
 
-	// Derived
-	active = $derived(this.dataMin != null && this.dataMax != null);
+	/** A getter, not $derived: as cheap, and also right where runes compile for the server (Vitest). */
+	get active(): boolean {
+		return this.dataMin != null && this.dataMax != null;
+	}
 
 	// Screen coordinate conversions (using D3 scale)
 	screenMin(scale: D3Scale): number {
@@ -111,7 +113,9 @@ export class BrushState2D {
 	phase: BrushPhase = $state('idle');
 	resizeCorner: ResizeCorner = $state(null);
 
-	active = $derived(this.x.active && this.y.active);
+	get active(): boolean {
+		return this.x.active && this.y.active;
+	}
 
 	clear(): void {
 		this.x.clear();

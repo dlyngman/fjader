@@ -24,7 +24,11 @@
 		chartId: 'chart',
 		config: {} as DeclarationChart['config'],
 		xScaleState: null,
-		yScaleState: null
+		yScaleState: null,
+		xColumnName: null,
+		yColumnName: null,
+		xLabel: null,
+		yLabel: null
 	};
 	setContext(DECLARATION_REGISTRY, registry);
 	setContext(DECLARATION_CHART, chart);

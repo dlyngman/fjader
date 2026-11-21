@@ -90,6 +90,11 @@ export interface DeclarationChart {
 	readonly config: ChartConfig;
 	readonly xScaleState: ScaleStateInstance | null | undefined;
 	readonly yScaleState: ScaleStateInstance | null | undefined;
+	/** The column the x scale reads, when one does (shared scales: the same in every cell). */
+	readonly xColumnName: string | null;
+	readonly yColumnName: string | null;
+	readonly xLabel: string | null | undefined;
+	readonly yLabel: string | null | undefined;
 }
 
 /** The chart this declaration is placed in. Call during component initialisation. */
