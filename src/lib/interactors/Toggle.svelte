@@ -16,10 +16,7 @@
 	 * for the chart (the declared field's, and one per band axis field), from
 	 * what every cell shares (DeclarationChart); each cell (ToggleCell) only
 	 * calls their activators when hovered and turns its clicks into toggles. In a
-	 * facet grid every cell toggles the same registrations. Once per chart as a
-	 * chart's child; in a per-cell snippet (an `interactors` snippet, until the
-	 * snippets go) the declaration itself is per cell, so it registers once per
-	 * cell, as before.
+	 * facet grid every cell toggles the same registrations.
 	 *
 	 * Toggles on different fields AND together. The chart skips its own toggles
 	 * (crossfilter): its marks that read the toggled field dim, the rest keep

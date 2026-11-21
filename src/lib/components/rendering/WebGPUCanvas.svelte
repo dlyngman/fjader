@@ -15,20 +15,21 @@
 	import GpuAxis from '../axes/GpuAxis.svelte';
 	import GpuParallelAxes from '../axes/GpuParallelAxes.svelte';
 	import PlotBorderRenderer from './PlotBorderRenderer.svelte';
-	import {
-		CELL_DECLARATIONS,
-		CHART_CHILDREN,
-		type CellDeclarations,
-		type ChartChildren
-	} from '../charts/declarations.svelte';
+	import { DECLARATION_REGISTRY, type DeclarationRegistry } from '../charts/declarations.svelte';
 
 	interface Props {
-		canvasComponents?: Snippet | undefined;
+		/**
+		 * The chart's components (ChartContainer's children), on the chart's
+		 * canvas: the unfaceted cell's, or a facet grid's pass-through. A facet
+		 * cell's own canvas gets none: it draws the marks of the one instance in
+		 * the pass-through.
+		 */
+		components?: Snippet;
 		facetIndex?: number;
 		facetScale?: FacetScaleRef | null;
 	}
 
-	let { canvasComponents = undefined, facetIndex, facetScale = null }: Props = $props();
+	let { components = undefined, facetIndex, facetScale = null }: Props = $props();
 
 	const c = getContext<ChartContext>('chart');
 	const isFaceted = !!c.fx && facetIndex == null;
@@ -63,18 +64,11 @@
 	let canvasClientWidth = $state(0);
 	let canvasClientHeight = $state(0);
 	/**
-	 * What the cell declared (axes, parallel axes, the plot border), drawn here,
-	 * on the GPU. None in a facet grid's pass-through canvas: each cell draws its own.
+	 * What the chart declared (axes, parallel axes, the plot border), drawn
+	 * here, on the GPU. Not by a facet grid's pass-through canvas: each cell's
+	 * canvas draws them.
 	 */
-	const declarations = getContext<CellDeclarations | undefined>(CELL_DECLARATIONS);
-	/**
-	 * The chart's children (ChartContainer), rendered here beside this canvas's
-	 * own components when this is the chart's canvas: not a facet cell's own,
-	 * which draws the children's marks from the one instance in the
-	 * pass-through canvas.
-	 */
-	const chartChildren = getContext<ChartChildren | undefined>(CHART_CHILDREN);
-	const ownsChildren = facetIndex == null;
+	const declarations = getContext<DeclarationRegistry | undefined>(DECLARATION_REGISTRY);
 	setContext('text-atlas', textAtlas);
 
 	function handlePaint() {
@@ -398,8 +392,7 @@
 
 {#if isFaceted}
 	<!-- Pass-through: marks render here but real canvases live in FacetCells -->
-	{@render canvasComponents?.()}
-	{#if ownsChildren}{@render chartChildren?.snippet?.()}{/if}
+	{@render components?.()}
 {:else if initializationError}
 	<div class="webgpu-error">
 		<p>WebGPU initialization failed for chart {chartId}:</p>
@@ -456,17 +449,14 @@
 	{/if}
 {/if}
 <!--
-	The chart's components (its children, or a canvas snippet's), at once: not
-	behind the context, so their queries, scales and declarations start while
-	WebGPU comes up, and legends and interactors are there even if it never
-	does. Their renderers wait for the canvas themselves
-	(WebGPUCanvasContext.ready). Only the GPU-only declarations above (border,
-	axes) wait for it. The faceted pass-through renders them above.
+	The chart's components, at once: not behind the context, so their queries,
+	scales and declarations start while WebGPU comes up, and legends and
+	interactors are there even if it never does. Their renderers wait for the
+	canvas themselves (WebGPUCanvasContext.ready). Only the GPU-only
+	declarations above (border, axes) wait for it. The faceted pass-through
+	renders them above.
 -->
-{#if !isFaceted}
-	{@render canvasComponents?.()}
-	{#if ownsChildren}{@render chartChildren?.snippet?.()}{/if}
-{/if}
+{#if !isFaceted}{@render components?.()}{/if}
 
 <style>
 	canvas {

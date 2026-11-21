@@ -15,8 +15,6 @@
 		BarMarkY
 	} from '$lib/components';
 
-	import DomainTestButtons from '$lib/components/debug/DomainTestButtons.svelte';
-
 	let chartConfig = $state([
 		{
 			id: '1',
@@ -100,12 +98,6 @@
 					{/if}
 
 					<Crosshair />
-
-					{#snippet overlay()}
-						{#if i === 0}
-							<DomainTestButtons offsetPercent={20} />
-						{/if}
-					{/snippet}
 				</ChartContainer>
 			</div>
 		{/each}

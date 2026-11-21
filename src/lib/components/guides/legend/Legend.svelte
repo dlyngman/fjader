@@ -6,10 +6,8 @@
 	import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 	import {
 		DECLARATION_REGISTRY,
-		DECLARATION_SCOPE,
 		declareLegend,
 		type DeclarationRegistry,
-		type DeclarationScopeContext,
 		type LegendPosition
 	} from '$lib/components/charts/declarations.svelte';
 
@@ -20,8 +18,7 @@
 	 * As a chart's child (`ChartContainer`'s children) it is a declaration: the
 	 * chart renders it once, above the plot or to its right (`position`),
 	 * however the chart is faceted. Several at one position render in
-	 * registration order. Outside a chart, or in one of a chart's per-cell
-	 * snippets (rendered once per cell), it renders where it is placed.
+	 * registration order. Outside a chart it renders where it is placed.
 	 */
 	interface Props {
 		color?: string | null;
@@ -51,12 +48,8 @@
 
 	const scaleRegistry = getContext<ScaleRegistry>('scale-registry');
 
-	// A chart's child: the chart renders it. Outside a chart, or in a per-cell
-	// snippet (one Legend per cell, so declaring would stack one per cell), it
-	// renders here.
-	const scope = getContext<DeclarationScopeContext | undefined>(DECLARATION_SCOPE);
-	const inChart =
-		!!getContext<DeclarationRegistry | undefined>(DECLARATION_REGISTRY) && !scope?.cellId;
+	// In a chart, the chart renders it; outside one, it renders here.
+	const inChart = !!getContext<DeclarationRegistry | undefined>(DECLARATION_REGISTRY);
 	if (inChart)
 		declareLegend(legend, {
 			get position() {

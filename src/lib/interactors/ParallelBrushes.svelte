@@ -1,12 +1,7 @@
 <script lang="ts">
 	import { getContext, untrack } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
-	import {
-		DECLARATION_SCOPE,
-		declareOverlay,
-		getDeclarationChart,
-		type DeclarationScopeContext
-	} from '$lib/components/charts/declarations.svelte';
+	import { declareOverlay, getDeclarationChart } from '$lib/components/charts/declarations.svelte';
 	import type { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 	import { CellPixels } from './interval-drag.svelte';
@@ -20,9 +15,7 @@
 	 * selection source and drag per axis (ParallelAxisSource), once for the
 	 * chart, from the shared parallel scales; each cell (ParallelBrushesCell)
 	 * places the axes at its own width, finds the axis under its pointer, drives
-	 * that axis's drag through its own scale and draws every axis's range. In a
-	 * per-cell snippet the declaration is per cell, so it keeps them per cell,
-	 * as before.
+	 * that axis's drag through its own scale and draws every axis's range.
 	 */
 	interface Props {
 		/** Filter group name: which FilterGroup these brushes write to. */
@@ -42,9 +35,7 @@
 	);
 	const skips = untrack(() => cross) ? chart.config : null;
 
-	// Per chart; in a per-cell snippet, per cell (the id a cell's brushes always had).
-	const scope = getContext<DeclarationScopeContext | undefined>(DECLARATION_SCOPE);
-	const owner = scope?.cellId ?? chart.chartId;
+	const owner = chart.chartId;
 
 	/**
 	 * Each axis's state (source, drag), by column, created and dropped by its

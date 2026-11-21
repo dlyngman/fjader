@@ -86,7 +86,7 @@
 	const canvas = getContext<WebGPUCanvasContext | undefined>('webgpu-canvas');
 	if (!markHost || !rendererHost || !textAtlas || !canvas) {
 		throw new Error(
-			"<Labels> attaches to a mark: place it inside one, as in <BarMarkY …><Labels /></BarMarkY>, in the chart's canvasComponents."
+			'<Labels> attaches to a mark: place it inside one, as in <BarMarkY …><Labels /></BarMarkY>, a child of <ChartContainer>.'
 		);
 	}
 

@@ -14,11 +14,12 @@
  * (`Crosshair`, `MarginLabel`, `AxisCenter`, `SvgLayer`, the brushes, `Toggle`)
  * register a snippet the cell renders in its foreground SVG (`declareOverlay`).
  *
- * One registry per chart (`ChartContainer`). A declaration is for every cell
- * of the chart, or for one: `ChartCell` renders its per-cell snippets
- * (`background`, `foreground`, `interactors`, `overlay`) inside a
- * `DeclarationScope` naming the cell, so a facet grid whose snippets render
- * once per cell gets one declaration per cell, each drawn in its own cell.
+ * One registry per chart (`ChartContainer`), and every declaration in it is
+ * the chart's: a facet grid draws it in each cell. A declaring component is
+ * placed as the chart's child. Inside what a cell renders per cell (an
+ * `SvgLayer`'s content, marked by `InCell`) it would declare once per cell, so
+ * there `declareInChart` skips it with a warning, and `getDeclarationChart`
+ * throws.
  */
 import { getContext, onDestroy, type Snippet } from 'svelte';
 import type { AxisSpec, ParallelAxesSpec } from '../axes/axis-spec';
@@ -81,14 +82,10 @@ export type ChartDeclaration = {
 	[K in DeclarationKind]: {
 		readonly kind: K;
 		readonly spec: Specs[K];
-		/** The one cell it is for, or null: every cell of the chart. */
-		readonly cellId: string | null;
 	};
 }[DeclarationKind];
 
 export const DECLARATION_REGISTRY = 'declaration-registry';
-/** Set by `DeclarationScope`: the cell a declaration placed inside is for. */
-export const DECLARATION_SCOPE = 'declaration-scope';
 /**
  * Set by `ChartContainer`: what a declaration may read of its chart
  * (`DeclarationChart`). Not the 'chart' context, which is a cell's or the facet
@@ -113,33 +110,33 @@ export interface DeclarationChart {
 	readonly parallelScales: ChartContext['parallelScales'];
 }
 
+/**
+ * Set by `InCell` around what a cell renders per cell (its overlays): a
+ * declaring component placed there (in an `SvgLayer`'s content) would declare
+ * once per cell, multiplying in a facet grid.
+ */
+export const IN_CELL = 'declaration-in-cell';
+
+const warnedInCell = new Set<string>();
+
+/** Whether this component is inside what a cell renders per cell. */
+function inCell(): boolean {
+	return getContext<boolean | undefined>(IN_CELL) === true;
+}
+
 /** The chart this declaration is placed in. Call during component initialisation. */
 export function getDeclarationChart(component: string): DeclarationChart {
+	if (inCell())
+		throw new Error(
+			`<${component}> declares itself in a chart: place it as a child of <ChartContainer>, ` +
+				'not inside an overlay (an SvgLayer), which every cell renders.'
+		);
 	const chart = getContext<DeclarationChart | undefined>(DECLARATION_CHART);
 	if (!chart)
 		throw new Error(
 			`<${component}> declares itself in a chart: place it inside a <ChartContainer>.`
 		);
 	return chart;
-}
-
-/** Set by `ChartCell`: what its canvas draws (`DeclarationRegistry.forCell`). */
-export const CELL_DECLARATIONS = 'cell-declarations';
-/**
- * Set by `ChartContainer`: its children, which the chart's canvas renders. Any
- * `WebGPUCanvas` in the chart without a `facetIndex` renders them, so a chart
- * has exactly one such canvas: a `canvas` snippet holds a single one.
- */
-export const CHART_CHILDREN = 'chart-children';
-
-/** A chart's children, as its canvas renders them (`WebGPUCanvas`). */
-export interface ChartChildren {
-	/** The children, inside their `DeclarationScope`; none when the chart has none. */
-	readonly snippet: Snippet | undefined;
-}
-
-export interface DeclarationScopeContext {
-	readonly cellId: string | null;
 }
 
 export class DeclarationRegistry {
@@ -152,39 +149,9 @@ export class DeclarationRegistry {
 		};
 	}
 
-	/** What one cell draws: the declarations for every cell, and its own. */
-	forCell(cellId: string): CellDeclarations {
-		return new CellDeclarations(this, cellId);
-	}
-
-	/**
-	 * The chart's legends at `position`, in registration order. A legend is the
-	 * chart's, not a cell's: the chart renders each one once. Only a chart's
-	 * child declares one (Legend); in a per-cell snippet it renders in place.
-	 */
-	legends(position: LegendPosition): LegendDeclaration[] {
-		const out: LegendDeclaration[] = [];
-		for (const d of this.declarations) {
-			if (d.kind === 'legend' && d.spec.position === position) out.push(d.spec);
-		}
-		return out;
-	}
-}
-
-/** One cell's view of the registry. Filters on read, so it follows the registry. */
-export class CellDeclarations {
-	constructor(
-		private readonly registry: DeclarationRegistry,
-		readonly cellId: string
-	) {}
-
 	of<K extends DeclarationKind>(kind: K): Specs[K][] {
 		const out: Specs[K][] = [];
-		for (const d of this.registry.declarations) {
-			if (d.kind === kind && (d.cellId === null || d.cellId === this.cellId)) {
-				out.push(d.spec as Specs[K]);
-			}
-		}
+		for (const d of this.declarations) if (d.kind === kind) out.push(d.spec as Specs[K]);
 		return out;
 	}
 
@@ -200,19 +167,29 @@ export class CellDeclarations {
 		return this.of('frame');
 	}
 
-	/** The overlays this cell draws in `slot`, in draw order (orderOverlays). */
+	/** The overlays each cell draws in `slot`, in draw order (orderOverlays). */
 	overlays(slot: OverlaySlot): OverlaySpec[] {
 		return orderOverlays(this.of('overlay').filter((o) => o.slot === slot));
+	}
+
+	/**
+	 * The chart's legends at `position`, in registration order. A legend is the
+	 * chart's, not a cell's: the chart renders each one once.
+	 */
+	legends(position: LegendPosition): LegendDeclaration[] {
+		const out: LegendDeclaration[] = [];
+		for (const d of this.declarations) {
+			if (d.kind === 'legend' && d.spec.position === position) out.push(d.spec);
+		}
+		return out;
 	}
 }
 
 /**
  * Overlays in draw order: by zIndex, and by registration order among equals.
  * Registration order alone is not stable: an overlay in a toggled {#if}
- * registers again at the end, and a chart's children register once its canvas
- * is ready, after the declarations in its snippets. A zIndex is the only
- * guaranteed order. A new array; the specs themselves, so a keyed {#each}
- * keeps each overlay mounted.
+ * registers again at the end. A zIndex is the only guaranteed order. A new
+ * array; the specs themselves, so a keyed {#each} keeps each overlay mounted.
  */
 export function orderOverlays(overlays: readonly OverlaySpec[]): OverlaySpec[] {
 	return overlays
@@ -223,7 +200,7 @@ export function orderOverlays(overlays: readonly OverlaySpec[]): OverlaySpec[] {
 
 /**
  * Declare an SVG overlay in the chart this component is placed in: `snippet`
- * renders in every cell's foreground SVG (or the cell its scope names), in
+ * renders in every cell's foreground SVG, in
  * `slot`, with the cell's chart context. `options` may hold getters (it is read
  * on every use). Call during component initialisation.
  */
@@ -262,9 +239,8 @@ export function declareLegend(
 }
 
 /**
- * Declare `spec` in the chart this component is placed in, for the cell its
- * scope names (or every cell), until the component is destroyed. Call during
- * component initialisation.
+ * Declare `spec` in the chart this component is placed in, until the component
+ * is destroyed. Call during component initialisation.
  *
  * Outside a chart: a declaration that only declares (an axis, Frame, an
  * overlay) declares nothing and draws nothing, as its SVG ancestor did; one
@@ -272,12 +248,20 @@ export function declareLegend(
  * throws, through getDeclarationChart, since it could never do anything there.
  */
 export function declareInChart<K extends DeclarationKind>(kind: K, spec: Specs[K]): void {
+	// Inside what a cell renders per cell: it would declare once per cell, and
+	// each cell would draw every copy. Skipped, with one warning per kind.
+	if (inCell()) {
+		if (!warnedInCell.has(kind)) {
+			warnedInCell.add(kind);
+			console.warn(
+				`fjader: a ${kind} declared inside an overlay (an SvgLayer) is skipped: every cell ` +
+					'renders an overlay, so it would declare once per cell. Place it as a child of ' +
+					'<ChartContainer>.'
+			);
+		}
+		return;
+	}
 	const registry = getContext<DeclarationRegistry | undefined>(DECLARATION_REGISTRY);
-	const scope = getContext<DeclarationScopeContext | undefined>(DECLARATION_SCOPE);
-	const unregister = registry?.register({
-		kind,
-		spec,
-		cellId: scope?.cellId ?? null
-	} as ChartDeclaration);
+	const unregister = registry?.register({ kind, spec } as ChartDeclaration);
 	onDestroy(() => unregister?.());
 }

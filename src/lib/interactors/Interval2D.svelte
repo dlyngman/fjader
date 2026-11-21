@@ -1,12 +1,7 @@
 <script lang="ts">
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { and, isBetween } from '@uwdata/mosaic-sql';
-	import {
-		DECLARATION_SCOPE,
-		declareOverlay,
-		getDeclarationChart,
-		type DeclarationScopeContext
-	} from '$lib/components/charts/declarations.svelte';
+	import { declareOverlay, getDeclarationChart } from '$lib/components/charts/declarations.svelte';
 	import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 	import type { FieldRef } from '$lib/types';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
@@ -44,9 +39,7 @@
 		buildColumnRef(resolvedYField, chart.yScaleState as { t0?: Date } | null)
 	);
 
-	// Per chart; in a per-cell snippet, per cell (the id a cell's brush always had).
-	const scope = getContext<DeclarationScopeContext | undefined>(DECLARATION_SCOPE);
-	const source = `interval-2d-${scope?.cellId ?? chart.chartId}`;
+	const source = `interval-2d-${chart.chartId}`;
 
 	/** False once destroyed: a cell unmounting later (mid-drag) must not write. */
 	let live = true;

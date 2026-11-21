@@ -129,8 +129,7 @@ export class RendererHost {
 			// Placed outside any chart canvas: nothing would draw, and nothing would say why.
 			console.warn(
 				`fjader: ${this.#options.label ?? this.#options.markType} has no WebGPU canvas to draw in: ` +
-					"it is outside any chart, or among a chart's children while a `canvas` snippet " +
-					'owns the canvas. Place it in the chart (or its canvas snippet).'
+					'it is outside any chart. Place it as a child of <ChartContainer>.'
 			);
 			return;
 		}
