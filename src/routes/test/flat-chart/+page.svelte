@@ -27,7 +27,8 @@
 		MarginLabel,
 		SvgLayer
 	} from '$lib/components';
-	import { Toggle } from '$lib/interactors';
+	import { Toggle, IntervalX } from '$lib/interactors';
+	import { Legend } from '$lib/components/guides';
 	import { Grid } from '$lib/components/guides';
 
 	const { queryEngine } = initFjader();
@@ -363,19 +364,71 @@
 				</div>
 			</div>
 
+			<div class="chart-panel wide">
+				<h3>11. Toggles across facet cells</h3>
+				<p class="desc">
+					A Toggle among the children: every cell has one, on the same field. Click Dream in one
+					cell, then Biscoe in another. The chart below shows the selection: both islands (one
+					clause, ORed) or none (two clauses, ANDed)?
+				</p>
+				<div class="chart-wrapper">
+					<ChartContainer xLabel="island" yLabel="count" fx="species">
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<BarMarkY table="penguins" x="island" y={count()} fill="island" />
+						<Toggle field="island" selection="facettoggle" />
+					</ChartContainer>
+				</div>
+				<div class="chart-wrapper small">
+					<ChartContainer xLabel="island" yLabel="count">
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<BarMarkY table="penguins" x="island" y={count()} selection="facettoggle" />
+					</ChartContainer>
+				</div>
+			</div>
+
+			<div class="chart-panel wide">
+				<h3>12. A brush across facet cells</h3>
+				<p class="desc">
+					An IntervalX among the children: one brush per cell, each its own clause. Brush in one
+					cell, then another. The chart below counts what is selected: brushes in two cells AND
+					together, so it empties (the follow-up is one brush per chart).
+				</p>
+				<div class="chart-wrapper">
+					<ChartContainer xLabel="bill_length" yLabel="bill_depth" fx="species">
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<DotsMark table="penguins" x="bill_length" y="bill_depth" fill="species" />
+						<IntervalX selection="facetbrush" />
+					</ChartContainer>
+				</div>
+				<div class="chart-wrapper small">
+					<ChartContainer xLabel="species" yLabel="count">
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<BarMarkY table="penguins" x="species" y={count()} selection="facetbrush" />
+					</ChartContainer>
+				</div>
+			</div>
+
 			{#if misuse}
 				<div class="chart-panel">
 					<h3>6. Misuse (?misuse=1)</h3>
 					<p class="desc">
-						A Toggle as a child: a warning to keep it in the interactors snippet (overlays like the
-						crosshair are children now; the toggles and brushes follow).
+						A Legend as a child: a warning to keep it in the legend snippet (everything else here is
+						a child now; the legend follows).
 					</p>
 					<div class="chart-wrapper">
 						<ChartContainer xLabel="island" yLabel="count">
 							<Frame />
 							<AxisLeft />
 							<AxisBottom />
-							<Toggle field="island" />
+							<Legend color="island" />
 							<BarMarkY table="penguins" x="island" y={count()} fill="island" />
 							{#snippet canvas()}
 								<WebGPUCanvas>
@@ -415,6 +468,10 @@
 
 	.chart-wrapper {
 		height: 280px;
+	}
+
+	.chart-wrapper.small {
+		height: 200px;
 	}
 
 	.status {
