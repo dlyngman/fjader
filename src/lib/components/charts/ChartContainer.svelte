@@ -18,9 +18,11 @@
 	import ChartCell from './ChartCell.svelte';
 	import {
 		CHART_CHILDREN,
+		DECLARATION_CHART,
 		DECLARATION_REGISTRY,
 		DeclarationRegistry,
-		type ChartChildren
+		type ChartChildren,
+		type DeclarationChart
 	} from './declarations.svelte';
 	import DeclarationScope from './DeclarationScope.svelte';
 	import WebGPUCanvas from '../rendering/WebGPUCanvas.svelte';
@@ -516,6 +518,18 @@
 	// The chart's declarations (axes, parallel axes, the plot border), read by
 	// every cell (charts/declarations).
 	setContext(DECLARATION_REGISTRY, new DeclarationRegistry());
+	// What a declaration may read of the chart: what every cell shares.
+	const declarationChart: DeclarationChart = {
+		chartId: layout.chartId,
+		config: chartConfig,
+		get xScaleState() {
+			return scales?.xScaleState;
+		},
+		get yScaleState() {
+			return scales?.yScaleState;
+		}
+	};
+	setContext(DECLARATION_CHART, declarationChart);
 	// The chart's text atlas: its strings and slots, painted by each of its
 	// canvases (one, or a facet grid's cells), so text layers in a facet grid's
 	// pass-through canvas (<Labels>, TextMark) draw in every cell.

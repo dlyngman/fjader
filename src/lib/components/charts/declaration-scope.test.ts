@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render } from 'svelte/server';
 import ScopeHarness from '../../../test-fixtures/declarations/ScopeHarness.svelte';
+import ToggleHarness from '../../../test-fixtures/declarations/ToggleHarness.svelte';
+import type { ChartContext } from '$lib/types';
 import { DeclarationRegistry, type ChartDeclaration } from './declarations.svelte';
 
 describe('DeclarationScope', () => {
@@ -42,5 +44,38 @@ describe('DeclarationScope', () => {
 		expect(warnings).toHaveLength(1);
 		expect(String(warnings[0][0])).toContain('<ScopeProbe>');
 		expect(String(warnings[0][0])).toContain('`foreground`');
+	});
+});
+
+describe('Toggle split by responsibility', () => {
+	it('registers once for the chart; each of three cells adds one activator', () => {
+		const handle = {
+			activate() {},
+			destroy() {},
+			toggle() {},
+			toggleOther() {},
+			clear() {},
+			active: false
+		};
+		const registerToggle = vi.fn(() => handle);
+		const groups = { get: () => ({ registerToggle }) };
+		// Each cell counts its activator adds (server rendering removes them again
+		// at the end, onDestroy).
+		const adds: number[] = [0, 0, 0];
+		const cells = adds.map((_, i) => {
+			const activators = new Set<() => void>();
+			const add = activators.add.bind(activators);
+			activators.add = (fn) => {
+				adds[i]++;
+				return add(fn);
+			};
+			return { activators, onChartClick: null } as unknown as ChartContext;
+		});
+
+		render(ToggleHarness, { props: { registry: new DeclarationRegistry(), groups, cells } });
+
+		expect(registerToggle).toHaveBeenCalledTimes(1);
+		expect(registerToggle).toHaveBeenCalledWith(['island'], { chart: expect.anything() });
+		expect(adds).toEqual([1, 1, 1]);
 	});
 });
