@@ -4,6 +4,7 @@ import { render } from 'svelte/server';
 import ScopeHarness from '../../../test-fixtures/declarations/ScopeHarness.svelte';
 import ToggleHarness from '../../../test-fixtures/declarations/ToggleHarness.svelte';
 import BrushHarness from '../../../test-fixtures/declarations/BrushHarness.svelte';
+import LegendHarness from '../../../test-fixtures/declarations/LegendHarness.svelte';
 import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 import type { ChartContext } from '$lib/types';
 import { DeclarationRegistry, type ChartDeclaration } from './declarations.svelte';
@@ -17,7 +18,7 @@ vi.mock('$lib/interactors/relay-clauses', () => ({
 }));
 
 describe('DeclarationScope', () => {
-	it('scopes declarations to its cell, or to every cell; children warn as overlays', () => {
+	it('scopes declarations to its cell, or to every cell', () => {
 		// Server rendering runs onDestroy at the end, which unregisters: keep what
 		// was registered, and look at the registry as it stood then.
 		const registry = new DeclarationRegistry();
@@ -27,14 +28,7 @@ describe('DeclarationScope', () => {
 			registered.push(d);
 			return register(d);
 		};
-		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-		let warnings: unknown[][];
-		try {
-			render(ScopeHarness, { props: { registry } });
-		} finally {
-			warnings = [...warn.mock.calls];
-			warn.mockRestore();
-		}
+		render(ScopeHarness, { props: { registry } });
 		expect(registry.declarations).toEqual([]);
 		registry.register = register;
 		for (const d of registered) registry.register(d);
@@ -51,10 +45,6 @@ describe('DeclarationScope', () => {
 			'in-children'
 		]);
 		expect(registry.forCell('cell-b').frames.map((f) => f.id)).toEqual(['bare', 'in-children']);
-		// Only the probe placed in the chart's children is told to move.
-		expect(warnings).toHaveLength(1);
-		expect(String(warnings[0][0])).toContain('<ScopeProbe>');
-		expect(String(warnings[0][0])).toContain('`foreground`');
 	});
 });
 
@@ -249,5 +239,30 @@ describe('ParallelBrushes and DerivedIntervalX split by responsibility', () => {
 		expect(ClauseRelay).toHaveBeenCalledTimes(1);
 		// Destroyed at the end of server rendering: its one clause key goes.
 		expect(removeManual.mock.calls).toEqual([['derived-x-chart']]);
+	});
+});
+
+describe('Legend as a declaration', () => {
+	it('in a chart: declares itself, for the chart to render at its position', () => {
+		const registry = new DeclarationRegistry();
+		const registered: ChartDeclaration[] = [];
+		const register = registry.register.bind(registry);
+		registry.register = (d) => {
+			registered.push(d);
+			return register(d);
+		};
+		render(LegendHarness, {
+			props: { registry, scaleRegistry: { getScaleByField: () => null } }
+		});
+
+		expect(registered.map((d) => [d.kind, d.kind === 'legend' ? d.spec.position : null])).toEqual([
+			['legend', 'top'],
+			['legend', 'right']
+		]);
+		// Listed by position, in registration order.
+		registry.register = register;
+		for (const d of registered) registry.register(d);
+		expect(registry.legends('top')).toEqual([registered[0].spec]);
+		expect(registry.legends('right')).toEqual([registered[1].spec]);
 	});
 });

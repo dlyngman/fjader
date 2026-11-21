@@ -11,19 +11,14 @@
 	interface Props {
 		/** The cell, or null: every cell of the chart. */
 		cellId: string | null;
-		/** Directly in the chart (`ChartContainer`'s children), not in a snippet. */
-		inChildren?: boolean;
 		children?: Snippet;
 	}
 
-	let { cellId, inChildren = false, children }: Props = $props();
+	let { cellId, children }: Props = $props();
 
 	const scope: DeclarationScopeContext = {
 		get cellId() {
 			return cellId;
-		},
-		get inChildren() {
-			return inChildren;
 		}
 	};
 	setContext(DECLARATION_SCOPE, scope);

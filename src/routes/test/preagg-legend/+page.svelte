@@ -245,10 +245,8 @@
 
 			<div class="panel">
 				<h3>Carrier (Toggle and legend)</h3>
-				<ChartContainer xLabel="carrier" yLabel="count" legendPosition="top">
-					{#snippet legend()}
-						<Legend color="carrier" selection="brush" />
-					{/snippet}
+				<ChartContainer xLabel="carrier" yLabel="count">
+					<Legend color="carrier" selection="brush" />
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />
@@ -303,10 +301,8 @@
 
 			<div class="panel">
 				<h3>Time (continuous legend; 5,000-row sample)</h3>
-				<ChartContainer xLabel="distance" yLabel="delay" legendPosition="top">
-					{#snippet legend()}
-						<Legend color="time" selection="brush" />
-					{/snippet}
+				<ChartContainer xLabel="distance" yLabel="delay">
+					<Legend color="time" selection="brush" />
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />
@@ -330,10 +326,8 @@
 
 			<div class="panel">
 				<h3>Delay by carrier (selectionResponse="filter")</h3>
-				<ChartContainer xLabel="delay" yLabel="count" legendPosition="top">
-					{#snippet legend()}
-						<Legend color="carrier" selection="brush" />
-					{/snippet}
+				<ChartContainer xLabel="delay" yLabel="count">
+					<Legend color="carrier" selection="brush" />
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />

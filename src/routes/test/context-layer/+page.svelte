@@ -107,10 +107,8 @@
 
 			<div class="panel">
 				<h3>Carrier: whole (ignore) behind part</h3>
-				<ChartContainer xLabel="carrier" yLabel="flights by carrier" legendPosition="top">
-					{#snippet legend()}
-						<Legend color="carrier" selection="brush" />
-					{/snippet}
+				<ChartContainer xLabel="carrier" yLabel="flights by carrier">
+					<Legend color="carrier" selection="brush" />
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />

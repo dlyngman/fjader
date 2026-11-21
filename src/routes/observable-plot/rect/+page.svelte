@@ -78,10 +78,8 @@
 
 		<div class="charts">
 			<div class="chart-wrapper">
-				<ChartContainer legendPosition="top" yLabel="Count (stacked)" xLabel="Weight (kg, stacked)">
-					{#snippet legend()}
-						<Legend color="sex" />
-					{/snippet}
+				<ChartContainer yLabel="Count (stacked)" xLabel="Weight (kg, stacked)">
+					<Legend color="sex" />
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />
@@ -178,14 +176,8 @@
 
 		<div class="charts">
 			<div class="chart-wrapper">
-				<ChartContainer
-					legendPosition="top"
-					yLabel="Count (overlapping)"
-					xLabel="Weight (kg, overlapping)"
-				>
-					{#snippet legend()}
-						<Legend color="sex" />
-					{/snippet}
+				<ChartContainer yLabel="Count (overlapping)" xLabel="Weight (kg, overlapping)">
+					<Legend color="sex" />
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />

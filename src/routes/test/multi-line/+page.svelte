@@ -49,10 +49,8 @@
 		<div class="charts">
 			<div class="chart-wrapper">
 				<h3>stroke="industry" (group + color), click a line or the legend</h3>
-				<ChartContainer legendPosition="top">
-					{#snippet legend()}
-						<Legend color="industry" />
-					{/snippet}
+				<ChartContainer>
+					<Legend color="industry" />
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />

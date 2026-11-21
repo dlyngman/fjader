@@ -184,10 +184,8 @@
 
 		<div class="charts">
 			<div class="chart-wrapper">
-				<ChartContainer legendPosition="top" xLabel="date (unemployment)">
-					{#snippet legend()}
-						<Legend color="industry" />
-					{/snippet}
+				<ChartContainer xLabel="date (unemployment)">
+					<Legend color="industry" />
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />
@@ -224,10 +222,8 @@
 
 		<div class="charts">
 			<div class="chart-wrapper">
-				<ChartContainer legendPosition="top" xLabel="date (unemployment)">
-					{#snippet legend()}
-						<Legend color="industry" />
-					{/snippet}
+				<ChartContainer xLabel="date (unemployment)">
+					<Legend color="industry" />
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />
@@ -265,10 +261,8 @@
 
 		<div class="charts">
 			<div class="chart-wrapper">
-				<ChartContainer legendPosition="top" xLabel="date (unemployment)">
-					{#snippet legend()}
-						<Legend color="industry" />
-					{/snippet}
+				<ChartContainer xLabel="date (unemployment)">
+					<Legend color="industry" />
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />
@@ -344,10 +338,8 @@
 
 		<div class="charts">
 			<div class="chart-wrapper">
-				<ChartContainer xLabel="Date (aapl-vfill)" legendPosition="top">
-					{#snippet legend()}
-						<Legend color="Volume" />
-					{/snippet}
+				<ChartContainer xLabel="Date (aapl-vfill)">
+					<Legend color="Volume" />
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />

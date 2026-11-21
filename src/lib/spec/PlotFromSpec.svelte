@@ -75,8 +75,20 @@
 		xDisableZoom={spec.xDisableZoom}
 		yDisableZoom={spec.yDisableZoom}
 		entrance={spec.entrance}
-		{legendPosition}
 	>
+		{#if legendConfig}
+			<Legend
+				color={legendConfig.color}
+				selection={legendConfig.selection ?? selectionName ?? undefined}
+				title={legendConfig.title ?? null}
+				columns={legendConfig.columns ?? null}
+				swatchSize={legendConfig.swatchSize}
+				swatchRadius={legendConfig.swatchRadius}
+				position={legendPosition}
+				orientation={legendConfig.orientation ?? null}
+			/>
+		{/if}
+
 		{#snippet background()}
 			<Frame />
 			<AxisLeft />
@@ -133,20 +145,6 @@
 					/>
 				{/if}
 			{/each}
-		{/snippet}
-
-		{#snippet legend()}
-			{#if legendConfig}
-				<Legend
-					color={legendConfig.color}
-					selection={legendConfig.selection ?? selectionName ?? undefined}
-					title={legendConfig.title ?? null}
-					columns={legendConfig.columns ?? null}
-					swatchSize={legendConfig.swatchSize}
-					swatchRadius={legendConfig.swatchRadius}
-					orientation={legendConfig.orientation ?? null}
-				/>
-			{/if}
 		{/snippet}
 	</ChartContainer>
 </div>

@@ -219,10 +219,8 @@
 	</div>
 
 	<div class="chart-container">
-		<ChartContainer {legendPosition}>
-			{#snippet legend()}
-				<Legend color={colorField} selection="legend" />
-			{/snippet}
+		<ChartContainer>
+			<Legend position={legendPosition} color={colorField} selection="legend" />
 
 			{#snippet canvas()}
 				<WebGPUCanvas>

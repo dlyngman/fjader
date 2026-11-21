@@ -79,15 +79,13 @@
 		canvasComponents?: Snippet;
 		overlay?: Snippet;
 		interactors?: Snippet;
-		legend?: Snippet;
-		legendPosition?: 'top' | 'right';
 		/**
-		 * The chart's components, placed directly: marks, `Grid`, `Frame`,
-		 * `AxisLeft`, `AxisBottom`, `ParallelAxes`. Each draws where it belongs,
-		 * in every cell of a facet grid; the chart makes its own canvas for them.
-		 * Overlays (`Crosshair`, brushes, `Toggle`, `MarginLabel`, `Legend`)
-		 * still go in their snippets. With a `canvas` snippet too, the children
-		 * render in the snippet's canvas, beside its components.
+		 * The chart's components, placed directly: marks, `Grid`, `Frame`, the
+		 * axes, overlays (`Crosshair`, `MarginLabel`), brushes, `Toggle` and
+		 * `Legend`. Each draws where it belongs, in every cell of a facet grid
+		 * (a legend once, above the plot or to its right); the chart makes its
+		 * own canvas for them. With a `canvas` snippet too, the children render
+		 * in the snippet's canvas, beside its components.
 		 */
 		children?: Snippet;
 		wheelInteraction?: { dwellTimeMs?: number; momentumThreshold?: number; enabled?: boolean };
@@ -128,8 +126,6 @@
 		canvasComponents = undefined,
 		overlay = undefined,
 		interactors = undefined,
-		legend = undefined,
-		legendPosition = 'top',
 		children = undefined,
 		entrance = 'auto',
 		wheelInteraction = {
@@ -514,10 +510,13 @@
 	};
 
 	setContext('chart', marksContext);
-	setContext('legend-position', () => legendPosition);
 	// The chart's declarations (axes, parallel axes, the plot border), read by
 	// every cell (charts/declarations).
-	setContext(DECLARATION_REGISTRY, new DeclarationRegistry());
+	const declarationRegistry = new DeclarationRegistry();
+	setContext(DECLARATION_REGISTRY, declarationRegistry);
+	// The legends declared in the chart, by where it places them.
+	const topLegends = $derived(declarationRegistry.legends('top'));
+	const rightLegends = $derived(declarationRegistry.legends('right'));
 	// What a declaration may read of the chart: what every cell shares.
 	const declarationChart: DeclarationChart = {
 		chartId: layout.chartId,
@@ -571,7 +570,7 @@
 </script>
 
 {#snippet flatComponents()}
-	<DeclarationScope cellId={null} inChildren>{@render children?.()}</DeclarationScope>
+	<DeclarationScope cellId={null}>{@render children?.()}</DeclarationScope>
 {/snippet}
 
 {#snippet flatCanvas()}
@@ -579,13 +578,15 @@
 {/snippet}
 
 <div class="figure-container" bind:clientWidth={layout.width} data-fjader-tooltip={tooltipScheme}>
-	{#if legend && legendPosition === 'top'}
+	{#if topLegends.length > 0}
 		<div
 			class="legend-container legend-top"
 			style:padding-left="{cellMargin.left}px"
 			style:padding-right="{cellMargin.right}px"
 		>
-			{@render legend()}
+			{#each topLegends as declared (declared)}
+				{@render declared.snippet()}
+			{/each}
 		</div>
 	{/if}
 
@@ -651,13 +652,15 @@
 		/>
 	{/if}
 
-	{#if legend && legendPosition === 'right'}
+	{#if rightLegends.length > 0}
 		<div
 			class="legend-container legend-right"
 			style:top="{cellMargin.top}px"
 			style:left="{cellMargin.left + layout.innerWidth + 8}px"
 		>
-			{@render legend()}
+			{#each rightLegends as declared (declared)}
+				{@render declared.snippet()}
+			{/each}
 		</div>
 	{/if}
 </div>

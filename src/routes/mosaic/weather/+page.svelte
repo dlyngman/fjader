@@ -46,10 +46,8 @@
 
 		<div class="charts">
 			<div class="chart-wrapper">
-				<ChartContainer legendPosition="top">
-					{#snippet legend()}
-						<Legend color="weather" selection="brush" />
-					{/snippet}
+				<ChartContainer>
+					<Legend color="weather" selection="brush" />
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />
@@ -87,9 +85,7 @@
 
 			<div class="chart-wrapper">
 				<ChartContainer>
-					<!-- {#snippet legend()}
-						<Legend color="weather" selection="brush" />
-					{/snippet} -->
+					<!-- <Legend color="weather" selection="brush" /> -->
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />
