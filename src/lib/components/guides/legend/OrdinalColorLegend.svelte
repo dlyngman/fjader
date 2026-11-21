@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { getContext, onDestroy } from 'svelte';
+	import { isMultiSelect } from '$lib/interactors/modifiers';
 	import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 	import type { ChartContext } from '$lib/types';
@@ -129,7 +130,7 @@
 
 	// Shift/meta-click adds or removes; selecting every value clears instead.
 	function handleClick(item: Item, event: MouseEvent) {
-		const multi = event.shiftKey || event.metaKey;
+		const multi = isMultiSelect(event);
 		// An Other bucket names no value: the click selects what it holds.
 		if (item.bucket && item.id !== null) toggle?.toggleOther(item.id, null, multi);
 		else toggle?.toggle([item.value], multi, scaleState.domain.length);
