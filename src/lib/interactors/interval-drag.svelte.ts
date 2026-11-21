@@ -36,15 +36,18 @@ export type Range2D = (x0: number, x1: number, y0: number, y1: number) => boolea
  * A one-axis brush's drag, held once per chart and driven by its cells.
  *
  * The range is in data space, so every cell draws it with its own scale. A drag
- * belongs to the cell that pressed (`owner`, its chart context): a press in
- * another cell is declined until it ends (`held`), and moves or releases from
- * another cell are not its own. Pointer capture stays with the cell, which owns the
+ * belongs to the cell that pressed (`owner`, its chart context) and to the
+ * pointer that pressed: a press in another cell is declined until it ends
+ * (`held`), and moves or releases from another cell, or from another pointer
+ * (a second finger or pen), are not its own. Pointer capture stays with the cell, which owns the
  * element. Allocation-free per move.
  */
 export class IntervalDrag1D {
 	readonly brush = new BrushState1D();
 	#sink: DragSink<Range1D>;
 	#owner: object | null = null;
+	/** The pointer that pressed (its pointerId), while a cell owns the drag. */
+	#pointer = -1;
 	#anchor = 0;
 	#hasDragged = false;
 	/** The edge a resize keeps (data), from its first move; NaN: none yet. */
@@ -56,9 +59,9 @@ export class IntervalDrag1D {
 		this.#sink = sink;
 	}
 
-	/** Whether `owner` (a cell) holds the drag. */
-	owns(owner: object): boolean {
-		return this.#owner === owner;
+	/** Whether `owner` (a cell) holds the drag; with `pointerId`, through that pointer. */
+	owns(owner: object, pointerId?: number): boolean {
+		return this.#owner === owner && (pointerId === undefined || pointerId === this.#pointer);
 	}
 
 	/** Whether any cell holds a drag. */
@@ -71,9 +74,10 @@ export class IntervalDrag1D {
 	 * rectangle or on the plot (null). False when declined: another cell's drag
 	 * is under way.
 	 */
-	press(owner: object, coord: number, handle: BrushHandle | null): boolean {
+	press(owner: object, pointerId: number, coord: number, handle: BrushHandle | null): boolean {
 		if (this.#owner !== null || this.brush.phase !== 'idle') return false;
 		this.#owner = owner;
+		this.#pointer = pointerId;
 		this.#anchor = coord;
 		this.#hasDragged = false;
 		if (handle === 'move') {
@@ -85,9 +89,9 @@ export class IntervalDrag1D {
 		return true;
 	}
 
-	/** A move of the owner's pointer to `coord`, through its cell's scale. */
-	move(owner: object, coord: number, scale: DragScale): boolean {
-		if (owner !== this.#owner) return false;
+	/** A move of the owner's pointer to `coord`, through its cell's scale; another pointer's is not the drag. */
+	move(owner: object, pointerId: number, coord: number, scale: DragScale): boolean {
+		if (!this.owns(owner, pointerId)) return false;
 		const brush = this.brush;
 		if (!this.#hasDragged && isDragging(this.#anchor, coord)) {
 			this.#hasDragged = true;
@@ -118,9 +122,9 @@ export class IntervalDrag1D {
 		return true;
 	}
 
-	/** The owner's release. A press that never moved is a click: it clears the brush. */
-	release(owner: object): boolean {
-		if (owner !== this.#owner) return false;
+	/** The owner's pointer's release. A press that never moved is a click: it clears the brush. */
+	release(owner: object, pointerId: number): boolean {
+		if (!this.owns(owner, pointerId)) return false;
 		this.#owner = null;
 		const { brush } = this;
 		if (!this.#hasDragged && brush.active && (brush.phase === 'idle' || brush.phase === 'moving')) {
@@ -207,6 +211,8 @@ export class IntervalDrag2D {
 	readonly brush = new BrushState2D();
 	#sink: DragSink<Range2D>;
 	#owner: object | null = null;
+	/** The pointer that pressed (its pointerId), while a cell owns the drag. */
+	#pointer = -1;
 	#anchorX = 0;
 	#anchorY = 0;
 	#hasDragged = false;
@@ -220,18 +226,25 @@ export class IntervalDrag2D {
 		this.#sink = sink;
 	}
 
-	owns(owner: object): boolean {
-		return this.#owner === owner;
+	owns(owner: object, pointerId?: number): boolean {
+		return this.#owner === owner && (pointerId === undefined || pointerId === this.#pointer);
 	}
 
 	get held(): boolean {
 		return this.#owner !== null;
 	}
 
-	press(owner: object, x: number, y: number, handle: BrushHandle | null): boolean {
+	press(
+		owner: object,
+		pointerId: number,
+		x: number,
+		y: number,
+		handle: BrushHandle | null
+	): boolean {
 		const { brush } = this;
 		if (this.#owner !== null || brush.phase !== 'idle') return false;
 		this.#owner = owner;
+		this.#pointer = pointerId;
 		this.#anchorX = x;
 		this.#anchorY = y;
 		this.#hasDragged = false;
@@ -252,8 +265,15 @@ export class IntervalDrag2D {
 		return true;
 	}
 
-	move(owner: object, x: number, y: number, xScale: DragScale, yScale: DragScale): boolean {
-		if (owner !== this.#owner) return false;
+	move(
+		owner: object,
+		pointerId: number,
+		x: number,
+		y: number,
+		xScale: DragScale,
+		yScale: DragScale
+	): boolean {
+		if (!this.owns(owner, pointerId)) return false;
 		const { brush } = this;
 		if (!this.#hasDragged && isDragging(this.#anchorX, x, this.#anchorY, y)) {
 			this.#hasDragged = true;
@@ -304,8 +324,8 @@ export class IntervalDrag2D {
 		return true;
 	}
 
-	release(owner: object): boolean {
-		if (owner !== this.#owner) return false;
+	release(owner: object, pointerId: number): boolean {
+		if (!this.owns(owner, pointerId)) return false;
 		this.#owner = null;
 		const { brush } = this;
 		if (!this.#hasDragged && brush.active && (brush.phase === 'idle' || brush.phase === 'moving')) {

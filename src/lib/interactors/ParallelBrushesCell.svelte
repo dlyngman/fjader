@@ -159,7 +159,7 @@
 		// pointer move over the axis first.
 		if (hit) hoverAxis(col);
 
-		if (!axis.drag.press(chart, innerPoint.y, hit?.handle ?? null)) return false;
+		if (!axis.drag.press(chart, pointerId, innerPoint.y, hit?.handle ?? null)) return false;
 		try {
 			target.setPointerCapture(pointerId);
 		} catch {
@@ -182,6 +182,8 @@
 		// The axis can have been removed mid-drag (its drag went with it), or its
 		// scale gone before its source: end the drag rather than strand it.
 		const axis = axes.get(activeAxis);
+		// Another pointer's move (a second finger or pen) is not this drag's.
+		if (axis && !axis.drag.owns(chart, event.pointerId)) return false;
 		const s = getAxisScale(activeAxis);
 		if (!axis || !s) {
 			axis?.drag.abandon(chart);
@@ -190,16 +192,18 @@
 		}
 		point.x = event.offsetX;
 		point.y = event.offsetY;
-		return axis.drag.move(chart, chart.toInnerCoordinates(point).y, s);
+		return axis.drag.move(chart, event.pointerId, chart.toInnerCoordinates(point).y, s);
 	}
 
 	function handlePointerUp(event: PointerEvent) {
 		if (activeAxis == null) return false;
 		const axis = axes.get(activeAxis);
+		// Another pointer's release (a second finger or pen) does not end this drag.
+		if (axis && !axis.drag.owns(chart, event.pointerId)) return false;
 		activeAxis = null;
 		(event.target as Element).releasePointerCapture(event.pointerId);
 		// A press that never moved is a click, which clears the axis's brush.
-		return axis ? axis.drag.release(chart) : true;
+		return axis ? axis.drag.release(chart, event.pointerId) : true;
 	}
 
 	/** The chart re-routes the press, or it lost capture: end the drag as it stands. */
