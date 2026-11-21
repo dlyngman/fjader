@@ -6,8 +6,6 @@
 	 *   ?paintlog=1  puts a tall facet grid (12 cells, most below the fold) first,
 	 *              with a paint counter per cell: does a canvas scrolled out of
 	 *              view still get paint events when its strings change?
-	 *   ?misuse=1  adds case 6: an overlay placed where it can't draw, for the
-	 *              console warning (open DevTools first)
 	 */
 	import { count, sum, loadParquet } from '@uwdata/mosaic-sql';
 	import { initFjader } from '$lib';
@@ -32,7 +30,6 @@
 	import { Grid } from '$lib/components/guides';
 
 	const { queryEngine } = initFjader();
-	const misuse = page.url.searchParams.get('misuse') === '1';
 	const paintlog = page.url.searchParams.get('paintlog') === '1';
 
 	// --- ?paintlog=1: paint events per facet cell ---
@@ -442,36 +439,66 @@
 				</div>
 			</div>
 
-			{#if misuse}
-				<div class="chart-panel">
-					<h3>6. Misuse (?misuse=1)</h3>
-					<p class="desc">
-						A Legend as a child: a warning to keep it in the legend snippet (everything else here is
-						a child now; the legend follows).
-					</p>
+			<div class="chart-panel wide">
+				<h3>6. Legends as children</h3>
+				<p class="desc">
+					A Legend among the children is the chart's: rendered once, above the plot or to its right
+					(position), however the chart is faceted. Left: a facet grid with its legend at the right
+					(vertical by default). Right: two legends at the top, in the order they are placed; the
+					second sets orientation="vertical", which wins over the default from its position. All
+					three legends and both charts share one selection: click an island in any legend, and the
+					others show it and the marks filter or dim.
+				</p>
+				<div class="legend-row">
+					<div class="chart-wrapper">
+						<ChartContainer xLabel="bill_length" yLabel="bill_depth" fx="species">
+							<Frame />
+							<AxisLeft />
+							<AxisBottom />
+							<DotsMark
+								table="penguins"
+								x="bill_length"
+								y="bill_depth"
+								fill="island"
+								selection="legendcase"
+							/>
+							<Legend color="island" position="right" selection="legendcase" />
+						</ChartContainer>
+					</div>
 					<div class="chart-wrapper">
 						<ChartContainer xLabel="island" yLabel="count">
 							<Frame />
 							<AxisLeft />
 							<AxisBottom />
-							<Legend color="island" />
-							<BarMarkY table="penguins" x="island" y={count()} fill="island" />
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										<Grid axis="y" />
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
+							<BarMarkY
+								table="penguins"
+								x="island"
+								y={count()}
+								fill="island"
+								selection="legendcase"
+							/>
+							<Legend color="island" selection="legendcase" />
+							<Legend
+								color="island"
+								selection="legendcase"
+								orientation="vertical"
+								title="island (vertical)"
+							/>
 						</ChartContainer>
 					</div>
 				</div>
-			{/if}
+			</div>
 		</div>
 	</div>
 {/if}
 
 <style>
+	.legend-row {
+		display: grid;
+		grid-template-columns: 2fr 1fr;
+		gap: 16px;
+	}
+
 	.container {
 		padding: 20px;
 	}

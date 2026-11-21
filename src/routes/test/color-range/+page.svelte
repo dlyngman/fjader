@@ -77,10 +77,8 @@
 			<div class="chart-section">
 				<h2>{chart.title}</h2>
 				<div class="chart-wrapper">
-					<ChartContainer xLabel="Team" yLabel="Games" legendPosition="top">
-						{#snippet legend()}
-							<Legend color={chart.field} />
-						{/snippet}
+					<ChartContainer xLabel="Team" yLabel="Games">
+						<Legend color={chart.field} />
 						{#snippet background()}
 							<Frame />
 							<AxisLeft />

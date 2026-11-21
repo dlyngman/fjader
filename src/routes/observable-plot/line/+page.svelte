@@ -80,10 +80,8 @@
 
 		<div class="charts">
 			<div class="chart-wrapper">
-				<ChartContainer legendPosition="top">
-					{#snippet legend()}
-						<Legend color="industry" />
-					{/snippet}
+				<ChartContainer>
+					<Legend color="industry" />
 					{#snippet background()}
 						<Frame />
 						<AxisLeft />

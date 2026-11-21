@@ -1,8 +1,7 @@
 <script lang="ts">
-	import { declareInChart, warnIfInChildren } from '$lib/components/charts/declarations.svelte';
+	import { declareInChart } from '$lib/components/charts/declarations.svelte';
 
-	/** Test fixture: a component that declares a frame and is an overlay too. */
+	/** Test fixture: a component that declares a frame. */
 	let { id }: { id: string } = $props();
 	declareInChart('frame', { id });
-	warnIfInChildren('ScopeProbe', 'foreground');
 </script>

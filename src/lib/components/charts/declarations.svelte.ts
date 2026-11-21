@@ -54,11 +54,25 @@ export interface OverlaySpec {
 	readonly zIndex: number;
 }
 
+/** Where a chart places a legend: above the plot, or to its right. */
+export type LegendPosition = 'top' | 'right';
+
+/**
+ * A legend (`declareLegend`): HTML the chart renders once, outside its plot,
+ * at `position`, with the chart's context. Several at one position render in
+ * registration order.
+ */
+export interface LegendDeclaration {
+	readonly snippet: Snippet;
+	readonly position: LegendPosition;
+}
+
 interface Specs {
 	axis: AxisSpec;
 	parallel: ParallelAxesSpec;
 	frame: FrameSpec;
 	overlay: OverlaySpec;
+	legend: LegendDeclaration;
 }
 
 export type DeclarationKind = keyof Specs;
@@ -126,12 +140,6 @@ export interface ChartChildren {
 
 export interface DeclarationScopeContext {
 	readonly cellId: string | null;
-	/**
-	 * Placed directly in a chart (`ChartContainer`'s children), not in one of
-	 * its snippets. Read by the component that can't be placed there yet
-	 * (`warnIfInChildren`): the legend.
-	 */
-	readonly inChildren: boolean;
 }
 
 export class DeclarationRegistry {
@@ -147,6 +155,19 @@ export class DeclarationRegistry {
 	/** What one cell draws: the declarations for every cell, and its own. */
 	forCell(cellId: string): CellDeclarations {
 		return new CellDeclarations(this, cellId);
+	}
+
+	/**
+	 * The chart's legends at `position`, in registration order. A legend is the
+	 * chart's, not a cell's: the chart renders each one once. Only a chart's
+	 * child declares one (Legend); in a per-cell snippet it renders in place.
+	 */
+	legends(position: LegendPosition): LegendDeclaration[] {
+		const out: LegendDeclaration[] = [];
+		for (const d of this.declarations) {
+			if (d.kind === 'legend' && d.spec.position === position) out.push(d.spec);
+		}
+		return out;
 	}
 }
 
@@ -201,23 +222,6 @@ export function orderOverlays(overlays: readonly OverlaySpec[]): OverlaySpec[] {
 }
 
 /**
- * For a component that still renders its own HTML where it is placed (the
- * legend; the overlays, brushes and toggles are declarations now): warn when
- * it is a direct child of a chart. Children render
- * inside the chart's canvas layer, where such a component can't draw or take
- * pointer events; it belongs in its snippet until it is a declaration too.
- * Call during component initialisation.
- */
-export function warnIfInChildren(component: string, snippet: string): void {
-	const scope = getContext<DeclarationScopeContext | undefined>(DECLARATION_SCOPE);
-	if (!scope?.inChildren) return;
-	console.warn(
-		`fjader: <${component}> can't be a direct child of <ChartContainer> yet; ` +
-			`place it in the chart's \`${snippet}\` snippet.`
-	);
-}
-
-/**
  * Declare an SVG overlay in the chart this component is placed in: `snippet`
  * renders in every cell's foreground SVG (or the cell its scope names), in
  * `slot`, with the cell's chart context. `options` may hold getters (it is read
@@ -236,6 +240,23 @@ export function declareOverlay(
 		},
 		get zIndex() {
 			return options.zIndex ?? 0;
+		}
+	});
+}
+
+/**
+ * Declare a legend in the chart this component is placed in: the chart renders
+ * `snippet` once, at `options.position` (read on every use, so it may be a
+ * getter over a prop). Call during component initialisation.
+ */
+export function declareLegend(
+	snippet: Snippet,
+	options: { readonly position: LegendPosition }
+): void {
+	declareInChart('legend', {
+		snippet,
+		get position() {
+			return options.position;
 		}
 	});
 }

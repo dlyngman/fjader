@@ -230,10 +230,8 @@
 					Shift-click for multi-select, click empty space to clear.
 				</p>
 				<div class="chart-wrapper">
-					<ChartContainer xLabel="Category" yLabel="Revenue" legendPosition="top">
-						{#snippet legend()}
-							<Legend color="region" selection="brush" />
-						{/snippet}
+					<ChartContainer xLabel="Category" yLabel="Revenue">
+						<Legend color="region" selection="brush" />
 						{#snippet background()}
 							<Frame />
 							<AxisLeft />
@@ -275,10 +273,8 @@
 					toggles its region, so the other regions' bars leave the chart.
 				</p>
 				<div class="chart-wrapper">
-					<ChartContainer xLabel="Category" yLabel="Revenue" legendPosition="top">
-						{#snippet legend()}
-							<Legend color="region" selection="brush" />
-						{/snippet}
+					<ChartContainer xLabel="Category" yLabel="Revenue">
+						<Legend color="region" selection="brush" />
 						{#snippet background()}
 							<Frame />
 							<AxisLeft />
@@ -319,10 +315,8 @@
 					region, so its stack has the same colours as the bars beside it.
 				</p>
 				<div class="chart-wrapper">
-					<ChartContainer xLabel="Category" yLabel="Revenue" legendPosition="top">
-						{#snippet legend()}
-							<Legend color="region" selection="brush" />
-						{/snippet}
+					<ChartContainer xLabel="Category" yLabel="Revenue">
+						<Legend color="region" selection="brush" />
 						{#snippet background()}
 							<Frame />
 							<AxisLeft />
@@ -361,10 +355,8 @@
 					the other bars.
 				</p>
 				<div class="chart-wrapper">
-					<ChartContainer xLabel="Revenue" yLabel="Category" legendPosition="top">
-						{#snippet legend()}
-							<Legend color="region" selection="brush" />
-						{/snippet}
+					<ChartContainer xLabel="Revenue" yLabel="Category">
+						<Legend color="region" selection="brush" />
 						{#snippet background()}
 							<Frame />
 							<AxisLeft />
@@ -403,10 +395,8 @@
 					it and entering ones come out of it.
 				</p>
 				<div class="chart-wrapper">
-					<ChartContainer xLabel="Revenue" yLabel="Category" legendPosition="top">
-						{#snippet legend()}
-							<Legend color="region" selection="brush" />
-						{/snippet}
+					<ChartContainer xLabel="Revenue" yLabel="Category">
+						<Legend color="region" selection="brush" />
 						{#snippet background()}
 							<Frame />
 							<AxisLeft />
@@ -447,10 +437,8 @@
 					dims the rest; its tooltip reads "(null)".
 				</p>
 				<div class="chart-wrapper">
-					<ChartContainer xLabel="Category (with NULL)" yLabel="Revenue" legendPosition="top">
-						{#snippet legend()}
-							<Legend color="category" selection="nulls" />
-						{/snippet}
+					<ChartContainer xLabel="Category (with NULL)" yLabel="Revenue">
+						<Legend color="category" selection="nulls" />
 						{#snippet background()}
 							<Frame />
 							<AxisLeft />
@@ -489,10 +477,8 @@
 					through Music (320), and no "(null)" in the axis or the legend.
 				</p>
 				<div class="chart-wrapper">
-					<ChartContainer xLabel="Category (NULL dropped)" yLabel="Revenue" legendPosition="top">
-						{#snippet legend()}
-							<Legend color="category" selection="nulls-drop" />
-						{/snippet}
+					<ChartContainer xLabel="Category (NULL dropped)" yLabel="Revenue">
+						<Legend color="category" selection="nulls-drop" />
 						{#snippet background()}
 							<Frame />
 							<AxisLeft />

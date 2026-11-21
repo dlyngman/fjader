@@ -399,8 +399,8 @@
 
 			<div class="panel" data-chart="carrier">
 				<h3>Carrier (Toggle and legend)</h3>
-				<ChartContainer xLabel="carrier" yLabel="count" legendPosition="top">
-					{#snippet legend()}<Legend color="carrier" selection="brush" />{/snippet}
+				<ChartContainer xLabel="carrier" yLabel="count">
+					<Legend color="carrier" selection="brush" />
 					{#snippet background()}<Frame /><AxisLeft /><AxisBottom />{/snippet}
 					{#snippet canvas()}
 						<WebGPUCanvas>

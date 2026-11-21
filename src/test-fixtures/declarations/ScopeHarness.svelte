@@ -18,4 +18,4 @@
 
 <ScopeProbe id="bare" />
 <DeclarationScope cellId="cell-a"><ScopeProbe id="in-cell-a" /></DeclarationScope>
-<DeclarationScope cellId={null} inChildren><ScopeProbe id="in-children" /></DeclarationScope>
+<DeclarationScope cellId={null}><ScopeProbe id="in-children" /></DeclarationScope>

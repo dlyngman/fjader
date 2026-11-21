@@ -70,12 +70,10 @@
 			<h2>{group}</h2>
 			<div class="grid">
 				<div class="panel">
-					<ChartContainer xLabel="carrier" yLabel="count" legendPosition="top">
-						{#snippet legend()}
-							{#if group === 'groupA'}
-								<Legend color="carrier" selection={group} />
-							{/if}
-						{/snippet}
+					<ChartContainer xLabel="carrier" yLabel="count">
+						{#if group === 'groupA'}
+							<Legend color="carrier" selection={group} />
+						{/if}
 						{#snippet background()}
 							<Frame />
 							<AxisLeft />
