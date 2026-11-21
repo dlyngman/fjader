@@ -8,6 +8,7 @@ import BrushHarness from './BrushHarness.svelte';
 import LegendHarness from './LegendHarness.svelte';
 import InCellHarness from './InCellHarness.svelte';
 import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
+import { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 import type { ChartContext } from '$lib/types';
 import {
 	DeclarationRegistry,
@@ -133,6 +134,31 @@ describe('Brushes split by responsibility', () => {
 
 			activators[2][0]();
 			expect(opts.activeDims()[0].pixelExtent).toBe(300);
+		}
+	);
+
+	it.each(['x', 'y'] as const)(
+		'Interval%s naming no selection writes the default group, which unnamed marks read',
+		(kind) => {
+			const groups = new FilterGroupRegistry();
+			const defaultGroup = groups.get();
+			const register = vi.spyOn(defaultGroup, 'register');
+			render(BrushHarness, {
+				props: {
+					registry: new DeclarationRegistry(),
+					groups,
+					cells: [],
+					kind,
+					xScaleState: new LinearScaleState('x'),
+					yScaleState: new LinearScaleState('y')
+				}
+			});
+
+			expect(register).toHaveBeenCalledTimes(1);
+			expect(register.mock.calls[0][0]).toBe(`interval-${kind}-chart`);
+			// The brush made no group of its own: 'default' is the only one.
+			expect(groups.has('brush')).toBe(false);
+			expect(groups.get('default')).toBe(defaultGroup);
 		}
 	);
 });

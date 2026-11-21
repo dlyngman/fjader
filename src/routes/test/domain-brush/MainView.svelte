@@ -189,7 +189,7 @@
 		<ChartContainer xLabel="x" yLabel="y" margin={{ top: 10, right: 50, bottom: 25, left: 75 }}>
 			<LineMark table="timeseries" x="x" y="y" strokeWidth={1} />
 
-			<IntervalX />
+			<IntervalX selection="overview" />
 		</ChartContainer>
 	</div>
 {/snippet}

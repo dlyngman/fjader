@@ -4,6 +4,8 @@
 	import Interval2D from '$lib/interactors/Interval2D.svelte';
 	import ParallelBrushes from '$lib/interactors/ParallelBrushes.svelte';
 	import DerivedIntervalX from '$lib/interactors/DerivedIntervalX.svelte';
+	import IntervalX from '$lib/interactors/IntervalX.svelte';
+	import IntervalY from '$lib/interactors/IntervalY.svelte';
 	import FakeCell from './FakeCell.svelte';
 	import {
 		DECLARATION_CHART,
@@ -31,7 +33,8 @@
 		registry: DeclarationRegistry;
 		groups: unknown;
 		cells: ChartContext[];
-		kind: '1d' | '2d' | 'parallel' | 'derived';
+		/** `x`/`y`: an IntervalX/IntervalY that names no selection. */
+		kind: '1d' | '2d' | 'parallel' | 'derived' | 'x' | 'y';
 		xScaleState: ScaleStateInstance;
 		yScaleState: ScaleStateInstance;
 		parallelScales?: DeclarationChart['parallelScales'];
@@ -62,6 +65,10 @@
 	<Interval1D selection="brush" />
 {:else if kind === '2d'}
 	<Interval2D selection="brush" />
+{:else if kind === 'x'}
+	<IntervalX />
+{:else if kind === 'y'}
+	<IntervalY />
 {:else if kind === 'parallel'}
 	<ParallelBrushes selection="brush" />
 {:else}
