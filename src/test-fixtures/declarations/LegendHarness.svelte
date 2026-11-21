@@ -7,7 +7,7 @@
 	} from '$lib/components/charts/declarations.svelte';
 
 	/**
-	 * Test fixture (declaration-scope.test.ts), outside src/lib so it is not
+	 * Test fixture (declarations.harness.test.ts), outside src/lib so it is not
 	 * packaged: Legends in a chart (a registry in context) or outside one.
 	 */
 	let {
