@@ -22,9 +22,9 @@ method serves a person at the keyboard and a coding agent that can only read fil
 
 - **Production builds**, not the dev server. The dev server's HMR, unminified code and Svelte's
   dev-mode checks change timings.
-- **Chrome**, recent enough for the features the page uses (the GPU text pages need
-  HTML-in-Canvas, Chrome 157+). Note the machine and the display's refresh rate with the
-  results: frame budgets depend on it (8.33 ms at 120 Hz).
+- **Chrome 157 or later**, which every page needs since 0.3.0 (all chart text is drawn through
+  HTML-in-Canvas). Note the machine and the display's refresh rate with the results: frame
+  budgets depend on it (8.33 ms at 120 Hz).
 - **One run per page load.** Reload between runs; the pages with **Run session** allow one run
   per load.
 - **Hands off the mouse while a session runs.** Scripted pointer events go through the charts'
@@ -43,11 +43,18 @@ a scratch worktree:
 # main, in a worktree outside the repo
 git worktree add ../fjader-main main
 cd ../fjader-main && ln -s ../fjader/node_modules node_modules
+# the data is gitignored, so a worktree has none: link it in before building (the build copies
+# static/ into its output; linked later, rebuild and restart the preview)
+for f in ../fjader/static/data/*; do [ -e "static/data/$(basename "$f")" ] || ln -s "../../$f" static/data/; done
 npm run build && npx vite preview --port 4180 --strictPort
 
 # the branch, in the repo
 npm run build && npx vite preview --port 4173 --strictPort
 ```
+
+Before handing the pages over, check that both previews serve the data
+(`curl -s -o /dev/null -w '%{http_code}' http://localhost:4180/data/flights-200k.parquet` gives
+200): a missing file fails the page with "No files found that match the pattern".
 
 Run the same page and session on each, alternating (A, B, A, B, A, B) rather than all of one
 first, so drift (thermal, background work) spreads over both. Remove the worktree afterwards
