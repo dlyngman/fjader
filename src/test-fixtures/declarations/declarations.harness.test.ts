@@ -1,13 +1,18 @@
+// Beside its fixtures, not in src/lib: svelte-package processes everything in src/lib, and a test
+// there importing these fixtures made it write their type declarations into this folder.
 import { describe, it, expect, vi } from 'vitest';
 import { ClauseRelay } from '$lib/interactors/relay-clauses';
 import { render } from 'svelte/server';
-import ToggleHarness from '../../../test-fixtures/declarations/ToggleHarness.svelte';
-import BrushHarness from '../../../test-fixtures/declarations/BrushHarness.svelte';
-import LegendHarness from '../../../test-fixtures/declarations/LegendHarness.svelte';
-import InCellHarness from '../../../test-fixtures/declarations/InCellHarness.svelte';
+import ToggleHarness from './ToggleHarness.svelte';
+import BrushHarness from './BrushHarness.svelte';
+import LegendHarness from './LegendHarness.svelte';
+import InCellHarness from './InCellHarness.svelte';
 import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 import type { ChartContext } from '$lib/types';
-import { DeclarationRegistry, type ChartDeclaration } from './declarations.svelte';
+import {
+	DeclarationRegistry,
+	type ChartDeclaration
+} from '$lib/components/charts/declarations.svelte';
 
 // Counts the relays a DerivedIntervalX makes (its effects don't run on the
 // server, so their writes can't be seen here; how many relays there are can).

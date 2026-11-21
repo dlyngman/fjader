@@ -14,7 +14,7 @@
 	import type { ChartContext, ScaleStateInstance } from '$lib/types';
 
 	/**
-	 * Test fixture (declaration-scope.test.ts), outside src/lib so it is not
+	 * Test fixture (declarations.harness.test.ts), outside src/lib so it is not
 	 * packaged: one brush (Interval1D, Interval2D, ParallelBrushes or
 	 * DerivedIntervalX) placed as a chart's child, and a cell per chart
 	 * context in `cells` rendering what it declared.
