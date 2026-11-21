@@ -28,7 +28,8 @@
 		xColumnName: null,
 		yColumnName: null,
 		xLabel: null,
-		yLabel: null
+		yLabel: null,
+		parallelScales: null
 	};
 	setContext(DECLARATION_REGISTRY, registry);
 	setContext(DECLARATION_CHART, chart);

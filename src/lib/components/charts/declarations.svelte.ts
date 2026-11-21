@@ -95,6 +95,8 @@ export interface DeclarationChart {
 	readonly yColumnName: string | null;
 	readonly xLabel: string | null | undefined;
 	readonly yLabel: string | null | undefined;
+	/** A parallel coordinates chart's axes (shared scales), or null. */
+	readonly parallelScales: ChartContext['parallelScales'];
 }
 
 /** The chart this declaration is placed in. Call during component initialisation. */
