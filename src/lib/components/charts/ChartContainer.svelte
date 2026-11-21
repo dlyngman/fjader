@@ -492,6 +492,8 @@
 		registerScaleType,
 		unregisterScaleType,
 
+		// Not queued, unlike registerScaleType: a facet pass-through mark that sets
+		// columns before the scales exist loses them (no page facets parallel coordinates).
 		setParallelColumns: (markId, columns) => scales?.setParallelColumns(markId, columns),
 		reorderParallelAxis: (from, to) => scales?.reorderParallelAxis(from, to),
 		get parallelReorderState() {
