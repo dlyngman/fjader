@@ -350,10 +350,11 @@
 				<p class="desc">
 					A Legend among the children is the chart's: rendered once, above the plot or to its right
 					(position), however the chart is faceted. Left: a facet grid with its legend at the right
-					(vertical by default). Right: two legends at the top, in the order they are placed; the
-					second sets orientation="vertical", which wins over the default from its position. All
-					three legends and both charts share one selection: click an island in any legend, and the
-					others show it and the marks filter or dim.
+					(vertical by default), naming no color: it takes the one field the chart colors by
+					(island). Right: two legends at the top, in the order they are placed; the second sets
+					orientation="vertical", which wins over the default from its position. All three legends
+					and both charts share one selection: click an island in any legend, and the others show it
+					and the marks filter or dim.
 				</p>
 				<div class="legend-row">
 					<div class="chart-wrapper">
@@ -368,7 +369,7 @@
 								fill="island"
 								selection="legendcase"
 							/>
-							<Legend color="island" position="right" selection="legendcase" />
+							<Legend position="right" selection="legendcase" />
 						</ChartContainer>
 					</div>
 					<div class="chart-wrapper">

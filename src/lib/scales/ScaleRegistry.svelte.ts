@@ -62,6 +62,14 @@ export class ScaleRegistry {
 	 * object owned by neither. A scale asks `chartsUsing` now.
 	 */
 	#chartsFor = new Map<AnyScaleState, string[]>();
+	/**
+	 * The charts whose marks color by each color scale: a fill or stroke
+	 * channel, recorded by `useAsColor`. Not `scaleUsage`, which also holds a
+	 * line's series scale, an ordinal color scale that groups without coloring.
+	 */
+	#colorCharts = new Map<ColorScaleState, Set<string>>();
+	/** Bumped when `#colorCharts` changes: what `colorScalesOf` tracks. */
+	#colorChartsVersion = $state(0);
 	#gpuCoordinator: GPUCoordinator | null = null;
 
 	// ============================================================
@@ -503,6 +511,43 @@ export class ScaleRegistry {
 		return out;
 	}
 
+	/**
+	 * Record that `chartId`'s marks color by `scale` (a fill or stroke channel),
+	 * which makes it a candidate for the chart's legend (`colorScalesOf`).
+	 * Idempotent; dropped with the chart's usage of the scale.
+	 */
+	useAsColor(scale: ColorScaleState, chartId: string): void {
+		if (!scale || !chartId) return;
+		untrack(() => {
+			let charts = this.#colorCharts.get(scale);
+			if (!charts) this.#colorCharts.set(scale, (charts = new Set()));
+			if (charts.has(chartId)) return;
+			charts.add(chartId);
+			this.#colorChartsVersion++;
+		});
+	}
+
+	/**
+	 * The color scales `chartId`'s marks color by, one per scale however many
+	 * channels share it. Reactive: re-read when a chart starts or stops coloring
+	 * by a scale, which happens at mount and unmount, never per frame.
+	 */
+	colorScalesOf(chartId: string): ColorScaleState[] {
+		void this.#colorChartsVersion;
+		const out: ColorScaleState[] = [];
+		for (const [scale, charts] of this.#colorCharts) if (charts.has(chartId)) out.push(scale);
+		return out;
+	}
+
+	/** Drop `chartId` from `scale`'s color use, or the scale's entry when it is destroyed. */
+	#dropColorUse(scale: AnyScaleState, chartId: string | null): void {
+		const charts = this.#colorCharts.get(scale as ColorScaleState);
+		if (!charts) return;
+		if (chartId === null) this.#colorCharts.delete(scale as ColorScaleState);
+		else if (!charts.delete(chartId)) return;
+		this.#colorChartsVersion++;
+	}
+
 	/** Re-derive one scale's redraw list. The only writer. */
 	#publishCharts(scale: AnyScaleState, chartIds: Set<string>): void {
 		this.#chartsFor.set(scale, Array.from(chartIds));
@@ -515,6 +560,7 @@ export class ScaleRegistry {
 			if (this.scaleUsage.has(scale)) {
 				const usage = this.scaleUsage.get(scale)!;
 				if (usage.delete(chartId)) {
+					this.#dropColorUse(scale, usage.size === 0 ? null : chartId);
 					if (usage.size === 0) {
 						// Scale destroyed — topology changes (SSBO layout shifts)
 						if (scale.destroy) scale.destroy();
@@ -540,6 +586,7 @@ export class ScaleRegistry {
 			for (const [scale, usageSet] of this.scaleUsage) {
 				if (usageSet.has(chartId)) {
 					usageSet.delete(chartId);
+					this.#dropColorUse(scale, usageSet.size === 0 ? null : chartId);
 
 					if (usageSet.size === 0) {
 						if (scale.destroy) scale.destroy();

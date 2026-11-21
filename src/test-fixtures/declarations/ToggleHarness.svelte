@@ -29,7 +29,8 @@
 		yColumnName: null,
 		xLabel: null,
 		yLabel: null,
-		parallelScales: null
+		parallelScales: null,
+		colorScales: []
 	};
 	setContext(DECLARATION_REGISTRY, registry);
 	setContext(DECLARATION_CHART, chart);

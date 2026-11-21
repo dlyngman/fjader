@@ -85,6 +85,8 @@ export class MarkColor {
 						},
 						this.#chartContext.chartId
 					) as ColorScaleState;
+					// What the chart's legend may infer its scale from.
+					this.#scaleRegistry.useAsColor(this.scaleState, this.#chartContext.chartId);
 				});
 			} else if (type === null && mode === 'field') {
 				// Schema not ready yet - trigger fetch but don't create scale

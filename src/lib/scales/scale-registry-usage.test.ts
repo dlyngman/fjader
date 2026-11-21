@@ -13,6 +13,7 @@
 import { describe, it, expect } from 'vitest';
 import { ScaleRegistry } from './ScaleRegistry.svelte';
 import type { BandScaleState } from './BandScaleState.svelte';
+import type { ColorScaleState } from './ColorScaleState.svelte';
 
 function registry() {
 	// No GPU coordinator: this exercises the refcount only, which is pure
@@ -116,5 +117,50 @@ describe('ScaleRegistry band padding', () => {
 		const config = scale.getConfig();
 		expect(config.paddingInner).toBe(1);
 		expect(config.paddingOuter).toBe(0.3);
+	});
+});
+
+describe('ScaleRegistry color use (what a Legend infers from)', () => {
+	function color(reg: ScaleRegistry, name: string, chartId: string) {
+		return reg.getOrCreateScale(name, 'color', { type: 'ordinal' }, chartId) as ColorScaleState;
+	}
+
+	it('lists the scales a chart colors by, once however many channels share one', () => {
+		const reg = registry();
+		const species = color(reg, 'species', 'chart-1');
+		// fill and stroke on the same field: one scale, recorded twice.
+		reg.useAsColor(species, 'chart-1');
+		reg.useAsColor(species, 'chart-1');
+		const island = color(reg, 'island', 'chart-2');
+		reg.useAsColor(island, 'chart-2');
+
+		expect(reg.colorScalesOf('chart-1')).toEqual([species]);
+		expect(reg.colorScalesOf('chart-2')).toEqual([island]);
+	});
+
+	it("leaves out a line's series scale, which groups without coloring", () => {
+		const reg = registry();
+		// MarkSeries obtains an ordinal color scale but never calls useAsColor.
+		color(reg, 'carrier', 'chart-1');
+		const species = color(reg, 'species', 'chart-1');
+		reg.useAsColor(species, 'chart-1');
+
+		expect(reg.colorScalesOf('chart-1')).toEqual([species]);
+	});
+
+	it("drops a chart's color use with its usage, and a destroyed scale's entirely", () => {
+		const reg = registry();
+		const species = color(reg, 'species', 'chart-1');
+		color(reg, 'species', 'chart-2');
+		reg.useAsColor(species, 'chart-1');
+		reg.useAsColor(species, 'chart-2');
+
+		reg.deregisterChart(species, 'chart-1');
+		expect(reg.colorScalesOf('chart-1')).toEqual([]);
+		expect(reg.colorScalesOf('chart-2')).toEqual([species]);
+
+		reg.removeChartUsage('chart-2');
+		expect(species.isDestroyed).toBe(true);
+		expect(reg.colorScalesOf('chart-2')).toEqual([]);
 	});
 });

@@ -55,7 +55,8 @@
 		yLabel: null,
 		get parallelScales() {
 			return parallelScales;
-		}
+		},
+		colorScales: []
 	};
 	setContext(DECLARATION_REGISTRY, registry);
 	setContext(DECLARATION_CHART, chart);

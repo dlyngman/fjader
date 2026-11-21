@@ -2,17 +2,21 @@
 	import { getContext } from 'svelte';
 	import OrdinalColorLegend from './OrdinalColorLegend.svelte';
 	import ContinuousColorLegend from './ContinuousColorLegend.svelte';
+	import { inferLegendScale } from './infer-legend-scale';
 	import type { ScaleRegistry } from '$lib/scales/ScaleRegistry.svelte';
 	import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 	import {
+		DECLARATION_CHART,
 		DECLARATION_REGISTRY,
 		declareLegend,
+		type DeclarationChart,
 		type DeclarationRegistry,
 		type LegendPosition
 	} from '$lib/components/charts/declarations.svelte';
 
 	/**
-	 * A color legend for the field `color`: swatches for a categorical scale
+	 * A color legend for the field `color` (in a chart, by default the one
+	 * field its marks color by): swatches for a categorical scale
 	 * (click to filter `selection`), a ramp for a continuous one.
 	 *
 	 * As a chart's child (`ChartContainer`'s children) it is a declaration: the
@@ -61,13 +65,31 @@
 		orientation ?? (position === 'right' ? 'vertical' : 'horizontal')
 	);
 
-	// Reactive: SvelteMap triggers re-run when scales are added/removed
-	const colorScaleState = $derived.by(() => {
-		if (!color || !scaleRegistry) return null;
-		return scaleRegistry.getScaleByField(color, 'color');
+	// In a chart, with no `color`: the one scale the chart's marks color by.
+	const chart = inChart ? getContext<DeclarationChart | undefined>(DECLARATION_CHART) : undefined;
+	let warned = false;
+	const inferredScale = $derived.by((): ColorScaleState | null => {
+		if (color || !chart) return null;
+		const { scale, ambiguous } = inferLegendScale(chart.colorScales);
+		if (ambiguous && !warned) {
+			warned = true;
+			console.warn(
+				`<Legend> names no color and its chart colors by several fields ` +
+					`(${ambiguous.join(', ')}): name one with color="…".`
+			);
+		}
+		return scale;
 	});
 
-	const effectiveTitle = $derived(title ?? color ?? '');
+	// Reactive: SvelteMap triggers re-run when scales are added/removed
+	const colorScaleState = $derived.by(() => {
+		if (!color) return inferredScale;
+		if (!scaleRegistry) return null;
+		return scaleRegistry.getScaleByField(color, 'color');
+	});
+	const field = $derived(color ?? inferredScale?.field ?? null);
+
+	const effectiveTitle = $derived(title ?? field ?? '');
 </script>
 
 {#if !inChart}
@@ -79,7 +101,7 @@
 		<OrdinalColorLegend
 			scaleState={colorScaleState as ColorScaleState}
 			selection={selectionName}
-			field={color}
+			{field}
 			{title}
 			{columns}
 			{swatchSize}
