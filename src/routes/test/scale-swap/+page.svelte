@@ -15,7 +15,6 @@
 		AxisLeft,
 		AxisBottom,
 		MarginLabel,
-		WebGPUCanvas,
 		DotsMark
 	} from '$lib/components';
 
@@ -43,19 +42,11 @@
 	{#if isLoaded}
 		<div class="chart">
 			<ChartContainer xLabel={xColumn} yLabel="bill_depth">
-				{#snippet background()}
-					<Frame />
-					<AxisLeft />
-					<AxisBottom />
-					<MarginLabel />
-				{/snippet}
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<DotsMark table="penguins" x={xColumn} y="bill_depth" fill="species" r={3} />
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Frame />
+				<AxisLeft />
+				<AxisBottom />
+				<MarginLabel />
+				<DotsMark table="penguins" x={xColumn} y="bill_depth" fill="species" r={3} />
 			</ChartContainer>
 		</div>
 	{/if}

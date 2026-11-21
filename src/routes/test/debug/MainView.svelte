@@ -1,5 +1,5 @@
 <script>
-	import { ChartContainer, Grid, Crosshair, WebGPUCanvas, LineMark } from '$lib/components';
+	import { ChartContainer, Grid, Crosshair, LineMark } from '$lib/components';
 	import { AreaMarkY } from '$lib/components/marks';
 	import { IntervalX } from '$lib/interactors';
 	import { sum, avg, min, max, sql, frameRows, preceding, currentRow } from '@uwdata/mosaic-sql';
@@ -30,76 +30,50 @@
 		<div class="chart-wrapper thin">
 			<h3>Chart</h3>
 			<ChartContainer xLabel="ts" yLabel="value weekly">
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							<LineMark
-								table="hourly_series"
-								x={bin('ts', { interval: 'hour' })}
-								y={weeklySumY1}
-								stroke="grp"
-								strokeWidth={1.5}
-							/>
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Grid />
+				<LineMark
+					table="hourly_series"
+					x={bin('ts', { interval: 'hour' })}
+					y={weeklySumY1}
+					stroke="grp"
+					strokeWidth={1.5}
+				/>
 
-				{#snippet foreground()}
-					<Crosshair />
-				{/snippet}
+				<Crosshair />
 
-				{#snippet interactors()}
-					<IntervalX selection="brush" />
-				{/snippet}
+				<IntervalX selection="brush" />
 			</ChartContainer>
 		</div>
 		<div class="chart-wrapper thin">
 			<h3>Chart</h3>
 			<ChartContainer xLabel="ts" yLabel="value weekly" useXSelection>
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							<LineMark
-								table="hourly_series"
-								x={bin('ts', { interval: 'hour' })}
-								y={weeklySumY2}
-								stroke="grp"
-								strokeWidth={1.5}
-								selection="brush"
-							/>
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Grid />
+				<LineMark
+					table="hourly_series"
+					x={bin('ts', { interval: 'hour' })}
+					y={weeklySumY2}
+					stroke="grp"
+					strokeWidth={1.5}
+					selection="brush"
+				/>
 
-				{#snippet foreground()}
-					<Crosshair />
-				{/snippet}
+				<Crosshair />
 			</ChartContainer>
 		</div>
 		<div class="chart-wrapper">
 			<h3>Chart</h3>
 			<ChartContainer xLabel="ts" yLabel="value" useXSelection>
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							<LineMark
-								table="hourly_series"
-								x={bin('ts', { interval: 'hour' })}
-								y="value"
-								stroke="grp"
-								strokeWidth={1.5}
-								selection="brush"
-							/>
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Grid />
+				<LineMark
+					table="hourly_series"
+					x={bin('ts', { interval: 'hour' })}
+					y="value"
+					stroke="grp"
+					strokeWidth={1.5}
+					selection="brush"
+				/>
 
-				{#snippet foreground()}
-					<Crosshair />
-				{/snippet}
+				<Crosshair />
 			</ChartContainer>
 		</div>
 		<!-- TODO: fix ViewManager — __facet__grp column not found when creating view
@@ -107,36 +81,28 @@
 		<!-- <div class="chart-wrapper">
 			<h3>Hourly Distribution</h3>
 			<ChartContainer xLabel="hour" yLabel="value" fx="grp">
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							<AreaMarkY
-								table="hourly_series"
-								x={hourOfDay}
-								y1={minValue}
-								y2={maxValue}
-								fill="grp"
-								fillOpacity={0.3}
-								selection="brush"
-								curve="monotone"
-							/>
-							<LineMark
-								table="hourly_series"
-								x={hourOfDay}
-								y={avgValue}
-								stroke="grp"
-								strokeWidth={2}
-								selection="brush"
-								curve="monotone"
-							/>
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Grid />
+				<AreaMarkY
+					table="hourly_series"
+					x={hourOfDay}
+					y1={minValue}
+					y2={maxValue}
+					fill="grp"
+					fillOpacity={0.3}
+					selection="brush"
+					curve="monotone"
+				/>
+				<LineMark
+					table="hourly_series"
+					x={hourOfDay}
+					y={avgValue}
+					stroke="grp"
+					strokeWidth={2}
+					selection="brush"
+					curve="monotone"
+				/>
 
-				{#snippet foreground()}
-					<Crosshair />
-				{/snippet}
+				<Crosshair />
 			</ChartContainer>
 		</div> -->
 	</div>

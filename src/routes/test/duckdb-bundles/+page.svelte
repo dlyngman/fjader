@@ -24,7 +24,6 @@
 		AxisLeft,
 		AxisBottom,
 		MarginLabel,
-		WebGPUCanvas,
 		BarMarkY
 	} from '$lib/components';
 
@@ -90,19 +89,11 @@
 	{#if isLoaded}
 		<div class="chart-wrapper">
 			<ChartContainer xLabel="Hours late" yLabel="Flights">
-				{#snippet background()}
-					<Frame />
-					<AxisLeft />
-					<AxisBottom />
-					<MarginLabel />
-				{/snippet}
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<BarMarkY table="delay_hours" x="hours_late" y={count()} />
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Frame />
+				<AxisLeft />
+				<AxisBottom />
+				<MarginLabel />
+				<BarMarkY table="delay_hours" x="hours_late" y={count()} />
 			</ChartContainer>
 		</div>
 	{/if}

@@ -9,7 +9,6 @@
 		AxisBottom,
 		MarginLabel,
 		Crosshair,
-		WebGPUCanvas,
 		RectYMark,
 		RectXMark,
 		RectMark,
@@ -49,25 +48,15 @@
 		<div class="charts">
 			<div class="chart-wrapper">
 				<ChartContainer yLabel="Count" xLabel="Weight (kg)">
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<RectYMark table="olympians" x={bin('weight')} y={msql.count()} />
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<RectYMark table="olympians" x={bin('weight')} y={msql.count()} />
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -80,25 +69,15 @@
 			<div class="chart-wrapper">
 				<ChartContainer yLabel="Count (stacked)" xLabel="Weight (kg, stacked)">
 					<Legend color="sex" />
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<RectYMark table="olympians" x={bin('weight')} y={msql.count()} fill="sex" />
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<RectYMark table="olympians" x={bin('weight')} y={msql.count()} fill="sex" />
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -110,25 +89,15 @@
 		<div class="charts">
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="Count (horizontal)" yLabel="Weight (kg, horizontal)">
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<RectXMark table="olympians" y={bin('weight')} x={msql.count()} />
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<RectXMark table="olympians" y={bin('weight')} x={msql.count()} />
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -140,32 +109,22 @@
 		<div class="charts">
 			<div class="chart-wrapper">
 				<ChartContainer yLabel="Price" xLabel="Carat">
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<RectMark
-									table="diamonds"
-									x={bin('carat', { steps: 100 })}
-									y={bin('price', { steps: 100 })}
-									fill={{ field: msql.count(), type: 'symlog' }}
-									scheme="turbo"
-									inset={0.5}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<RectMark
+						table="diamonds"
+						x={bin('carat', { steps: 100 })}
+						y={bin('price', { steps: 100 })}
+						fill={{ field: msql.count(), type: 'symlog' }}
+						scheme="turbo"
+						inset={0.5}
+					/>
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -178,31 +137,21 @@
 			<div class="chart-wrapper">
 				<ChartContainer yLabel="Count (overlapping)" xLabel="Weight (kg, overlapping)">
 					<Legend color="sex" />
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<RectYMark
-									table="olympians"
-									x={bin('weight')}
-									y2={msql.count()}
-									fill="sex"
-									opacity={0.5}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<RectYMark
+						table="olympians"
+						x={bin('weight')}
+						y2={msql.count()}
+						fill="sex"
+						opacity={0.5}
+					/>
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>

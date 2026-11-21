@@ -9,7 +9,6 @@
 		AxisBottom,
 		MarginLabel,
 		Crosshair,
-		WebGPUCanvas,
 		DotsMark
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
@@ -44,37 +43,27 @@
 
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="Bill Length (mm)" yLabel="Bill Depth (mm)">
-					{#snippet background()}
-						<Frame />
-						<MarginLabel />
-						<AxisLeft />
-						<AxisBottom />
-					{/snippet}
+					<Frame />
+					<MarginLabel />
+					<AxisLeft />
+					<AxisBottom />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<!-- GPU Grid Lines (both axes) -->
-								<Grid />
+					<!-- GPU Grid Lines (both axes) -->
+					<Grid />
 
-								<!-- Data Points -->
-								<DotsMark
-									table="penguins"
-									x="bill_length"
-									y="bill_depth"
-									fill="species"
-									opacity={0.7}
-									r={4}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<!-- Data Points -->
+					<DotsMark
+						table="penguins"
+						x="bill_length"
+						y="bill_depth"
+						fill="species"
+						opacity={0.7}
+						r={4}
+					/>
 
-					{#snippet foreground()}
-						<!-- <AxisLeft /> -->
-						<!-- <AxisBottom /> -->
-						<Crosshair />
-					{/snippet}
+					<!-- <AxisLeft /> -->
+					<!-- <AxisBottom /> -->
+					<Crosshair />
 				</ChartContainer>
 			</div>
 

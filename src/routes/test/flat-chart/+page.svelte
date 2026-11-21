@@ -15,7 +15,6 @@
 		ChartContainer,
 		AxisLeft,
 		AxisBottom,
-		WebGPUCanvas,
 		BarMarkY,
 		Frame,
 		Crosshair,
@@ -161,19 +160,11 @@
 				<p class="desc">background + canvas snippets, as charts are written today.</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="island" yLabel="count">
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid axis="y" />
-									<BarMarkY table="penguins" x="island" y={count()} fill="island" />
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<Grid axis="y" />
+						<BarMarkY table="penguins" x="island" y={count()} fill="island" />
 					</ChartContainer>
 				</div>
 			</div>
@@ -225,9 +216,7 @@
 						<AxisLeft />
 						<AxisBottom />
 						<BarMarkY table="penguins" x="island" y={count()} fill="island" />
-						{#snippet foreground()}
-							<Crosshair />
-						{/snippet}
+						<Crosshair />
 					</ChartContainer>
 				</div>
 			</div>
@@ -243,13 +232,7 @@
 						<Frame />
 						<AxisLeft />
 						<AxisBottom />
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<BarMarkY table="penguins" x="island" y={count()} fill="island" />
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<BarMarkY table="penguins" x="island" y={count()} fill="island" />
 					</ChartContainer>
 				</div>
 			</div>
@@ -281,28 +264,13 @@
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="island" yLabel="count" fx="species">
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<BarMarkY table="penguins" x="island" y={count()} fill="island"
-										><Labels anchor="inside-end" /></BarMarkY
-									>
-									<TextMark
-										table="penguins"
-										x="island"
-										y={count()}
-										text="island"
-										dy={-14}
-										fontSize={9}
-									/>
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<BarMarkY table="penguins" x="island" y={count()} fill="island"
+							><Labels anchor="inside-end" /></BarMarkY
+						>
+						<TextMark table="penguins" x="island" y={count()} text="island" dy={-14} fontSize={9} />
 					</ChartContainer>
 				</div>
 			</div>

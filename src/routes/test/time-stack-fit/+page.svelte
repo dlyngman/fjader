@@ -59,7 +59,6 @@
 		AxisLeft,
 		AxisBottom,
 		MarginLabel,
-		WebGPUCanvas,
 		RectYMark,
 		RuleMarkY,
 		LineMark,
@@ -630,42 +629,27 @@
 
 		<div class="panel" bind:this={chartEl}>
 			<ChartContainer xLabel="ts" yLabel="events">
-				{#snippet background()}
-					<Frame />
-					<AxisLeft />
-					<AxisBottom />
-					<MarginLabel />
-				{/snippet}
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							<RectYMark
-								table="events"
-								x={bin('ts')}
-								y={count()}
-								fill="grp"
-								inset={0.5}
-								transforms={[stackY()]}
-								fitDomain={fit ? 'y' : false}
-							/>
-							{#if overlay === 'rule'}
-								<RuleMarkY table="rule_level" y="v" stroke="#c00" strokeWidth={2} />
-							{:else if overlay === 'line'}
-								<LineMark table="line_level" x="ts" y="v" stroke="#c00" strokeWidth={2} />
-							{:else if overlay === 'labels'}
-								<TextMark
-									table="events"
-									x={bin('ts')}
-									y={count()}
-									text={count()}
-									dy={-6}
-									fontSize={10}
-								/>
-							{/if}
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Frame />
+				<AxisLeft />
+				<AxisBottom />
+				<MarginLabel />
+				<Grid />
+				<RectYMark
+					table="events"
+					x={bin('ts')}
+					y={count()}
+					fill="grp"
+					inset={0.5}
+					transforms={[stackY()]}
+					fitDomain={fit ? 'y' : false}
+				/>
+				{#if overlay === 'rule'}
+					<RuleMarkY table="rule_level" y="v" stroke="#c00" strokeWidth={2} />
+				{:else if overlay === 'line'}
+					<LineMark table="line_level" x="ts" y="v" stroke="#c00" strokeWidth={2} />
+				{:else if overlay === 'labels'}
+					<TextMark table="events" x={bin('ts')} y={count()} text={count()} dy={-6} fontSize={10} />
+				{/if}
 			</ChartContainer>
 		</div>
 

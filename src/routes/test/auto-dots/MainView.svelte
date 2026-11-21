@@ -1,13 +1,6 @@
 <script>
 	import { getContext } from 'svelte';
-	import {
-		ChartContainer,
-		Grid,
-		Crosshair,
-		WebGPUCanvas,
-		LineMark,
-		AreaMarkY
-	} from '$lib/components';
+	import { ChartContainer, Grid, Crosshair, LineMark, AreaMarkY } from '$lib/components';
 
 	const configs = [
 		{
@@ -71,38 +64,30 @@
 			{#key selected[idx]}
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="x" yLabel="y" xZoomLimit={10000} yZoomLimit={10000}>
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									{#if config.mark === 'area'}
-										<AreaMarkY
-											table="dense_timeseries"
-											x="x"
-											y="y"
-											fill="series"
-											fillOpacity={config.fillOpacity ?? 0.4}
-											autoDots={config.autoDots}
-											dotRadius={config.dotRadius}
-										/>
-									{:else}
-										<LineMark
-											table="dense_timeseries"
-											x="x"
-											y="y"
-											stroke="series"
-											strokeWidth={config.strokeWidth ?? 1.5}
-											lod={config.lod}
-											dotRadius={config.dotRadius}
-										/>
-									{/if}
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<Grid />
+						{#if config.mark === 'area'}
+							<AreaMarkY
+								table="dense_timeseries"
+								x="x"
+								y="y"
+								fill="series"
+								fillOpacity={config.fillOpacity ?? 0.4}
+								autoDots={config.autoDots}
+								dotRadius={config.dotRadius}
+							/>
+						{:else}
+							<LineMark
+								table="dense_timeseries"
+								x="x"
+								y="y"
+								stroke="series"
+								strokeWidth={config.strokeWidth ?? 1.5}
+								lod={config.lod}
+								dotRadius={config.dotRadius}
+							/>
+						{/if}
 
-						{#snippet foreground()}
-							<Crosshair />
-						{/snippet}
+						<Crosshair />
 					</ChartContainer>
 				</div>
 			{/key}

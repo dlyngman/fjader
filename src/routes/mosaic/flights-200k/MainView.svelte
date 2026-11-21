@@ -9,7 +9,6 @@
 		AxisBottom,
 		MarginLabel,
 		Crosshair,
-		WebGPUCanvas,
 		RectYMark,
 		IntervalX
 	} from '$lib/components';
@@ -25,113 +24,77 @@
 	</label>
 	<div class="chart-wrapper">
 		<ChartContainer xLabel="delay" yLabel="Count">
-			{#snippet background()}
-				<!-- <Grid /> -->
-				<Frame />
-				<AxisLeft />
-				<AxisBottom />
-				<MarginLabel />
-			{/snippet}
+			<!-- <Grid /> -->
+			<Frame />
+			<AxisLeft />
+			<AxisBottom />
+			<MarginLabel />
 
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<Grid />
+			<Grid />
 
-						<RectYMark
-							table="flights"
-							x={bin('delay', { steps: 50 })}
-							y={count()}
-							inset={0.5}
-							fill="steelblue"
-							fitDomain={fitY}
-							selection="brush"
-						/>
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
+			<RectYMark
+				table="flights"
+				x={bin('delay', { steps: 50 })}
+				y={count()}
+				inset={0.5}
+				fill="steelblue"
+				fitDomain={fitY}
+				selection="brush"
+			/>
 
-			{#snippet foreground()}
-				<Crosshair />
-			{/snippet}
+			<Crosshair />
 
-			{#snippet interactors()}
-				<IntervalX selection="brush" />
-			{/snippet}
+			<IntervalX selection="brush" />
 		</ChartContainer>
 	</div>
 	<div class="chart-wrapper">
 		<ChartContainer xLabel="time" yLabel="Count per time">
-			{#snippet background()}
-				<!-- <Grid /> -->
-				<Frame />
-				<AxisLeft />
-				<AxisBottom />
-				<MarginLabel />
-			{/snippet}
+			<!-- <Grid /> -->
+			<Frame />
+			<AxisLeft />
+			<AxisBottom />
+			<MarginLabel />
 
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<Grid />
+			<Grid />
 
-						<RectYMark
-							table="flights"
-							x={bin('time', { steps: 50 })}
-							y={count()}
-							inset={0.5}
-							fill="steelblue"
-							fitDomain={fitY}
-							selection="brush"
-						/>
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
+			<RectYMark
+				table="flights"
+				x={bin('time', { steps: 50 })}
+				y={count()}
+				inset={0.5}
+				fill="steelblue"
+				fitDomain={fitY}
+				selection="brush"
+			/>
 
-			{#snippet foreground()}
-				<Crosshair />
-			{/snippet}
+			<Crosshair />
 
-			{#snippet interactors()}
-				<IntervalX selection="brush" />
-			{/snippet}
+			<IntervalX selection="brush" />
 		</ChartContainer>
 	</div>
 	<div class="chart-wrapper">
 		<ChartContainer xLabel="distance" yLabel="Count per distance">
-			{#snippet background()}
-				<!-- <Grid /> -->
-				<Frame />
-				<AxisLeft />
-				<AxisBottom />
-				<MarginLabel />
-			{/snippet}
+			<!-- <Grid /> -->
+			<Frame />
+			<AxisLeft />
+			<AxisBottom />
+			<MarginLabel />
 
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<Grid />
+			<Grid />
 
-						<RectYMark
-							table="flights"
-							x={bin('distance', { steps: 50 })}
-							y={count()}
-							inset={0.5}
-							fill="steelblue"
-							fitDomain={fitY}
-							selection="brush"
-						/>
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
+			<RectYMark
+				table="flights"
+				x={bin('distance', { steps: 50 })}
+				y={count()}
+				inset={0.5}
+				fill="steelblue"
+				fitDomain={fitY}
+				selection="brush"
+			/>
 
-			{#snippet foreground()}
-				<Crosshair />
-			{/snippet}
+			<Crosshair />
 
-			{#snippet interactors()}
-				<IntervalX selection="brush" />
-			{/snippet}
+			<IntervalX selection="brush" />
 		</ChartContainer>
 	</div>
 </div>

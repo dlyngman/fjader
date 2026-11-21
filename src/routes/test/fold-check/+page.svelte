@@ -26,7 +26,6 @@
 		Frame,
 		AxisLeft,
 		AxisBottom,
-		WebGPUCanvas,
 		BarMarkY,
 		DotsMark,
 		AreaMarkY,
@@ -124,36 +123,22 @@
 					</div>
 					<div class="panel">
 						<ChartContainer xLabel="cat" yLabel="v">
-							{#snippet background()}
-								<Frame />
-								<AxisLeft />
-								<AxisBottom />
-							{/snippet}
-							{#snippet canvas()}
-								<WebGPUCanvas>
-									{#snippet canvasComponents()}
-										<Grid />
-										<ScaleGrab onScale={(get) => (charts[name].scale = get)} />
-										{#if name === 'linear'}
-											<BarMarkY table="fold_data" x="cat" y={sum('v')} />
-										{:else if name === 'overlays'}
-											<AreaMarkY table="overlay_data" x="i" y="v" fillOpacity={0.2} />
-											<LineMark table="overlay_data" x="i" y="v" strokeWidth={2} />
-											<DotsMark table="overlay_data" x="i" y="v" r={3} />
-											<RuleMarkY table="overlay_rule" y="v" stroke="#c00" strokeWidth={2} />
-											<TextMark table="overlay_data" x="i" y="v" text="v" dy={-10} fontSize={9} />
-										{:else}
-											<DotsMark
-												table="fold_data"
-												x="cat"
-												y={sum('v')}
-												r={6}
-												preferredYScaleType={name}
-											/>
-										{/if}
-									{/snippet}
-								</WebGPUCanvas>
-							{/snippet}
+							<Frame />
+							<AxisLeft />
+							<AxisBottom />
+							<Grid />
+							<ScaleGrab onScale={(get) => (charts[name].scale = get)} />
+							{#if name === 'linear'}
+								<BarMarkY table="fold_data" x="cat" y={sum('v')} />
+							{:else if name === 'overlays'}
+								<AreaMarkY table="overlay_data" x="i" y="v" fillOpacity={0.2} />
+								<LineMark table="overlay_data" x="i" y="v" strokeWidth={2} />
+								<DotsMark table="overlay_data" x="i" y="v" r={3} />
+								<RuleMarkY table="overlay_rule" y="v" stroke="#c00" strokeWidth={2} />
+								<TextMark table="overlay_data" x="i" y="v" text="v" dy={-10} fontSize={9} />
+							{:else}
+								<DotsMark table="fold_data" x="cat" y={sum('v')} r={6} preferredYScaleType={name} />
+							{/if}
 						</ChartContainer>
 					</div>
 				</section>

@@ -8,7 +8,6 @@
 		ChartContainer,
 		Grid,
 		Crosshair,
-		WebGPUCanvas,
 		LineMark,
 		AreaMarkY,
 		BarMarkY,
@@ -127,18 +126,10 @@
 	<!-- Detail chart: domain follows overview brush -->
 	<div class="detail-wrapper" bind:this={lineEl}>
 		<ChartContainer xLabel="x" yLabel="y" useXSelection>
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<Grid />
-						<LineMark table="timeseries" x="x" y="y" strokeWidth={1.5} fitDomain="y" />
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
+			<Grid />
+			<LineMark table="timeseries" x="x" y="y" strokeWidth={1.5} fitDomain="y" />
 
-			{#snippet foreground()}
-				<Crosshair />
-			{/snippet}
+			<Crosshair />
 		</ChartContainer>
 	</div>
 {/snippet}
@@ -147,23 +138,17 @@
 	<!-- Stacked detail: a JS stack, so its fit reads the tooltip table -->
 	<div class="detail-wrapper" bind:this={stackedEl}>
 		<ChartContainer xLabel="x" yLabel="|y|, stacked" useXSelection>
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<Grid />
-						<AreaMarkY
-							table="timeseries_split"
-							x="x"
-							y="y"
-							fill="series"
-							selection="series"
-							selectionResponse="filter"
-							transforms={[stackY({ engine: 'js' })]}
-							fitDomain="y"
-						/>
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
+			<Grid />
+			<AreaMarkY
+				table="timeseries_split"
+				x="x"
+				y="y"
+				fill="series"
+				selection="series"
+				selectionResponse="filter"
+				transforms={[stackY({ engine: 'js' })]}
+				fitDomain="y"
+			/>
 		</ChartContainer>
 	</div>
 {/snippet}
@@ -172,22 +157,16 @@
 	<!-- Sorted bars, filtered by the toggle: its catch-up has morphs and reorders -->
 	<div class="bars-wrapper" bind:this={barsEl}>
 		<ChartContainer xLabel="bucket" yLabel="sum |y|">
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<Grid />
-						<BarMarkY
-							table="timeseries_split"
-							x="bucket"
-							y={sum('y')}
-							fill="#4c78a8"
-							selection="series"
-							sort={{ x: 'y', order: 'desc' }}
-							transforms={[topN(5, { includeOthers: true })]}
-						/>
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
+			<Grid />
+			<BarMarkY
+				table="timeseries_split"
+				x="bucket"
+				y={sum('y')}
+				fill="#4c78a8"
+				selection="series"
+				sort={{ x: 'y', order: 'desc' }}
+				transforms={[topN(5, { includeOthers: true })]}
+			/>
 		</ChartContainer>
 	</div>
 {/snippet}
@@ -197,23 +176,9 @@
 	     no query. On screen, that split slides (a click is a change you made). -->
 	<div class="toggle-wrapper">
 		<ChartContainer xLabel="bucket (click one in Other)" yLabel="rows">
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<BarMarkY
-							table="timeseries_split"
-							x="bucket"
-							y={count()}
-							fill="#999"
-							selection="series"
-						/>
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
+			<BarMarkY table="timeseries_split" x="bucket" y={count()} fill="#999" selection="series" />
 
-			{#snippet interactors()}
-				<Toggle selection="series" field="bucket" />
-			{/snippet}
+			<Toggle selection="series" field="bucket" />
 		</ChartContainer>
 	</div>
 {/snippet}
@@ -222,17 +187,9 @@
 	<!-- Overview chart: full range, brushable -->
 	<div class="overview-wrapper">
 		<ChartContainer xLabel="x" yLabel="y" margin={{ top: 10, right: 50, bottom: 25, left: 75 }}>
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<LineMark table="timeseries" x="x" y="y" strokeWidth={1} />
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
+			<LineMark table="timeseries" x="x" y="y" strokeWidth={1} />
 
-			{#snippet interactors()}
-				<IntervalX />
-			{/snippet}
+			<IntervalX />
 		</ChartContainer>
 	</div>
 {/snippet}
@@ -241,23 +198,9 @@
 	<!-- Filters the charts below; click a bar to toggle its series -->
 	<div class="toggle-wrapper">
 		<ChartContainer xLabel="series" yLabel="rows">
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<BarMarkY
-							table="timeseries_split"
-							x="series"
-							y={count()}
-							fill="series"
-							selection="series"
-						/>
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
+			<BarMarkY table="timeseries_split" x="series" y={count()} fill="series" selection="series" />
 
-			{#snippet interactors()}
-				<Toggle selection="series" field="series" />
-			{/snippet}
+			<Toggle selection="series" field="series" />
 		</ChartContainer>
 	</div>
 {/snippet}

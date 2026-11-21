@@ -7,7 +7,6 @@
 		AxisBottom,
 		MarginLabel,
 		Crosshair,
-		WebGPUCanvas,
 		RectYMark
 	} from '$lib/components';
 	import { bin } from '$lib/sql/bin';
@@ -18,54 +17,29 @@
 
 	<div class="chart-wrapper">
 		<ChartContainer xLabel="bill_length" yLabel="count">
-			{#snippet background()}
-				<MarginLabel />
-			{/snippet}
+			<MarginLabel />
 
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<Grid />
+			<Grid />
 
-						<RectYMark
-							table="penguins"
-							x={bin('bill_length', { steps: 50 })}
-							y={count()}
-							fill="steelblue"
-						/>
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
+			<RectYMark
+				table="penguins"
+				x={bin('bill_length', { steps: 50 })}
+				y={count()}
+				fill="steelblue"
+			/>
 
-			{#snippet foreground()}
-				<Crosshair />
-			{/snippet}
+			<Crosshair />
 		</ChartContainer>
 	</div>
 	<div class="chart-wrapper">
 		<ChartContainer>
-			{#snippet background()}
-				<MarginLabel />
-			{/snippet}
+			<MarginLabel />
 
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<Grid />
+			<Grid />
 
-						<RectYMark
-							table="travelers"
-							x={bin('date', { step: 2 })}
-							y={count()}
-							fill="steelblue"
-						/>
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
+			<RectYMark table="travelers" x={bin('date', { step: 2 })} y={count()} fill="steelblue" />
 
-			{#snippet foreground()}
-				<Crosshair />
-			{/snippet}
+			<Crosshair />
 		</ChartContainer>
 	</div>
 </div>

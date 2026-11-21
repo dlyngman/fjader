@@ -9,7 +9,6 @@
 		AxisBottom,
 		MarginLabel,
 		Crosshair,
-		WebGPUCanvas,
 		DotsMark
 	} from '$lib/components';
 	import { Grid } from '$lib/components/guides';
@@ -46,29 +45,15 @@
 		<div class="charts">
 			<div class="chart-wrapper">
 				<ChartContainer>
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<DotsMark
-									table="cars"
-									x={msql.column('economy (mpg)')}
-									y={msql.column('power (hp)')}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<DotsMark table="cars" x={msql.column('economy (mpg)')} y={msql.column('power (hp)')} />
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -80,29 +65,19 @@
 		<div class="charts">
 			<div class="chart-wrapper">
 				<ChartContainer>
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<DotsMark
-									table="cars"
-									x={msql.sql`100.0 / ${msql.column('economy (mpg)')}`}
-									y={msql.column('power (hp)')}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<DotsMark
+						table="cars"
+						x={msql.sql`100.0 / ${msql.column('economy (mpg)')}`}
+						y={msql.column('power (hp)')}
+					/>
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -114,25 +89,15 @@
 		<div class="charts">
 			<div class="chart-wrapper">
 				<ChartContainer>
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<DotsMark table="gistemp" x="Date" y="Anomaly" fill="Anomaly" scheme="BuRd" />
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<DotsMark table="gistemp" x="Date" y="Anomaly" fill="Anomaly" scheme="BuRd" />
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -144,33 +109,23 @@
 		<div class="charts">
 			<div class="chart-wrapper">
 				<ChartContainer>
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<DotsMark
-									table="aapl"
-									x={msql.sql`(${msql.column('Close')} - ${msql.column('Open')}) / ${msql.column('Open')}`}
-									y="Volume"
-									r="Volume"
-									radiusRange={[1, 8]}
-									opacity={0.3}
-									preferredYScaleType="log"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<DotsMark
+						table="aapl"
+						x={msql.sql`(${msql.column('Close')} - ${msql.column('Open')}) / ${msql.column('Open')}`}
+						y="Volume"
+						r="Volume"
+						radiusRange={[1, 8]}
+						opacity={0.3}
+						preferredYScaleType="log"
+					/>
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>

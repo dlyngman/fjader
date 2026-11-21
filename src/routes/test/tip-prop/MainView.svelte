@@ -7,7 +7,6 @@
 		AxisBottom,
 		MarginLabel,
 		Crosshair,
-		WebGPUCanvas,
 		DotsMark,
 		BarMarkY,
 		LineMark,
@@ -26,20 +25,10 @@
 			<p class="desc">Should show all channels: bill_length, body_mass, species</p>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="bill_length" yLabel="body_mass">
-					{#snippet background()}
-						<MarginLabel />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<DotsMark table="penguins" x="bill_length" y="body_mass" fill="species" />
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<MarginLabel />
+					<Grid />
+					<DotsMark table="penguins" x="bill_length" y="body_mass" fill="species" />
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</section>
@@ -50,26 +39,16 @@
 			<p class="desc">Should show: bill_length, species, island, sex (no body_mass)</p>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="bill_length" yLabel="body_mass">
-					{#snippet background()}
-						<MarginLabel />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<DotsMark
-									table="penguins"
-									x="bill_length"
-									y="body_mass"
-									fill="species"
-									tip={['x', 'fill', 'island', 'sex']}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<MarginLabel />
+					<Grid />
+					<DotsMark
+						table="penguins"
+						x="bill_length"
+						y="body_mass"
+						fill="species"
+						tip={['x', 'fill', 'island', 'sex']}
+					/>
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</section>
@@ -80,26 +59,16 @@
 			<p class="desc">Should show: all channels (bill_length, body_mass, species) + island</p>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="bill_length" yLabel="body_mass">
-					{#snippet background()}
-						<MarginLabel />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<DotsMark
-									table="penguins"
-									x="bill_length"
-									y="body_mass"
-									fill="species"
-									tip={['*', 'island']}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<MarginLabel />
+					<Grid />
+					<DotsMark
+						table="penguins"
+						x="bill_length"
+						y="body_mass"
+						fill="species"
+						tip={['*', 'island']}
+					/>
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</section>
@@ -110,26 +79,10 @@
 			<p class="desc">Should show NO tooltip on hover</p>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="bill_length" yLabel="body_mass">
-					{#snippet background()}
-						<MarginLabel />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<DotsMark
-									table="penguins"
-									x="bill_length"
-									y="body_mass"
-									fill="species"
-									tip={false}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<MarginLabel />
+					<Grid />
+					<DotsMark table="penguins" x="bill_length" y="body_mass" fill="species" tip={false} />
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</section>
@@ -142,26 +95,10 @@
 			</p>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="species" yLabel="count">
-					{#snippet background()}
-						<MarginLabel />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<BarMarkY
-									table="penguins"
-									x="species"
-									y={count()}
-									fill="species"
-									tip={['x', 'y']}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<MarginLabel />
+					<Grid />
+					<BarMarkY table="penguins" x="species" y={count()} fill="species" tip={['x', 'y']} />
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</section>
@@ -172,26 +109,16 @@
 			<p class="desc">Should show: month, revenue, country (extra field from DB)</p>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="month" yLabel="revenue">
-					{#snippet background()}
-						<MarginLabel />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<LineMark
-									table="sales"
-									x="month"
-									y="revenue"
-									stroke="region"
-									tip={['x', 'y', 'country']}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<MarginLabel />
+					<Grid />
+					<LineMark
+						table="sales"
+						x="month"
+						y="revenue"
+						stroke="region"
+						tip={['x', 'y', 'country']}
+					/>
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</section>
@@ -204,27 +131,17 @@
 			</p>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="species" yLabel="body_mass">
-					{#snippet background()}
-						<MarginLabel />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<LineMark
-									table="penguins"
-									x="bill_length"
-									y={avg('body_mass')}
-									stroke="species"
-									tooltipProximity="x"
-									tip={['x', 'stroke', 'y', min('body_mass'), max('body_mass')]}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<MarginLabel />
+					<Grid />
+					<LineMark
+						table="penguins"
+						x="bill_length"
+						y={avg('body_mass')}
+						stroke="species"
+						tooltipProximity="x"
+						tip={['x', 'stroke', 'y', min('body_mass'), max('body_mass')]}
+					/>
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</section>
@@ -237,26 +154,16 @@
 			</p>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="species" yLabel="body_mass">
-					{#snippet background()}
-						<MarginLabel />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<BarMarkY
-									table="penguins"
-									x="species"
-									y={avg('body_mass')}
-									fill="species"
-									tip={['x', 'fill', 'y', min('body_mass'), max('body_mass')]}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<MarginLabel />
+					<Grid />
+					<BarMarkY
+						table="penguins"
+						x="species"
+						y={avg('body_mass')}
+						fill="species"
+						tip={['x', 'fill', 'y', min('body_mass'), max('body_mass')]}
+					/>
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</section>

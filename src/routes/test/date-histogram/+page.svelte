@@ -22,7 +22,6 @@
 		AxisLeft,
 		AxisBottom,
 		MarginLabel,
-		WebGPUCanvas,
 		RectYMark,
 		IntervalX
 	} from '$lib/components';
@@ -69,30 +68,20 @@
 				<div class="panel">
 					<h3>{chart.title}</h3>
 					<ChartContainer xLabel={chart.label} yLabel="days, {chart.label}">
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<RectYMark
-										table="weather"
-										x={chart.x}
-										y={count()}
-										inset={0.5}
-										fill="steelblue"
-										selection="brush"
-									/>
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
-						{#snippet interactors()}
-							<IntervalX selection="brush" />
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<RectYMark
+							table="weather"
+							x={chart.x}
+							y={count()}
+							inset={0.5}
+							fill="steelblue"
+							selection="brush"
+						/>
+						<IntervalX selection="brush" />
 					</ChartContainer>
 				</div>
 			{/each}

@@ -7,7 +7,6 @@
 		AxisBottom,
 		MarginLabel,
 		Crosshair,
-		WebGPUCanvas,
 		LineMark
 	} from '$lib/components';
 	import { bin } from '$lib/sql/bin';
@@ -23,29 +22,19 @@
 			<h3>stroke="steelblue" (constant color)</h3>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="timestamp" yLabel="count (const)">
-					{#snippet background()}
-						<MarginLabel />
-						<AxisLeft />
-						<AxisBottom />
-					{/snippet}
+					<MarginLabel />
+					<AxisLeft />
+					<AxisBottom />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<LineMark
-									table="events"
-									x={bin('timestamp', { interval: 'day' })}
-									y={count()}
-									stroke="steelblue"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<LineMark
+						table="events"
+						x={bin('timestamp', { interval: 'day' })}
+						y={count()}
+						stroke="steelblue"
+					/>
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -54,29 +43,19 @@
 			<h3>stroke="category" (series + auto color)</h3>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="timestamp" yLabel="count (series)">
-					{#snippet background()}
-						<MarginLabel />
-						<AxisLeft />
-						<AxisBottom />
-					{/snippet}
+					<MarginLabel />
+					<AxisLeft />
+					<AxisBottom />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<LineMark
-									table="events"
-									x={bin('timestamp', { interval: 'day' })}
-									y={count()}
-									stroke="category"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<LineMark
+						table="events"
+						x={bin('timestamp', { interval: 'day' })}
+						y={count()}
+						stroke="category"
+					/>
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -85,30 +64,20 @@
 			<h3>z="category" stroke="tomato" (constant color, grouped by category)</h3>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="timestamp" yLabel="count (override)">
-					{#snippet background()}
-						<MarginLabel />
-						<AxisLeft />
-						<AxisBottom />
-					{/snippet}
+					<MarginLabel />
+					<AxisLeft />
+					<AxisBottom />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<LineMark
-									table="events"
-									x={bin('timestamp', { interval: 'day' })}
-									y={count()}
-									z="category"
-									stroke="tomato"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<LineMark
+						table="events"
+						x={bin('timestamp', { interval: 'day' })}
+						y={count()}
+						z="category"
+						stroke="tomato"
+					/>
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -116,35 +85,25 @@
 			<h3>bin('timestamp', &#123;steps: 50&#125;) — shift+scroll</h3>
 			<div class="chart-wrapper">
 				<ChartContainer xLabel="timestamp" yLabel="count (steps)">
-					{#snippet background()}
-						<MarginLabel />
-						<AxisLeft />
-						<AxisBottom />
-					{/snippet}
+					<MarginLabel />
+					<AxisLeft />
+					<AxisBottom />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<RectYMark
-									table="events"
-									x={bin('timestamp', { steps: 50 })}
-									y={count()}
-									fill="category"
-								/>
-								<LineMark
-									table="events"
-									x={bin('timestamp', { steps: 50 })}
-									y={count()}
-									stroke="category"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<RectYMark
+						table="events"
+						x={bin('timestamp', { steps: 50 })}
+						y={count()}
+						fill="category"
+					/>
+					<LineMark
+						table="events"
+						x={bin('timestamp', { steps: 50 })}
+						y={count()}
+						stroke="category"
+					/>
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>

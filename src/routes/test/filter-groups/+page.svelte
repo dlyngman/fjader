@@ -2,14 +2,7 @@
 	import { sum, gt, column, literal } from '@uwdata/mosaic-sql';
 	import { initFjader, getFilterGroups } from '$lib';
 	import { onMount } from 'svelte';
-	import {
-		ChartContainer,
-		Frame,
-		AxisLeft,
-		AxisBottom,
-		WebGPUCanvas,
-		BarMarkY
-	} from '$lib/components';
+	import { ChartContainer, Frame, AxisLeft, AxisBottom, BarMarkY } from '$lib/components';
 	import Toggle from '$lib/interactors/Toggle.svelte';
 
 	const { queryEngine } = initFjader();
@@ -80,27 +73,17 @@
 				<h3>Click a bar (Toggle, group "brush")</h3>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue">
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<BarMarkY
-										table="fg_sales"
-										x="category"
-										y={sum('revenue')}
-										fill="category"
-										selection="brush"
-									/>
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
-						{#snippet interactors()}
-							<Toggle selection="brush" field="category" />
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<BarMarkY
+							table="fg_sales"
+							x="category"
+							y={sum('revenue')}
+							fill="category"
+							selection="brush"
+						/>
+						<Toggle selection="brush" field="category" />
 					</ChartContainer>
 				</div>
 			</div>

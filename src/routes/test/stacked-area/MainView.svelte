@@ -1,12 +1,5 @@
 <script>
-	import {
-		ChartContainer,
-		Grid,
-		WebGPUCanvas,
-		BarMarkY,
-		BarMarkX,
-		AreaMarkY
-	} from '$lib/components';
+	import { ChartContainer, Grid, BarMarkY, BarMarkX, AreaMarkY } from '$lib/components';
 	import { stackY, stackX, normalize } from '$lib';
 	import { sum } from '@uwdata/mosaic-sql';
 
@@ -37,37 +30,25 @@
 		<div class="chart-wrapper">
 			<h3>Stacked Bar Y — {stackMode}</h3>
 			<ChartContainer xLabel="Month" yLabel="Bar Y Value">
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							{#if stackMode !== 'none'}
-								<BarMarkY
-									table="stacked_categories"
-									x="month"
-									y={sum('value')}
-									fill="category"
-									transforms={[
-										stackMode === 'expand'
-											? stackY({ offset: 'expand' })
-											: stackMode === 'center'
-												? stackY({ offset: 'center' })
-												: stackY()
-									]}
-									tooltip
-								/>
-							{:else}
-								<BarMarkY
-									table="stacked_categories"
-									x="month"
-									y={sum('value')}
-									fill="category"
-									tooltip
-								/>
-							{/if}
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Grid />
+				{#if stackMode !== 'none'}
+					<BarMarkY
+						table="stacked_categories"
+						x="month"
+						y={sum('value')}
+						fill="category"
+						transforms={[
+							stackMode === 'expand'
+								? stackY({ offset: 'expand' })
+								: stackMode === 'center'
+									? stackY({ offset: 'center' })
+									: stackY()
+						]}
+						tooltip
+					/>
+				{:else}
+					<BarMarkY table="stacked_categories" x="month" y={sum('value')} fill="category" tooltip />
+				{/if}
 			</ChartContainer>
 		</div>
 
@@ -75,37 +56,25 @@
 		<div class="chart-wrapper">
 			<h3>Stacked Bar X — {stackMode}</h3>
 			<ChartContainer xLabel="Bar X Value" yLabel="Month">
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							{#if stackMode !== 'none'}
-								<BarMarkX
-									table="stacked_categories"
-									x={sum('value')}
-									y="month"
-									fill="category"
-									transforms={[
-										stackMode === 'expand'
-											? stackX({ offset: 'expand' })
-											: stackMode === 'center'
-												? stackX({ offset: 'center' })
-												: stackX()
-									]}
-									tooltip
-								/>
-							{:else}
-								<BarMarkX
-									table="stacked_categories"
-									x={sum('value')}
-									y="month"
-									fill="category"
-									tooltip
-								/>
-							{/if}
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Grid />
+				{#if stackMode !== 'none'}
+					<BarMarkX
+						table="stacked_categories"
+						x={sum('value')}
+						y="month"
+						fill="category"
+						transforms={[
+							stackMode === 'expand'
+								? stackX({ offset: 'expand' })
+								: stackMode === 'center'
+									? stackX({ offset: 'center' })
+									: stackX()
+						]}
+						tooltip
+					/>
+				{:else}
+					<BarMarkX table="stacked_categories" x={sum('value')} y="month" fill="category" tooltip />
+				{/if}
 			</ChartContainer>
 		</div>
 
@@ -113,35 +82,29 @@
 		<div class="chart-wrapper wide">
 			<h3>Stacked Area Y — {stackMode}</h3>
 			<ChartContainer xLabel="X" yLabel="Area Y Value">
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							{#if stackMode !== 'none'}
-								<AreaMarkY
-									table="stacked_timeseries"
-									x="x"
-									y="y"
-									fill="series"
-									transforms={[
-										stackMode === 'expand'
-											? stackY({ offset: 'expand' })
-											: stackMode === 'center'
-												? stackY({ offset: 'center' })
-												: stackY()
-									]}
-									tooltip
-									fillOpacity="0.8"
-									strokeWidth="2"
-									curve="monotone"
-									dotRadius="4"
-								/>
-							{:else}
-								<AreaMarkY table="stacked_timeseries" x="x" y="y" fill="series" tooltip />
-							{/if}
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Grid />
+				{#if stackMode !== 'none'}
+					<AreaMarkY
+						table="stacked_timeseries"
+						x="x"
+						y="y"
+						fill="series"
+						transforms={[
+							stackMode === 'expand'
+								? stackY({ offset: 'expand' })
+								: stackMode === 'center'
+									? stackY({ offset: 'center' })
+									: stackY()
+						]}
+						tooltip
+						fillOpacity="0.8"
+						strokeWidth="2"
+						curve="monotone"
+						dotRadius="4"
+					/>
+				{:else}
+					<AreaMarkY table="stacked_timeseries" x="x" y="y" fill="series" tooltip />
+				{/if}
 			</ChartContainer>
 		</div>
 
@@ -149,21 +112,15 @@
 		<div class="chart-wrapper wide">
 			<h3>Stack + Normalize (100%)</h3>
 			<ChartContainer xLabel="X (norm)" yLabel="Normalized %">
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							<AreaMarkY
-								table="stacked_timeseries"
-								x="x"
-								y="y"
-								fill="series"
-								transforms={[normalize(), stackY()]}
-								tooltip
-							/>
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Grid />
+				<AreaMarkY
+					table="stacked_timeseries"
+					x="x"
+					y="y"
+					fill="series"
+					transforms={[normalize(), stackY()]}
+					tooltip
+				/>
 			</ChartContainer>
 		</div>
 	</div>

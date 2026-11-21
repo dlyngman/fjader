@@ -10,7 +10,6 @@
 		AxisBottom,
 		MarginLabel,
 		Crosshair,
-		WebGPUCanvas,
 		BarMarkY,
 		BarMarkX,
 		TextMark
@@ -56,30 +55,15 @@
 		<div class="charts">
 			<div class="chart-wrapper">
 				<ChartContainer>
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<BarMarkY
-									table="alphabet"
-									x="letter"
-									y="frequency"
-									sort={{ x: 'y', order: 'desc' }}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<BarMarkY table="alphabet" x="letter" y="frequency" sort={{ x: 'y', order: 'desc' }} />
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -91,36 +75,26 @@
 		<div class="charts">
 			<div class="chart-wrapper" style="max-height: 200px;">
 				<ChartContainer>
-					{#snippet background()}
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<BarMarkX
-									table="penguins"
-									x={1}
-									y="species"
-									inset={0.5}
-									fill="body_mass"
-									scheme="turbo"
-									transforms={[
-										orderby(msql.asc('body_mass')),
-										stack({ direction: 'horizontal', engine: 'js' })
-									]}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<BarMarkX
+						table="penguins"
+						x={1}
+						y="species"
+						inset={0.5}
+						fill="body_mass"
+						scheme="turbo"
+						transforms={[
+							orderby(msql.asc('body_mass')),
+							stack({ direction: 'horizontal', engine: 'js' })
+						]}
+					/>
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -132,38 +106,28 @@
 		<div class="charts">
 			<div class="chart-wrapper" style="max-height: 700px;">
 				<ChartContainer>
-					{#snippet background()}
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid axis="x" />
-								<BarMarkX
-									table="civilizations"
-									x1="start"
-									x2="end"
-									y="civilization"
-									inset={0.5}
-									sort={{ y: 'x1', order: 'asc' }}
-								/>
-								<TextMark
-									table="civilizations"
-									x="start"
-									y="civilization"
-									text="civilization"
-									textAnchor="end"
-									dx={-3}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid axis="x" />
+					<BarMarkX
+						table="civilizations"
+						x1="start"
+						x2="end"
+						y="civilization"
+						inset={0.5}
+						sort={{ y: 'x1', order: 'asc' }}
+					/>
+					<TextMark
+						table="civilizations"
+						x="start"
+						y="civilization"
+						text="civilization"
+						textAnchor="end"
+						dx={-3}
+					/>
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -175,32 +139,22 @@
 		<div class="charts">
 			<div class="chart-wrapper" style="max-height: 1000px;">
 				<ChartContainer>
-					{#snippet background()}
-						<AxisBottom tickFormat="+%" />
-						<MarginLabel />
-					{/snippet}
+					<AxisBottom tickFormat="+%" />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid axis="x" />
-								<BarMarkX
-									table="statepop"
-									x={msql.sql`(${msql.column('2019')} - ${msql.column('2010')}) * 1.0 / ${msql.column('2010')}`}
-									y="State"
-									fill={msql.sql`SIGN(${msql.column('2019')} - ${msql.column('2010')})`}
-									scheme="piyg"
-									sort={{ y: 'x2', order: 'desc' }}
-									inset={0.5}
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid axis="x" />
+					<BarMarkX
+						table="statepop"
+						x={msql.sql`(${msql.column('2019')} - ${msql.column('2010')}) * 1.0 / ${msql.column('2010')}`}
+						y="State"
+						fill={msql.sql`SIGN(${msql.column('2019')} - ${msql.column('2010')})`}
+						scheme="piyg"
+						sort={{ y: 'x2', order: 'desc' }}
+						inset={0.5}
+					/>
 
-					{#snippet foreground()}
-						<AxisCenter />
-						<Crosshair />
-					{/snippet}
+					<AxisCenter />
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>

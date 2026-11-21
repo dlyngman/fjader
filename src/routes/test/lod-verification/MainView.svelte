@@ -1,5 +1,5 @@
 <script>
-	import { ChartContainer, Grid, Crosshair, WebGPUCanvas, LineMark } from '$lib/components';
+	import { ChartContainer, Grid, Crosshair, LineMark } from '$lib/components';
 	import { IntervalX } from '$lib/interactors';
 
 	// Diagnostic state from the LOD surface
@@ -51,102 +51,68 @@
 		<div class="chart-wrapper">
 			<h3>1. Reference (GPU auto-dots)</h3>
 			<ChartContainer xLabel="x" yLabel="y" xZoomLimit={10000} yZoomLimit={10000}>
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							<LineMark
-								table="dense_timeseries"
-								x="x"
-								y="y"
-								stroke="series"
-								strokeWidth={1.5}
-								dotRadius={4}
-							/>
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Grid />
+				<LineMark
+					table="dense_timeseries"
+					x="x"
+					y="y"
+					stroke="series"
+					strokeWidth={1.5}
+					dotRadius={4}
+				/>
 
-				{#snippet foreground()}
-					<Crosshair />
-				{/snippet}
+				<Crosshair />
 			</ChartContainer>
 		</div>
 
 		<div class="chart-wrapper">
 			<h3>2. LOD Controller (JS dots + JS M4 decision)</h3>
 			<ChartContainer xLabel="x" yLabel="y" xZoomLimit={10000} yZoomLimit={10000}>
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							<LineMark
-								table="dense_timeseries"
-								x="x"
-								y="y"
-								stroke="series"
-								strokeWidth={1.5}
-								dotRadius={4}
-								lod={true}
-								selection="lod-brush"
-								onMarkLOD={(surface) => (lodSurface = surface)}
-							/>
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Grid />
+				<LineMark
+					table="dense_timeseries"
+					x="x"
+					y="y"
+					stroke="series"
+					strokeWidth={1.5}
+					dotRadius={4}
+					lod={true}
+					selection="lod-brush"
+					onMarkLOD={(surface) => (lodSurface = surface)}
+				/>
 
-				{#snippet foreground()}
-					<Crosshair />
-				{/snippet}
+				<Crosshair />
 			</ChartContainer>
 		</div>
 
 		<div class="chart-wrapper">
 			<h3>3. LOD Controller (JS dots, no M4)</h3>
 			<ChartContainer xLabel="x" yLabel="y" xZoomLimit={10000} yZoomLimit={10000}>
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							<LineMark
-								table="dense_timeseries"
-								x="x"
-								y="y"
-								stroke="series"
-								strokeWidth={1.5}
-								dotRadius={4}
-								lod={{ decimate: false }}
-								selection="lod-brush"
-							/>
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Grid />
+				<LineMark
+					table="dense_timeseries"
+					x="x"
+					y="y"
+					stroke="series"
+					strokeWidth={1.5}
+					dotRadius={4}
+					lod={{ decimate: false }}
+					selection="lod-brush"
+				/>
 
-				{#snippet foreground()}
-					<Crosshair />
-				{/snippet}
+				<Crosshair />
 			</ChartContainer>
 		</div>
 
 		<div class="chart-wrapper">
 			<h3>4. Crossfilter source (brush here to filter charts 2+3)</h3>
 			<ChartContainer xLabel="x" yLabel="y">
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							<LineMark table="dense_timeseries" x="x" y="y" stroke="series" strokeWidth={1.5} />
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Grid />
+				<LineMark table="dense_timeseries" x="x" y="y" stroke="series" strokeWidth={1.5} />
 
-				{#snippet foreground()}
-					<Crosshair />
-				{/snippet}
+				<Crosshair />
 
-				{#snippet interactors()}
-					<IntervalX selection="lod-brush" />
-				{/snippet}
+				<IntervalX selection="lod-brush" />
 			</ChartContainer>
 		</div>
 	</div>

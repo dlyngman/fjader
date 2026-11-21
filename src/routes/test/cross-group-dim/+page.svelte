@@ -24,7 +24,6 @@
 		AxisLeft,
 		AxisBottom,
 		MarginLabel,
-		WebGPUCanvas,
 		BarMarkY,
 		RectYMark,
 		AreaMarkY,
@@ -74,81 +73,49 @@
 						{#if group === 'groupA'}
 							<Legend color="carrier" selection={group} />
 						{/if}
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkY
-										table="cg_flights"
-										x="carrier"
-										y={count()}
-										fill="carrier"
-										selection={group}
-									/>
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
-						{#snippet interactors()}
-							<Toggle selection={group} field="carrier" />
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<BarMarkY table="cg_flights" x="carrier" y={count()} fill="carrier" selection={group} />
+						<Toggle selection={group} field="carrier" />
 					</ChartContainer>
 				</div>
 				<div class="panel">
 					<ChartContainer xLabel="delay" yLabel="count">
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<RectYMark
-										table="cg_flights"
-										x={bin('delay', { steps: 50 })}
-										y={count()}
-										inset={0.5}
-										fill="steelblue"
-										selection={group}
-									/>
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<RectYMark
+							table="cg_flights"
+							x={bin('delay', { steps: 50 })}
+							y={count()}
+							inset={0.5}
+							fill="steelblue"
+							selection={group}
+						/>
 					</ChartContainer>
 				</div>
 				<div class="panel">
 					<ChartContainer xLabel="delay" yLabel="count">
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<AreaMarkY
-										table="cg_flights"
-										x={bin('delay', { steps: 50 })}
-										y={count()}
-										fill="carrier"
-										fillOpacity={0.3}
-										stroke="#333"
-										strokeWidth={1.5}
-										selection={group}
-									/>
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<AreaMarkY
+							table="cg_flights"
+							x={bin('delay', { steps: 50 })}
+							y={count()}
+							fill="carrier"
+							fillOpacity={0.3}
+							stroke="#333"
+							strokeWidth={1.5}
+							selection={group}
+						/>
 					</ChartContainer>
 				</div>
 			</div>

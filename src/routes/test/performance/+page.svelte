@@ -5,7 +5,6 @@
 	import { onMount } from 'svelte';
 	import {
 		ChartContainer,
-		WebGPUCanvas,
 		DotsMark,
 		BarMarkY,
 		Grid,
@@ -338,35 +337,25 @@
 					<h4>{config.title}</h4>
 
 					<ChartContainer xLabel={config.x} yLabel={config.y}>
-						{#snippet background()}
-							<Grid />
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-						{/snippet}
+						<Grid />
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
 
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									{#if config.markType === 'dots'}
-										<DotsMark
-											table="penguins"
-											x={config.x}
-											y={config.y}
-											fill="species"
-											opacity={0.7}
-											r={3}
-										/>
-									{:else if config.markType === 'bars'}
-										<BarMarkY table="penguins" x={config.x} y={config.y} opacity={0.8} />
-									{/if}
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						{#if config.markType === 'dots'}
+							<DotsMark
+								table="penguins"
+								x={config.x}
+								y={config.y}
+								fill="species"
+								opacity={0.7}
+								r={3}
+							/>
+						{:else if config.markType === 'bars'}
+							<BarMarkY table="penguins" x={config.x} y={config.y} opacity={0.8} />
+						{/if}
 
-						{#snippet foreground()}
-							<Crosshair />
-						{/snippet}
+						<Crosshair />
 					</ChartContainer>
 				</div>
 			{/each}

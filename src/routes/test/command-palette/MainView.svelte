@@ -9,7 +9,6 @@
 		AreaMarkY,
 		AreaMarkX,
 		RectYMark,
-		WebGPUCanvas,
 		Grid,
 		Crosshair,
 		AxisLeft,
@@ -32,22 +31,12 @@
 			<h3>DotsMark</h3>
 			<div class="chart">
 				<ChartContainer xLabel="Bill Length (mm)" yLabel="Bill Depth (mm)">
-					{#snippet background()}
-						<MarginLabel />
-						<AxisLeft />
-						<AxisBottom />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<DotsMark table="penguins" x="bill_length" y="bill_depth" fill="species" r={3} />
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<MarginLabel />
+					<AxisLeft />
+					<AxisBottom />
+					<Grid />
+					<DotsMark table="penguins" x="bill_length" y="bill_depth" fill="species" r={3} />
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -56,22 +45,12 @@
 			<h3>LineMark</h3>
 			<div class="chart">
 				<ChartContainer xLabel="Time Step" yLabel="Amplitude">
-					{#snippet background()}
-						<MarginLabel />
-						<AxisLeft />
-						<AxisBottom />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<LineMark table="timeseries" x="x" y="y" stroke="series" strokeWidth={2} />
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<MarginLabel />
+					<AxisLeft />
+					<AxisBottom />
+					<Grid />
+					<LineMark table="timeseries" x="x" y="y" stroke="series" strokeWidth={2} />
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -80,22 +59,12 @@
 			<h3>BarMarkY</h3>
 			<div class="chart">
 				<ChartContainer xLabel="Species" yLabel="Body Mass (g)">
-					{#snippet background()}
-						<MarginLabel />
-						<AxisLeft />
-						<AxisBottom />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<BarMarkY table="penguins" x="species" y="body_mass" fill="species" />
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<MarginLabel />
+					<AxisLeft />
+					<AxisBottom />
+					<Grid />
+					<BarMarkY table="penguins" x="species" y="body_mass" fill="species" />
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -104,22 +73,12 @@
 			<h3>BarMarkX</h3>
 			<div class="chart">
 				<ChartContainer xLabel="Body Mass (g)" yLabel="Species">
-					{#snippet background()}
-						<MarginLabel />
-						<AxisLeft />
-						<AxisBottom />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<BarMarkX table="penguins" x="body_mass" y="species" fill="species" />
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<MarginLabel />
+					<AxisLeft />
+					<AxisBottom />
+					<Grid />
+					<BarMarkX table="penguins" x="body_mass" y="species" fill="species" />
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -128,22 +87,12 @@
 			<h3>AreaMarkY</h3>
 			<div class="chart">
 				<ChartContainer xLabel="Time Step" yLabel="Signal">
-					{#snippet background()}
-						<MarginLabel />
-						<AxisLeft />
-						<AxisBottom />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<AreaMarkY table="timeseries" x="x" y="y" fill="series" curve="monotone" />
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<MarginLabel />
+					<AxisLeft />
+					<AxisBottom />
+					<Grid />
+					<AreaMarkY table="timeseries" x="x" y="y" fill="series" curve="monotone" />
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -152,22 +101,12 @@
 			<h3>AreaMarkX</h3>
 			<div class="chart">
 				<ChartContainer xLabel="Signal" yLabel="Time Step">
-					{#snippet background()}
-						<MarginLabel />
-						<AxisLeft />
-						<AxisBottom />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<AreaMarkX table="timeseries" x="y" y="x" fill="series" curve="monotone" />
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<MarginLabel />
+					<AxisLeft />
+					<AxisBottom />
+					<Grid />
+					<AreaMarkX table="timeseries" x="y" y="x" fill="series" curve="monotone" />
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -176,23 +115,13 @@
 			<h3>Multi-mark (Dots + Line)</h3>
 			<div class="chart">
 				<ChartContainer xLabel="Step" yLabel="Value">
-					{#snippet background()}
-						<MarginLabel />
-						<AxisLeft />
-						<AxisBottom />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<DotsMark table="timeseries" x="x" y="y" fill="series" r={3} />
-								<LineMark table="timeseries" x="x" y="y" stroke="series" strokeWidth={1.5} />
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<MarginLabel />
+					<AxisLeft />
+					<AxisBottom />
+					<Grid />
+					<DotsMark table="timeseries" x="x" y="y" fill="series" r={3} />
+					<LineMark table="timeseries" x="x" y="y" stroke="series" strokeWidth={1.5} />
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -201,23 +130,13 @@
 			<h3>Multi-mark (Dot + Dot — same type)</h3>
 			<div class="chart">
 				<ChartContainer xLabel="Bill Length (mm)" yLabel="Bill Depth / Body Mass">
-					{#snippet background()}
-						<MarginLabel />
-						<AxisLeft />
-						<AxisBottom />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<DotsMark table="penguins" x="bill_length" y="bill_depth" fill="species" r={3} />
-								<DotsMark table="penguins" x="bill_length" y="body_mass" fill="island" r={2} />
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<MarginLabel />
+					<AxisLeft />
+					<AxisBottom />
+					<Grid />
+					<DotsMark table="penguins" x="bill_length" y="bill_depth" fill="species" r={3} />
+					<DotsMark table="penguins" x="bill_length" y="body_mass" fill="island" r={2} />
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>
@@ -226,27 +145,17 @@
 			<h3>RectYMark (histogram)</h3>
 			<div class="chart">
 				<ChartContainer xLabel="Bill Length (mm)" yLabel="Count">
-					{#snippet background()}
-						<MarginLabel />
-						<AxisLeft />
-						<AxisBottom />
-					{/snippet}
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<RectYMark
-									table="penguins"
-									x={bin('bill_length', { steps: 30 })}
-									y={count()}
-									fill="steelblue"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<MarginLabel />
+					<AxisLeft />
+					<AxisBottom />
+					<Grid />
+					<RectYMark
+						table="penguins"
+						x={bin('bill_length', { steps: 30 })}
+						y={count()}
+						fill="steelblue"
+					/>
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>

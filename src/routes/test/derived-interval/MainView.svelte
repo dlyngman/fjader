@@ -4,7 +4,6 @@
 		ChartContainer,
 		Grid,
 		Crosshair,
-		WebGPUCanvas,
 		LineMark,
 		AreaMarkY,
 		IntervalX,
@@ -20,27 +19,19 @@
 		<!-- Detail chart: domain follows overview brush -->
 		<div class="detail-wrapper">
 			<ChartContainer xLabel="ts" yLabel="value" useXSelection>
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<Grid />
-							<LineMark
-								table="timeseries"
-								x="ts"
-								y="value"
-								stroke="grp"
-								strokeWidth={1.5}
-								fitDomain="y"
-								preferredXScaleType="time"
-								tooltipProximity="x"
-							/>
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<Grid />
+				<LineMark
+					table="timeseries"
+					x="ts"
+					y="value"
+					stroke="grp"
+					strokeWidth={1.5}
+					fitDomain="y"
+					preferredXScaleType="time"
+					tooltipProximity="x"
+				/>
 
-				{#snippet foreground()}
-					<Crosshair />
-				{/snippet}
+				<Crosshair />
 			</ChartContainer>
 		</div>
 
@@ -52,25 +43,17 @@
 				margin={{ top: 10, right: 50, bottom: 25, left: 75 }}
 				yDisableZoom
 			>
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<LineMark
-								table="timeseries"
-								x="ts"
-								y="value"
-								stroke="grp"
-								strokeWidth={1}
-								preferredXScaleType="time"
-							/>
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<LineMark
+					table="timeseries"
+					x="ts"
+					y="value"
+					stroke="grp"
+					strokeWidth={1}
+					preferredXScaleType="time"
+				/>
 
-				{#snippet interactors()}
-					<IntervalX selection="brush" />
-					<DerivedIntervalX sourceSelection="brush" selection="comparison" offset="-1yw" />
-				{/snippet}
+				<IntervalX selection="brush" />
+				<DerivedIntervalX sourceSelection="brush" selection="comparison" offset="-1yw" />
 			</ChartContainer>
 		</div>
 
@@ -79,74 +62,58 @@
 			<div class="hourly-chart">
 				<h3>Selected period</h3>
 				<ChartContainer xLabel="hour" yLabel="kWh">
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<AreaMarkY
-									table="timeseries"
-									x="hour"
-									y1={min('value')}
-									y2={max('value')}
-									fill="grp"
-									fillOpacity={0.15}
-									selection="brush"
-									curve="monotone"
-								/>
-								<LineMark
-									table="timeseries"
-									x="hour"
-									y={avg('value')}
-									stroke="grp"
-									strokeWidth={2}
-									selection="brush"
-									curve="monotone"
-									tooltipProximity="x"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<AreaMarkY
+						table="timeseries"
+						x="hour"
+						y1={min('value')}
+						y2={max('value')}
+						fill="grp"
+						fillOpacity={0.15}
+						selection="brush"
+						curve="monotone"
+					/>
+					<LineMark
+						table="timeseries"
+						x="hour"
+						y={avg('value')}
+						stroke="grp"
+						strokeWidth={2}
+						selection="brush"
+						curve="monotone"
+						tooltipProximity="x"
+					/>
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 
 			<div class="hourly-chart">
 				<h3>Comparison period</h3>
 				<ChartContainer xLabel="hour" yLabel="kWh">
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								<Grid />
-								<AreaMarkY
-									table="timeseries"
-									x="hour"
-									y1={min('value')}
-									y2={max('value')}
-									fill="grp"
-									fillOpacity={0.15}
-									selection="comparison"
-									curve="monotone"
-								/>
-								<LineMark
-									table="timeseries"
-									x="hour"
-									y={avg('value')}
-									stroke="grp"
-									strokeWidth={2}
-									selection="comparison"
-									curve="monotone"
-									tooltipProximity="x"
-								/>
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+					<Grid />
+					<AreaMarkY
+						table="timeseries"
+						x="hour"
+						y1={min('value')}
+						y2={max('value')}
+						fill="grp"
+						fillOpacity={0.15}
+						selection="comparison"
+						curve="monotone"
+					/>
+					<LineMark
+						table="timeseries"
+						x="hour"
+						y={avg('value')}
+						stroke="grp"
+						strokeWidth={2}
+						selection="comparison"
+						curve="monotone"
+						tooltipProximity="x"
+					/>
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 				</ChartContainer>
 			</div>
 		</div>

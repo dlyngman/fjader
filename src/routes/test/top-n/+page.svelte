@@ -8,7 +8,6 @@
 		AxisLeft,
 		AxisBottom,
 		MarginLabel,
-		WebGPUCanvas,
 		BarMarkY,
 		BarMarkX,
 		Legend
@@ -94,26 +93,18 @@
 				<p class="desc">All 10 bars visible, sorted by revenue descending. No transforms.</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Sales Category" yLabel="Revenue">
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkY
-										table="top_n_sales"
-										x="category"
-										y={sum('revenue')}
-										sort={{ x: 'y', order: 'desc' }}
-										tooltip
-									/>
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<BarMarkY
+							table="top_n_sales"
+							x="category"
+							y={sum('revenue')}
+							sort={{ x: 'y', order: 'desc' }}
+							tooltip
+						/>
 					</ChartContainer>
 				</div>
 			</div>
@@ -127,27 +118,19 @@
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Top 5 Category" yLabel="Revenue">
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkY
-										table="top_n_sales"
-										x="category"
-										y={sum('revenue')}
-										sort={{ x: 'y', order: 'desc' }}
-										transforms={[topN(5)]}
-										tooltip
-									/>
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<BarMarkY
+							table="top_n_sales"
+							x="category"
+							y={sum('revenue')}
+							sort={{ x: 'y', order: 'desc' }}
+							transforms={[topN(5)]}
+							tooltip
+						/>
 					</ChartContainer>
 				</div>
 			</div>
@@ -161,27 +144,19 @@
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Top 5+ Category" yLabel="Revenue">
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkY
-										table="top_n_sales"
-										x="category"
-										y={sum('revenue')}
-										sort={{ x: 'y', order: 'desc' }}
-										transforms={[topN(5, { includeOthers: true })]}
-										tooltip
-									/>
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<BarMarkY
+							table="top_n_sales"
+							x="category"
+							y={sum('revenue')}
+							sort={{ x: 'y', order: 'desc' }}
+							transforms={[topN(5, { includeOthers: true })]}
+							tooltip
+						/>
 					</ChartContainer>
 				</div>
 			</div>
@@ -195,27 +170,19 @@
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Revenue" yLabel="Sales Category">
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkX
-										table="top_n_sales"
-										x={sum('revenue')}
-										y="category"
-										sort={{ y: 'x', order: 'desc' }}
-										transforms={[topN(3)]}
-										tooltip
-									/>
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<BarMarkX
+							table="top_n_sales"
+							x={sum('revenue')}
+							y="category"
+							sort={{ y: 'x', order: 'desc' }}
+							transforms={[topN(3)]}
+							tooltip
+						/>
 					</ChartContainer>
 				</div>
 			</div>
@@ -232,31 +199,21 @@
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue">
 						<Legend color="region" selection="brush" />
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkY
-										table="top_n_by_region"
-										x="category"
-										y={sum('revenue')}
-										fill="region"
-										sort={{ x: 'y', order: 'desc' }}
-										selection="brush"
-										tooltip
-									/>
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
-						{#snippet interactors()}
-							<Toggle selection="brush" field="region" />
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<BarMarkY
+							table="top_n_by_region"
+							x="category"
+							y={sum('revenue')}
+							fill="region"
+							sort={{ x: 'y', order: 'desc' }}
+							selection="brush"
+							tooltip
+						/>
+						<Toggle selection="brush" field="region" />
 					</ChartContainer>
 				</div>
 			</div>
@@ -275,33 +232,23 @@
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue">
 						<Legend color="region" selection="brush" />
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkY
-										table="top_n_by_region"
-										x="category"
-										y={sum('revenue')}
-										fill="region"
-										sort={{ x: 'y', order: 'desc' }}
-										selection="brush"
-										selectionResponse="filter"
-										transforms={[topN(5)]}
-										tooltip
-									/>
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
-						{#snippet interactors()}
-							<Toggle selection="brush" field="region" />
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<BarMarkY
+							table="top_n_by_region"
+							x="category"
+							y={sum('revenue')}
+							fill="region"
+							sort={{ x: 'y', order: 'desc' }}
+							selection="brush"
+							selectionResponse="filter"
+							transforms={[topN(5)]}
+							tooltip
+						/>
+						<Toggle selection="brush" field="region" />
 					</ChartContainer>
 				</div>
 			</div>
@@ -317,32 +264,22 @@
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category" yLabel="Revenue">
 						<Legend color="region" selection="brush" />
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkY
-										table="top_n_by_region"
-										x="category"
-										y={sum('revenue')}
-										fill="region"
-										sort={{ x: 'y', order: 'desc' }}
-										selection="brush"
-										transforms={[topN(5, { includeOthers: true })]}
-										tooltip
-									/>
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
-						{#snippet interactors()}
-							<Toggle selection="brush" field="region" />
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<BarMarkY
+							table="top_n_by_region"
+							x="category"
+							y={sum('revenue')}
+							fill="region"
+							sort={{ x: 'y', order: 'desc' }}
+							selection="brush"
+							transforms={[topN(5, { includeOthers: true })]}
+							tooltip
+						/>
+						<Toggle selection="brush" field="region" />
 					</ChartContainer>
 				</div>
 			</div>
@@ -357,33 +294,23 @@
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Revenue" yLabel="Category">
 						<Legend color="region" selection="brush" />
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkX
-										table="top_n_by_region"
-										x={sum('revenue')}
-										y="category"
-										fill="region"
-										sort={{ y: 'x', order: 'desc' }}
-										selection="brush"
-										selectionResponse="filter"
-										transforms={[topN(5)]}
-										tooltip
-									/>
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
-						{#snippet interactors()}
-							<Toggle selection="brush" field="region" />
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<BarMarkX
+							table="top_n_by_region"
+							x={sum('revenue')}
+							y="category"
+							fill="region"
+							sort={{ y: 'x', order: 'desc' }}
+							selection="brush"
+							selectionResponse="filter"
+							transforms={[topN(5)]}
+							tooltip
+						/>
+						<Toggle selection="brush" field="region" />
 					</ChartContainer>
 				</div>
 			</div>
@@ -397,33 +324,23 @@
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Revenue" yLabel="Category">
 						<Legend color="region" selection="brush" />
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkX
-										table="top_n_by_region"
-										x={sum('revenue')}
-										y="category"
-										fill="region"
-										sort={{ y: 'x', order: 'desc' }}
-										selection="brush"
-										selectionResponse="filter"
-										transforms={[topN(5, { includeOthers: true })]}
-										tooltip
-									/>
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
-						{#snippet interactors()}
-							<Toggle selection="brush" field="region" />
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<BarMarkX
+							table="top_n_by_region"
+							x={sum('revenue')}
+							y="category"
+							fill="region"
+							sort={{ y: 'x', order: 'desc' }}
+							selection="brush"
+							selectionResponse="filter"
+							transforms={[topN(5, { includeOthers: true })]}
+							tooltip
+						/>
+						<Toggle selection="brush" field="region" />
 					</ChartContainer>
 				</div>
 			</div>
@@ -439,32 +356,22 @@
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category (with NULL)" yLabel="Revenue">
 						<Legend color="category" selection="nulls" />
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkY
-										table="top_n_nulls"
-										x="category"
-										y={sum('revenue')}
-										fill="category"
-										sort={{ x: 'y', order: 'desc' }}
-										selection="nulls"
-										transforms={[topN(5, { includeOthers: true })]}
-										tooltip
-									/>
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
-						{#snippet interactors()}
-							<Toggle selection="nulls" field="category" />
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<BarMarkY
+							table="top_n_nulls"
+							x="category"
+							y={sum('revenue')}
+							fill="category"
+							sort={{ x: 'y', order: 'desc' }}
+							selection="nulls"
+							transforms={[topN(5, { includeOthers: true })]}
+							tooltip
+						/>
+						<Toggle selection="nulls" field="category" />
 					</ChartContainer>
 				</div>
 			</div>
@@ -479,33 +386,23 @@
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Category (NULL dropped)" yLabel="Revenue">
 						<Legend color="category" selection="nulls-drop" />
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkY
-										table="top_n_nulls"
-										x="category"
-										y={sum('revenue')}
-										fill="category"
-										sort={{ x: 'y', order: 'desc' }}
-										selection="nulls-drop"
-										transforms={[topN(5, { includeOthers: true })]}
-										nulls="drop"
-										tooltip
-									/>
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
-						{#snippet interactors()}
-							<Toggle selection="nulls-drop" field="category" />
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<BarMarkY
+							table="top_n_nulls"
+							x="category"
+							y={sum('revenue')}
+							fill="category"
+							sort={{ x: 'y', order: 'desc' }}
+							selection="nulls-drop"
+							transforms={[topN(5, { includeOthers: true })]}
+							nulls="drop"
+							tooltip
+						/>
+						<Toggle selection="nulls-drop" field="category" />
 					</ChartContainer>
 				</div>
 			</div>
@@ -523,31 +420,21 @@
 				</p>
 				<div class="chart-wrapper">
 					<ChartContainer xLabel="Every category" yLabel="Revenue">
-						{#snippet background()}
-							<Frame />
-							<AxisLeft />
-							<AxisBottom />
-							<MarginLabel />
-						{/snippet}
-						{#snippet canvas()}
-							<WebGPUCanvas>
-								{#snippet canvasComponents()}
-									<Grid />
-									<BarMarkY
-										table="top_n_nulls"
-										x="category"
-										y={sum('revenue')}
-										fill="category"
-										sort={{ x: 'y', order: 'desc' }}
-										selection="nulls"
-										tooltip
-									/>
-								{/snippet}
-							</WebGPUCanvas>
-						{/snippet}
-						{#snippet interactors()}
-							<Toggle selection="nulls" field="category" />
-						{/snippet}
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<MarginLabel />
+						<Grid />
+						<BarMarkY
+							table="top_n_nulls"
+							x="category"
+							y={sum('revenue')}
+							fill="category"
+							sort={{ x: 'y', order: 'desc' }}
+							selection="nulls"
+							tooltip
+						/>
+						<Toggle selection="nulls" field="category" />
 					</ChartContainer>
 				</div>
 			</div>

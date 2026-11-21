@@ -5,7 +5,6 @@
 		AxisLeft,
 		AxisBottom,
 		MarginLabel,
-		WebGPUCanvas,
 		DotsMark,
 		BarMarkY,
 		LineMark,
@@ -21,31 +20,21 @@
 	<h2>Faceted Dots — fx="species"</h2>
 	<div class="chart-wrapper">
 		<ChartContainer xLabel="bill_length" yLabel="bill_depth" fx="species">
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<Grid />
-						<DotsMark
-							table="penguins"
-							x="bill_length"
-							y="bill_depth"
-							fill="species"
-							r={4}
-							opacity={0.7}
-						/>
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
-			{#snippet background()}
-				<Frame />
-				<AxisLeft />
-				<AxisBottom />
-				<MarginLabel anchor="bottom" label="Bill Length (mm)" />
-				<MarginLabel anchor="left" label="Bill Depth (mm)" />
-			{/snippet}
-			{#snippet foreground()}
-				<Crosshair />
-			{/snippet}
+			<Grid />
+			<DotsMark
+				table="penguins"
+				x="bill_length"
+				y="bill_depth"
+				fill="species"
+				r={4}
+				opacity={0.7}
+			/>
+			<Frame />
+			<AxisLeft />
+			<AxisBottom />
+			<MarginLabel anchor="bottom" label="Bill Length (mm)" />
+			<MarginLabel anchor="left" label="Bill Depth (mm)" />
+			<Crosshair />
 		</ChartContainer>
 	</div>
 
@@ -53,24 +42,14 @@
 	<h2>Faceted Bars — fx="species"</h2>
 	<div class="chart-wrapper">
 		<ChartContainer xLabel="island" yLabel="count" fx="species">
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<Grid axis="y" />
-						<BarMarkY table="penguins" x="island" y={count()} fill="island" opacity={0.8} />
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
-			{#snippet background()}
-				<Frame />
-				<AxisLeft />
-				<AxisBottom />
-				<MarginLabel anchor="bottom" label="Island" />
-				<MarginLabel anchor="left" label="Count" />
-			{/snippet}
-			{#snippet foreground()}
-				<Crosshair />
-			{/snippet}
+			<Grid axis="y" />
+			<BarMarkY table="penguins" x="island" y={count()} fill="island" opacity={0.8} />
+			<Frame />
+			<AxisLeft />
+			<AxisBottom />
+			<MarginLabel anchor="bottom" label="Island" />
+			<MarginLabel anchor="left" label="Count" />
+			<Crosshair />
 		</ChartContainer>
 	</div>
 
@@ -78,24 +57,14 @@
 	<h2>Faceted Lines — fx="series"</h2>
 	<div class="chart-wrapper">
 		<ChartContainer xLabel="x" yLabel="y" fx="series">
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<Grid />
-						<LineMark table="facet_timeseries" x="x" y="y" stroke="series" strokeWidth={2} />
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
-			{#snippet background()}
-				<Frame />
-				<AxisLeft />
-				<AxisBottom />
-				<MarginLabel anchor="bottom" label="X" />
-				<MarginLabel anchor="left" label="Y" />
-			{/snippet}
-			{#snippet foreground()}
-				<Crosshair />
-			{/snippet}
+			<Grid />
+			<LineMark table="facet_timeseries" x="x" y="y" stroke="series" strokeWidth={2} />
+			<Frame />
+			<AxisLeft />
+			<AxisBottom />
+			<MarginLabel anchor="bottom" label="X" />
+			<MarginLabel anchor="left" label="Y" />
+			<Crosshair />
 		</ChartContainer>
 	</div>
 
@@ -103,31 +72,21 @@
 	<h2>Faceted Area — fx="series"</h2>
 	<div class="chart-wrapper">
 		<ChartContainer xLabel="x" yLabel="y" fx="series">
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<Grid />
-						<AreaMarkY
-							table="facet_timeseries"
-							x="x"
-							y="y"
-							fill="series"
-							fillOpacity={0.4}
-							strokeWidth={1.5}
-						/>
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
-			{#snippet background()}
-				<Frame />
-				<AxisLeft />
-				<AxisBottom />
-				<MarginLabel anchor="bottom" label="X" />
-				<MarginLabel anchor="left" label="Y" />
-			{/snippet}
-			{#snippet foreground()}
-				<Crosshair />
-			{/snippet}
+			<Grid />
+			<AreaMarkY
+				table="facet_timeseries"
+				x="x"
+				y="y"
+				fill="series"
+				fillOpacity={0.4}
+				strokeWidth={1.5}
+			/>
+			<Frame />
+			<AxisLeft />
+			<AxisBottom />
+			<MarginLabel anchor="bottom" label="X" />
+			<MarginLabel anchor="left" label="Y" />
+			<Crosshair />
 		</ChartContainer>
 	</div>
 
@@ -150,24 +109,16 @@
 			fx="species_ordered"
 			fxDomain={['Gentoo', 'Adelie', 'Chinstrap']}
 		>
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<Grid />
-						<BarMarkY
-							table="penguins_fx_ordered"
-							x="species_ordered"
-							y={count()}
-							fill="species_ordered"
-						/>
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
-			{#snippet background()}
-				<Frame />
-				<AxisLeft />
-				<AxisBottom />
-			{/snippet}
+			<Grid />
+			<BarMarkY
+				table="penguins_fx_ordered"
+				x="species_ordered"
+				y={count()}
+				fill="species_ordered"
+			/>
+			<Frame />
+			<AxisLeft />
+			<AxisBottom />
 		</ChartContainer>
 	</div>
 </div>

@@ -10,7 +10,6 @@
 		AxisBottom,
 		MarginLabel,
 		Crosshair,
-		WebGPUCanvas,
 		DotsMark,
 		BarMarkX,
 		BarMarkY
@@ -81,36 +80,26 @@
 		{#each chartConfig as config, i (config.id)}
 			<div class="chart-wrapper">
 				<ChartContainer xLabel={config.x} yLabel={config.y}>
-					{#snippet background()}
-						<!-- <Grid /> -->
-						<Frame />
-						<AxisLeft />
-						<AxisBottom />
-						<MarginLabel />
-					{/snippet}
+					<!-- <Grid /> -->
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<MarginLabel />
 
-					{#snippet canvas()}
-						<WebGPUCanvas>
-							{#snippet canvasComponents()}
-								{#if webGPU}
-									<Grid />
+					{#if webGPU}
+						<Grid />
 
-									<DotsMark
-										table="penguins"
-										x={config.x}
-										y={config.y}
-										fill="species"
-										opacity={0.5}
-										r={10}
-									/>
-								{/if}
-							{/snippet}
-						</WebGPUCanvas>
-					{/snippet}
+						<DotsMark
+							table="penguins"
+							x={config.x}
+							y={config.y}
+							fill="species"
+							opacity={0.5}
+							r={10}
+						/>
+					{/if}
 
-					{#snippet foreground()}
-						<Crosshair />
-					{/snippet}
+					<Crosshair />
 
 					{#snippet overlay()}
 						{#if i === 0}
@@ -125,13 +114,7 @@
 	<div class="charts-container">
 		<div class="chart-wrapper">
 			<ChartContainer xLabel="body_mass" yLabel="species">
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<BarMarkX table="penguins" x="body_mass" y="species" fill="species" />
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<BarMarkX table="penguins" x="body_mass" y="species" fill="species" />
 			</ChartContainer>
 		</div>
 	</div>
@@ -139,13 +122,7 @@
 		<div class="chart-wrapper">
 			<!-- <ChartContainer yLabel="body_mass" xLabel="species"> -->
 			<ChartContainer>
-				{#snippet canvas()}
-					<WebGPUCanvas>
-						{#snippet canvasComponents()}
-							<BarMarkY table="penguins" y="body_mass" x="species" fill="species" />
-						{/snippet}
-					</WebGPUCanvas>
-				{/snippet}
+				<BarMarkY table="penguins" y="body_mass" x="species" fill="species" />
 			</ChartContainer>
 		</div>
 	</div>

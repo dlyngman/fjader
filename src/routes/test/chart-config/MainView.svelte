@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ChartContainer, DotsMark, WebGPUCanvas, Grid, Crosshair } from '$lib/components';
+	import { ChartContainer, DotsMark, Grid, Crosshair } from '$lib/components';
 	import type { ChartConfig, MarkEntry } from '$lib/config';
 	import ConfigCapture from './ConfigCapture.svelte';
 
@@ -150,24 +150,10 @@
 
 	<div class="chart-container">
 		<ChartContainer xLabel="bill_length" yLabel="body_mass">
-			{#snippet canvas()}
-				<WebGPUCanvas>
-					{#snippet canvasComponents()}
-						<Grid />
-						<DotsMark
-							table="penguins"
-							x="bill_length"
-							y="body_mass"
-							r={3}
-							opacity={upstreamOpacity}
-						/>
-						<ConfigCapture onConfig={(cfg) => (chartConfig = cfg)} onMounted={() => mountCount++} />
-					{/snippet}
-				</WebGPUCanvas>
-			{/snippet}
-			{#snippet foreground()}
-				<Crosshair />
-			{/snippet}
+			<Grid />
+			<DotsMark table="penguins" x="bill_length" y="body_mass" r={3} opacity={upstreamOpacity} />
+			<ConfigCapture onConfig={(cfg) => (chartConfig = cfg)} onMounted={() => mountCount++} />
+			<Crosshair />
 		</ChartContainer>
 	</div>
 </div>
