@@ -36,7 +36,7 @@
 	const cases: Case[] = [
 		{
 			title: '1. Brush and legend on top',
-			desc: 'A brush on x and an auto-detected legend (legend: true) above the plot. Brush: case 2 filters by it; click a species in the legend: both charts follow.',
+			desc: 'A brush on x and an auto-detected legend (legend: true) above the plot. Brush: case 2’s bars filter by it. Click a species in the legend: case 1 dims the other species, and case 2’s island bars get shorter (only that species is counted); their colours stay, since they are coloured by island.',
 			spec: {
 				height: 320,
 				xLabel: 'bill_length',
@@ -78,7 +78,7 @@
 		},
 		{
 			title: '3. A facet grid with a brush',
-			desc: 'Faceted by species, with a 2D brush: one rectangle for the chart, drawn in every cell, one selection (the bars below count it). Before, each cell had its own.',
+			desc: 'Faceted by species, with a 2D brush: one rectangle for the chart, drawn in every cell, writing one selection; case 3b counts what it selects. A brush does not filter its own chart.',
 			spec: {
 				height: 280,
 				xLabel: 'bill_length',
