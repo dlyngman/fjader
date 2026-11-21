@@ -16,7 +16,10 @@
 	 * for the chart (the declared field's, and one per band axis field), from
 	 * what every cell shares (DeclarationChart); each cell (ToggleCell) only
 	 * calls their activators when hovered and turns its clicks into toggles. In a
-	 * facet grid every cell toggles the same registrations.
+	 * facet grid every cell toggles the same registrations. Once per chart as a
+	 * chart's child; in a per-cell snippet (an `interactors` snippet, as
+	 * PlotFromSpec places it until the snippets go) the declaration itself is per
+	 * cell, so it registers once per cell, as before.
 	 *
 	 * Toggles on different fields AND together. The chart skips its own toggles
 	 * (crossfilter): its marks that read the toggled field dim, the rest keep
@@ -60,7 +63,12 @@
 	// Destroying the declared registration clears its selection when it was the
 	// last control for it; a selection a legend still shows stays. The band
 	// label registrations destroy their own.
-	onDestroy(() => declared.destroy());
+	onDestroy(() => {
+		// Out of the list first: a cell unmounting a flush later must not
+		// activate a destroyed registration.
+		shared.activators.delete(declared.activate);
+		declared.destroy();
+	});
 
 	declareOverlay(cell, { slot: 'interactors' });
 </script>

@@ -6,9 +6,11 @@
  * reads no CELL context (a cell's size, hover point, place in the grid: in a
  * facet grid a declaration sits in the hidden pass-through, in no cell), only
  * the chart's (`DeclarationChart`: its config and shared scales); what it
- * needs per cell runs in what each cell draws it with. GPU declarations (`AxisLeft`, `AxisBottom`, `ParallelAxes`,
- * `Frame`) register getters over their props, drawn in the cell's
- * `WebGPUCanvas` (`GpuAxis`, `GpuParallelAxes`, `PlotBorderRenderer`). Overlays
+ * needs per cell runs in what each cell draws it with.
+ *
+ * GPU declarations (`AxisLeft`, `AxisBottom`, `ParallelAxes`, `Frame`)
+ * register getters over their props, drawn in the cell's `WebGPUCanvas`
+ * (`GpuAxis`, `GpuParallelAxes`, `PlotBorderRenderer`). Overlays
  * (`Crosshair`, `MarginLabel`, `AxisCenter`, `SvgLayer`, the brushes, `Toggle`)
  * register a snippet the cell renders in its foreground SVG (`declareOverlay`).
  *
@@ -234,7 +236,12 @@ export function declareOverlay(
 /**
  * Declare `spec` in the chart this component is placed in, for the cell its
  * scope names (or every cell), until the component is destroyed. Call during
- * component initialisation. Outside a chart, nothing is declared.
+ * component initialisation.
+ *
+ * Outside a chart: a declaration that only declares (an axis, Frame, an
+ * overlay) declares nothing and draws nothing, as its SVG ancestor did; one
+ * that needs the chart to work (a Toggle: its registrations name the chart)
+ * throws, through getDeclarationChart, since it could never do anything there.
  */
 export function declareInChart<K extends DeclarationKind>(kind: K, spec: Specs[K]): void {
 	const registry = getContext<DeclarationRegistry | undefined>(DECLARATION_REGISTRY);

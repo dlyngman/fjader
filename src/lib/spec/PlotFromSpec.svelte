@@ -100,7 +100,9 @@
 		{/snippet}
 
 		{#snippet interactors()}
-			{#each spec.interactors ?? [] as interactor, i (i)}
+			<!-- Keyed by what each interactor is (type, fields, selection), not by
+			     position: an interactor reads them once, so a changed spec remounts it. -->
+			{#each spec.interactors ?? [] as interactor, i (`${i}:${selectionName}:${JSON.stringify(interactor)}`)}
 				{#if interactor.interactor === 'intervalX'}
 					<IntervalX
 						selection={interactor.selection ?? selectionName ?? undefined}
