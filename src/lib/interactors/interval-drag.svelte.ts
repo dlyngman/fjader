@@ -7,26 +7,27 @@ import type { ChartContext, D3Scale } from '$lib/types';
 export type DragScale = D3Scale;
 
 /** What a drag writes: the selection a brush holds, and its removal. */
-export interface DragSink<R extends (...args: number[]) => void> {
-	/** The range changed (deduplicated, min before max): write the clause. */
+export interface DragSink<R extends (...args: number[]) => boolean> {
+	/**
+	 * The range changed (deduplicated, min before max): write the clause. True
+	 * if it wrote; false (no column yet, destroyed) leaves the range unwritten,
+	 * so the next emit of the same range tries again.
+	 */
 	range: R;
 	/** The range is gone: take the clause down. */
 	clear(): void;
 }
 
-export type Range1D = (min: number, max: number) => void;
-export type Range2D = (x0: number, x1: number, y0: number, y1: number) => void;
-
-/** Plain `{ domain }` as the brush state validates against. */
-const asScale = (domain: ArrayLike<number>) => ({ domain: () => [domain[0], domain[1]] });
+export type Range1D = (min: number, max: number) => boolean;
+export type Range2D = (x0: number, x1: number, y0: number, y1: number) => boolean;
 
 /**
  * A one-axis brush's drag, held once per chart and driven by its cells.
  *
  * The range is in data space, so every cell draws it with its own scale. A drag
  * belongs to the cell that pressed (`owner`, its chart context): a press in
- * another cell is declined until it ends, and moves or releases from another
- * cell are not its own. Pointer capture stays with the cell, which owns the
+ * another cell is declined until it ends (`held`), and moves or releases from
+ * another cell are not its own. Pointer capture stays with the cell, which owns the
  * element. Allocation-free per move.
  */
 export class IntervalDrag1D {
@@ -45,6 +46,11 @@ export class IntervalDrag1D {
 	/** Whether `owner` (a cell) holds the drag. */
 	owns(owner: object): boolean {
 		return this.#owner === owner;
+	}
+
+	/** Whether any cell holds a drag. */
+	get held(): boolean {
+		return this.#owner !== null;
 	}
 
 	/**
@@ -104,11 +110,15 @@ export class IntervalDrag1D {
 		return true;
 	}
 
-	/** The owner's press was re-routed (pan mode) or its cell went away: keep the drag as it stands. */
+	/**
+	 * The owner's press ends without a release: re-routed (pan mode), capture
+	 * lost or failed, or its cell went away. The drag stays as it stands, and
+	 * writes nothing more: every move already wrote it.
+	 */
 	abandon(owner: object): void {
 		if (owner !== this.#owner) return;
 		this.#owner = null;
-		this.#endDrag();
+		this.#idle();
 	}
 
 	/** Shift+wheel on the rectangle: scale it about its centre. */
@@ -132,7 +142,7 @@ export class IntervalDrag1D {
 	/** Clear the brush when the domain no longer holds it. */
 	validate(domain: ArrayLike<number>): void {
 		// Always as 'linear': fjader's time scales use float offsets, not Dates.
-		if (this.brush.active && !this.brush.validate(asScale(domain), 'linear')) this.clear();
+		if (this.brush.active && !this.brush.validate(domain[0], domain[1], 'linear')) this.clear();
 	}
 
 	/** Write the range if it changed. */
@@ -144,9 +154,9 @@ export class IntervalDrag1D {
 		const min = Math.min(a, b);
 		const max = Math.max(a, b);
 		if (closeTo(min, this.#lastMin) && closeTo(max, this.#lastMax)) return;
+		if (!this.#sink.range(min, max)) return;
 		this.#lastMin = min;
 		this.#lastMax = max;
-		this.#sink.range(min, max);
 	}
 
 	clear(): void {
@@ -157,11 +167,13 @@ export class IntervalDrag1D {
 	}
 
 	#endDrag(): void {
-		if (this.brush.phase !== 'idle') {
-			this.emit();
-			this.brush.phase = 'idle';
-			this.brush.resizeEdge = null;
-		}
+		if (this.brush.phase !== 'idle') this.emit();
+		this.#idle();
+	}
+
+	#idle(): void {
+		this.brush.phase = 'idle';
+		this.brush.resizeEdge = null;
 		this.#hasDragged = false;
 	}
 }
@@ -183,6 +195,10 @@ export class IntervalDrag2D {
 
 	owns(owner: object): boolean {
 		return this.#owner === owner;
+	}
+
+	get held(): boolean {
+		return this.#owner !== null;
 	}
 
 	press(owner: object, x: number, y: number, handle: BrushHandle | null): boolean {
@@ -262,7 +278,7 @@ export class IntervalDrag2D {
 	abandon(owner: object): void {
 		if (owner !== this.#owner) return;
 		this.#owner = null;
-		this.#endDrag();
+		this.#idle();
 	}
 
 	zoom(scaleFactor: number): void {
@@ -288,8 +304,8 @@ export class IntervalDrag2D {
 		const { brush } = this;
 		if (!brush.active) return;
 		// Both checked: validate() clears its own axis when out of range.
-		const xBad = xDomain != null && !brush.x.validate(asScale(xDomain), 'linear');
-		const yBad = yDomain != null && !brush.y.validate(asScale(yDomain), 'linear');
+		const xBad = xDomain != null && !brush.x.validate(xDomain[0], xDomain[1], 'linear');
+		const yBad = yDomain != null && !brush.y.validate(yDomain[0], yDomain[1], 'linear');
 		if (xBad || yBad) this.clear();
 	}
 
@@ -309,11 +325,11 @@ export class IntervalDrag2D {
 			closeTo(y1, last[3])
 		)
 			return;
+		if (!this.#sink.range(x0, x1, y0, y1)) return;
 		last[0] = x0;
 		last[1] = x1;
 		last[2] = y0;
 		last[3] = y1;
-		this.#sink.range(x0, x1, y0, y1);
 	}
 
 	clear(): void {
@@ -323,31 +339,62 @@ export class IntervalDrag2D {
 	}
 
 	#endDrag(): void {
+		if (this.brush.phase !== 'idle') this.emit();
+		this.#idle();
+	}
+
+	#idle(): void {
 		const { brush } = this;
-		if (brush.phase !== 'idle') {
-			this.emit();
-			brush.phase = 'idle';
-			brush.resizeCorner = null;
-			brush.x.resizeEdge = null;
-			brush.y.resizeEdge = null;
-		}
+		brush.phase = 'idle';
+		brush.resizeCorner = null;
+		brush.x.resizeEdge = null;
+		brush.y.resizeEdge = null;
 		this.#hasDragged = false;
 	}
 }
 
 /**
+ * The pixels a brush spans, for preagg (bins per pixel): the inner size of the
+ * cell that last activated the brush or pressed in it. A facet cell is smaller
+ * than the chart, and cells measure themselves, so only a cell can say.
+ * Unfaceted, it is the one cell. When that cell goes away, its last size is
+ * kept: the clause outlives it, and a 0-pixel view would fail every table.
+ */
+export class CellPixels {
+	#cell: ChartContext | null = null;
+	#width = 0;
+	#height = 0;
+
+	/** From now on, measure in `cell`. */
+	use(cell: ChartContext): void {
+		this.#cell = cell;
+	}
+
+	/** `cell` is going away: keep its size if it is the one measured in. */
+	release(cell: ChartContext): void {
+		if (this.#cell !== cell) return;
+		this.#width = cell.innerWidth;
+		this.#height = cell.innerHeight;
+		this.#cell = null;
+	}
+
+	/** 0 before any cell activated the brush. */
+	get width(): number {
+		return this.#cell ? this.#cell.innerWidth : this.#width;
+	}
+
+	get height(): number {
+		return this.#cell ? this.#cell.innerHeight : this.#height;
+	}
+}
+
+/**
  * What a brush declaration holds once for its chart and hands to each of its
- * cells: the drag, and the cell whose pixels the selection is measured in.
+ * cells: the drag, and the pixels the selection is measured in.
  */
 export interface IntervalShared<D> {
 	readonly drag: D;
-	/**
-	 * The cell that last activated the brush or pressed in it, or null before
-	 * any did. Its inner size is the brush's pixel extent for preagg (bins per
-	 * pixel): a facet cell is smaller than the chart, and cells measure
-	 * themselves, so only a cell can say. Unfaceted, it is the one cell.
-	 */
-	activeCell: ChartContext | null;
+	readonly pixels: CellPixels;
 	/** The registration's activator. */
 	readonly activate: () => void;
 }

@@ -11,7 +11,7 @@
 	import type { FieldRef } from '$lib/types';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 	import { buildColumnRef } from './brush-utils';
-	import { IntervalDrag2D, type IntervalShared } from './interval-drag.svelte';
+	import { CellPixels, IntervalDrag2D, type IntervalShared } from './interval-drag.svelte';
 	import Interval2DCell from './Interval2DCell.svelte';
 
 	/**
@@ -53,28 +53,30 @@
 
 	const drag = new IntervalDrag2D({
 		range(x0, x1, y0, y1) {
-			if (!live || !xColumnRef || !yColumnRef) return;
+			if (!live || !xColumnRef || !yColumnRef) return false;
 			const predicate = and([isBetween(xColumnRef, [x0, x1]), isBetween(yColumnRef, [y0, y1])]);
 			handle.update(predicate, [
 				[x0, x1],
 				[y0, y1]
 			]);
+			return true;
 		},
 		clear() {
 			if (live) handle.clear();
 		}
 	});
 
+	const pixels = new CellPixels();
 	const linear = (state: unknown) => (state instanceof LinearScaleState ? state : null);
 
 	const handle = filterGroup.register(source, {
 		// Its own chart is not filtered by it (crossfilter).
 		chart: chart.config,
 		activeDims: () => {
-			const cell = shared.activeCell;
 			const x = linear(chart.xScaleState);
 			const y = linear(chart.yScaleState);
-			if (!cell || !x || !y || !xColumnRef || !yColumnRef) return [];
+			// No pixels before a cell activated it: nothing to bin by.
+			if (!pixels.width || !x || !y || !xColumnRef || !yColumnRef) return [];
 			// Where each axis's domain is heading (the spring target), so a table
 			// built while it still moves fits the view it settles on.
 			return [
@@ -82,14 +84,14 @@
 					kind: 'bin',
 					columnRef: xColumnRef,
 					domain: x.domain.target,
-					pixelExtent: cell.innerWidth,
+					pixelExtent: pixels.width,
 					extent: x.effectiveExtent
 				},
 				{
 					kind: 'bin',
 					columnRef: yColumnRef,
 					domain: y.domain.target,
-					pixelExtent: cell.innerHeight,
+					pixelExtent: pixels.height,
 					extent: y.effectiveExtent
 				}
 			];
@@ -100,15 +102,14 @@
 			const x = linear(chart.xScaleState);
 			const y = linear(chart.yScaleState);
 			if (!x || !y) return;
-			const cell = shared.activeCell;
 			const xDomain = x.domain.targetBuffer;
 			out[0] = xDomain[0];
 			out[1] = xDomain[1];
-			out[2] = cell?.innerWidth ?? 0;
+			out[2] = pixels.width;
 			const yDomain = y.domain.targetBuffer;
 			out[3] = yDomain[0];
 			out[4] = yDomain[1];
-			out[5] = cell?.innerHeight ?? 0;
+			out[5] = pixels.height;
 		},
 		augment: (value) => ({
 			kind: 'range',
@@ -127,7 +128,7 @@
 
 	const shared: IntervalShared<IntervalDrag2D> = {
 		drag,
-		activeCell: null,
+		pixels,
 		activate: () => {
 			if (live) handle.activate();
 		}

@@ -20,18 +20,19 @@
 	const { drag } = shared;
 	const { brush } = drag;
 
-	/** This cell measures the brush's pixels from now on (IntervalShared.activeCell). */
+	/** This cell measures the brush's pixels from now on (CellPixels). */
 	const activate = () => {
-		shared.activeCell = chart;
+		shared.pixels.use(chart);
 		shared.activate();
 	};
 	chart.activators.add(activate);
 
 	onDestroy(() => {
 		chart.activators.delete(activate);
-		// A drag this cell held ends here; another cell measures from now on.
+		// A drag this cell held ends here; its size stays the brush's until
+		// another cell activates it.
 		drag.abandon(chart);
-		if (shared.activeCell === chart) shared.activeCell = null;
+		shared.pixels.release(chart);
 	});
 
 	let isPanModeActive = false;
@@ -59,13 +60,25 @@
 		return { x: cx0, y: cy0, width: cx1 - cx0, height: cy1 - cy0 };
 	});
 
-	/** A press: move or resize on the brush's handles, else draw; decline in pan mode. */
+	/**
+	 * A press: move or resize on the brush's handles, else draw; decline in pan
+	 * mode. While another cell's drag is under way (a second pointer), take the
+	 * press and do nothing, rather than let the cell pan.
+	 */
 	function handlePointerDown(target: Element, pointerId: number, innerPoint: Point) {
 		if (isPanModeActive) return false;
+		if (drag.held) return true;
 		const hit = brushHandleAt(target);
 		if (!drag.press(chart, innerPoint.x, innerPoint.y, hit?.handle ?? null)) return false;
-		shared.activeCell = chart;
-		target.setPointerCapture(pointerId);
+		try {
+			target.setPointerCapture(pointerId);
+		} catch {
+			// Without capture no release may reach this cell, and a drag held
+			// waiting for one would block the brush in every cell.
+			drag.abandon(chart);
+			return false;
+		}
+		shared.pixels.use(chart);
 		return true;
 	}
 

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { scaleLinear } from 'd3-scale';
-import { IntervalDrag1D, IntervalDrag2D, type DragScale } from './interval-drag.svelte';
+import { CellPixels, IntervalDrag1D, IntervalDrag2D, type DragScale } from './interval-drag.svelte';
+import type { ChartContext } from '$lib/types';
 
 /** 0–100 in data over 0–200 px: data = px / 2. */
 const scale = scaleLinear().domain([0, 100]).range([0, 200]) as unknown as DragScale;
@@ -8,7 +9,7 @@ const scale = scaleLinear().domain([0, 100]).range([0, 200]) as unknown as DragS
 const yScale = scaleLinear().domain([0, 100]).range([200, 0]) as unknown as DragScale;
 
 function drag1D() {
-	const sink = { range: vi.fn(), clear: vi.fn() };
+	const sink = { range: vi.fn((_min: number, _max: number) => true), clear: vi.fn() };
 	return { drag: new IntervalDrag1D(sink), sink };
 }
 
@@ -80,6 +81,36 @@ describe('IntervalDrag1D', () => {
 		expect(sink.range.mock.lastCall).toEqual([60, 80]);
 	});
 
+	it('a range the sink could not write (no column yet) is written by the next emit', () => {
+		const { drag, sink } = drag1D();
+		sink.range.mockReturnValueOnce(false);
+		drag.press(A, 40, null);
+		drag.move(A, 100, scale); // not written
+		drag.release(A); // the same range: written now, not skipped as a duplicate
+		expect(sink.range.mock.calls).toEqual([
+			[20, 50],
+			[20, 50]
+		]);
+	});
+
+	it('is held while a cell owns a drag', () => {
+		const { drag } = drag1D();
+		expect(drag.held).toBe(false);
+		drag.press(A, 40, null);
+		expect(drag.held).toBe(true);
+		drag.release(A);
+		expect(drag.held).toBe(false);
+	});
+
+	it('an abandoned drag writes nothing more', () => {
+		const { drag, sink } = drag1D();
+		drag.press(A, 40, null);
+		drag.move(A, 100, scale);
+		sink.range.mockClear();
+		drag.abandon(A);
+		expect(sink.range).not.toHaveBeenCalled();
+	});
+
 	it('a drag its cell abandons (pan mode, unmount) keeps what it drew', () => {
 		const { drag, sink } = drag1D();
 		drag.press(A, 40, null);
@@ -116,7 +147,10 @@ describe('IntervalDrag2D', () => {
 	const B = {};
 
 	it('draws a rectangle, declines other cells, and resizes by a corner', () => {
-		const sink = { range: vi.fn(), clear: vi.fn() };
+		const sink = {
+			range: vi.fn((_x0: number, _x1: number, _y0: number, _y1: number) => true),
+			clear: vi.fn()
+		};
 		const drag = new IntervalDrag2D(sink);
 		drag.press(A, 40, 160, null);
 		expect(drag.press(B, 0, 0, null)).toBe(false);
@@ -130,5 +164,22 @@ describe('IntervalDrag2D', () => {
 		drag.move(A, 140, 60, scale, yScale);
 		drag.release(A);
 		expect(round(sink.range.mock.lastCall!)).toEqual([20, 70, 20, 70]);
+	});
+});
+
+describe('CellPixels', () => {
+	const cell = (w: number, h: number) => ({ innerWidth: w, innerHeight: h }) as ChartContext;
+
+	it('measures in the cell in use, and keeps its size when it goes away', () => {
+		const pixels = new CellPixels();
+		expect([pixels.width, pixels.height]).toEqual([0, 0]);
+		const a = cell(200, 100);
+		const b = cell(300, 150);
+		pixels.use(a);
+		expect([pixels.width, pixels.height]).toEqual([200, 100]);
+		pixels.release(b); // not the one in use
+		pixels.use(b);
+		pixels.release(b);
+		expect([pixels.width, pixels.height]).toEqual([300, 150]);
 	});
 });

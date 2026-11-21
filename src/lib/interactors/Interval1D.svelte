@@ -11,7 +11,7 @@
 	import type { FieldRef } from '$lib/types';
 	import type { FilterGroupRegistry } from '$lib/query-engine/FilterGroupRegistry.svelte';
 	import { buildColumnRef } from './brush-utils';
-	import { IntervalDrag1D, type IntervalShared } from './interval-drag.svelte';
+	import { CellPixels, IntervalDrag1D, type IntervalShared } from './interval-drag.svelte';
 	import Interval1DCell from './Interval1DCell.svelte';
 
 	/**
@@ -61,9 +61,11 @@
 
 	const drag = new IntervalDrag1D({
 		range(min, max) {
-			if (!live) return;
+			if (!live) return false;
+			// The extent drives linked charts' domains even with no column to filter
+			// (setSelectionExtent skips an unchanged one).
 			if (scaleState instanceof LinearScaleState) scaleState.setSelectionExtent(min, max, 'brush');
-			write(min, max);
+			return write(min, max);
 		},
 		clear() {
 			if (!live) return;
@@ -72,11 +74,9 @@
 		}
 	});
 
-	/** The pixels the brush spans: the active cell's, or none before a cell activated it. */
-	const pixelExtent = () => {
-		const cell = shared.activeCell;
-		return cell ? (isX ? cell.innerWidth : cell.innerHeight) : 0;
-	};
+	const pixels = new CellPixels();
+	/** The pixels the brush spans (CellPixels): 0 before a cell activated it. */
+	const pixelExtent = () => (isX ? pixels.width : pixels.height);
 
 	const handle = filterGroup.register(source, {
 		// Its own chart is not filtered by it (crossfilter).
@@ -121,15 +121,17 @@
 
 	const shared: IntervalShared<IntervalDrag1D> = {
 		drag,
-		activeCell: null,
+		pixels,
 		activate: () => {
 			if (live) handle.activate();
 		}
 	};
 
-	function write(min: number, max: number) {
-		if (!columnRef) return;
+	/** Write the clause; false while the column is unknown. */
+	function write(min: number, max: number): boolean {
+		if (!columnRef) return false;
 		handle.update(isBetween(columnRef, [min, max]), [min, max]);
+		return true;
 	}
 
 	// Clear the brush when the shared scale's domain no longer holds it.
