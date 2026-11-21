@@ -1,6 +1,5 @@
 <script lang="ts">
 	import ChartContainer from '$lib/components/charts/ChartContainer.svelte';
-	import WebGPUCanvas from '$lib/components/rendering/WebGPUCanvas.svelte';
 	import { AxisBottom, AxisLeft, MarginLabel } from '$lib/components/axes';
 	import Frame from '$lib/components/background/Frame.svelte';
 	import { Grid } from '$lib/components/guides';
@@ -76,6 +75,51 @@
 		yDisableZoom={spec.yDisableZoom}
 		entrance={spec.entrance}
 	>
+		<!-- The chart's components as its children: each draws where it belongs,
+		     in every cell of a facet grid. The interactors register once for the
+		     chart, so a facet grid has one brush and one toggle, drawn in every cell. -->
+		<Frame />
+		<AxisLeft />
+		<AxisBottom />
+		<MarginLabel />
+		<Grid />
+		{#each resolvedMarks as { component: MarkComponent, props }, i (i)}
+			<MarkComponent {...props} />
+		{/each}
+		<Crosshair />
+		<!-- Keyed by what each interactor is (type, fields, selection), not by
+		     position: an interactor reads them once, so a changed spec remounts it. -->
+		{#each spec.interactors ?? [] as interactor, i (`${i}:${selectionName}:${JSON.stringify(interactor)}`)}
+			{#if interactor.interactor === 'intervalX'}
+				<IntervalX
+					selection={interactor.selection ?? selectionName ?? undefined}
+					field={interactor.field}
+				/>
+			{:else if interactor.interactor === 'intervalY'}
+				<IntervalY
+					selection={interactor.selection ?? selectionName ?? undefined}
+					field={interactor.field}
+				/>
+			{:else if interactor.interactor === 'interval2D'}
+				<Interval2D
+					selection={interactor.selection ?? selectionName ?? undefined}
+					xField={interactor.xField}
+					yField={interactor.yField}
+				/>
+			{:else if interactor.interactor === 'toggle'}
+				<Toggle
+					selection={interactor.selection ?? selectionName ?? undefined}
+					field={interactor.field}
+				/>
+			{:else if interactor.interactor === 'derivedInterval'}
+				<DerivedIntervalX
+					sourceSelection={interactor.source}
+					selection={interactor.selection}
+					offset={interactor.offset}
+					relayClauses={interactor.relayClauses}
+				/>
+			{/if}
+		{/each}
 		{#if legendConfig}
 			<Legend
 				color={legendConfig.color}
@@ -88,64 +132,6 @@
 				orientation={legendConfig.orientation ?? null}
 			/>
 		{/if}
-
-		{#snippet background()}
-			<Frame />
-			<AxisLeft />
-			<AxisBottom />
-			<MarginLabel />
-		{/snippet}
-
-		{#snippet canvas()}
-			<WebGPUCanvas>
-				{#snippet canvasComponents()}
-					<Grid />
-					{#each resolvedMarks as { component: MarkComponent, props }, i (i)}
-						<MarkComponent {...props} />
-					{/each}
-				{/snippet}
-			</WebGPUCanvas>
-		{/snippet}
-
-		{#snippet foreground()}
-			<Crosshair />
-		{/snippet}
-
-		{#snippet interactors()}
-			<!-- Keyed by what each interactor is (type, fields, selection), not by
-			     position: an interactor reads them once, so a changed spec remounts it. -->
-			{#each spec.interactors ?? [] as interactor, i (`${i}:${selectionName}:${JSON.stringify(interactor)}`)}
-				{#if interactor.interactor === 'intervalX'}
-					<IntervalX
-						selection={interactor.selection ?? selectionName ?? undefined}
-						field={interactor.field}
-					/>
-				{:else if interactor.interactor === 'intervalY'}
-					<IntervalY
-						selection={interactor.selection ?? selectionName ?? undefined}
-						field={interactor.field}
-					/>
-				{:else if interactor.interactor === 'interval2D'}
-					<Interval2D
-						selection={interactor.selection ?? selectionName ?? undefined}
-						xField={interactor.xField}
-						yField={interactor.yField}
-					/>
-				{:else if interactor.interactor === 'toggle'}
-					<Toggle
-						selection={interactor.selection ?? selectionName ?? undefined}
-						field={interactor.field}
-					/>
-				{:else if interactor.interactor === 'derivedInterval'}
-					<DerivedIntervalX
-						sourceSelection={interactor.source}
-						selection={interactor.selection}
-						offset={interactor.offset}
-						relayClauses={interactor.relayClauses}
-					/>
-				{/if}
-			{/each}
-		{/snippet}
 	</ChartContainer>
 </div>
 
