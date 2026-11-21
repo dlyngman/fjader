@@ -8,7 +8,10 @@
 		LineMark,
 		AreaMarkY,
 		IntervalX,
-		DerivedIntervalX
+		DerivedIntervalX,
+		AxisLeft,
+		AxisBottom,
+		Frame
 	} from '$lib/components';
 </script>
 
@@ -147,6 +150,52 @@
 				</ChartContainer>
 			</div>
 		</div>
+
+		<!-- Faceted: one brush and one derived range for the chart, across its cells -->
+		<div class="facet-section">
+			<h3>
+				Faceted by group: brush in either cell. Both cells draw the brush and its ghost a year back,
+				and the chart below follows the one derived range.
+			</h3>
+			<div class="facet-wrapper">
+				<ChartContainer xLabel="ts" yLabel="value" fx="grp">
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<LineMark
+						table="timeseries"
+						x="ts"
+						y="value"
+						stroke="grp"
+						strokeWidth={1}
+						preferredXScaleType="time"
+					/>
+					<IntervalX selection="facetbrush" />
+					<DerivedIntervalX
+						sourceSelection="facetbrush"
+						selection="facetcomparison"
+						offset="-1yw"
+					/>
+				</ChartContainer>
+			</div>
+			<div class="hourly-chart">
+				<h3>Comparison period (faceted brush)</h3>
+				<ChartContainer xLabel="hour" yLabel="kWh">
+					<Frame />
+					<AxisLeft />
+					<AxisBottom />
+					<LineMark
+						table="timeseries"
+						x="hour"
+						y={avg('value')}
+						stroke="grp"
+						strokeWidth={2}
+						selection="facetcomparison"
+						curve="monotone"
+					/>
+				</ChartContainer>
+			</div>
+		</div>
 	</div>
 </div>
 
@@ -184,7 +233,17 @@
 		height: 300px;
 	}
 
-	.hourly-chart h3 {
+	.facet-section {
+		margin-top: 16px;
+	}
+
+	.facet-wrapper {
+		width: 100%;
+		height: 220px;
+	}
+
+	.hourly-chart h3,
+	.facet-section h3 {
 		margin: 0 0 4px 0;
 		font-size: 13px;
 		color: #666;

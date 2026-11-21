@@ -539,6 +539,9 @@
 		},
 		get yLabel() {
 			return scales?.yLabel;
+		},
+		get parallelScales() {
+			return scales?.parallelScales ?? null;
 		}
 	};
 	setContext(DECLARATION_CHART, declarationChart);

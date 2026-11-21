@@ -18,6 +18,17 @@ export interface DragSink<R extends (...args: number[]) => boolean> {
 	clear(): void;
 }
 
+/**
+ * The data value of the edge that stays while the other is dragged: the one
+ * opposite the moving edge on screen. `lowMoves`: the moving edge is the one
+ * at the lower pixel (left, top). By screen, not by data order, so an
+ * inverted scale (y) resizes the edge under the handle.
+ */
+function fixedEdge(lowMoves: boolean, d0: number, d1: number, scale: DragScale): number {
+	const d0Low = scale(d0) <= scale(d1);
+	return lowMoves === d0Low ? d1 : d0;
+}
+
 export type Range1D = (min: number, max: number) => boolean;
 export type Range2D = (x0: number, x1: number, y0: number, y1: number) => boolean;
 
@@ -36,6 +47,8 @@ export class IntervalDrag1D {
 	#owner: object | null = null;
 	#anchor = 0;
 	#hasDragged = false;
+	/** The edge a resize keeps (data), from its first move; NaN: none yet. */
+	#fixed = NaN;
 	#lastMin: number | null = null;
 	#lastMax: number | null = null;
 
@@ -89,7 +102,15 @@ export class IntervalDrag1D {
 			brush.shiftByScreen(coord - this.#anchor, scale);
 			this.#anchor = coord;
 		} else if (brush.phase === 'resizing') {
-			const fixed = (brush.resizeEdge === 'start' ? brush.dataMax : brush.dataMin) as number;
+			// Kept for the whole drag: dragged past it, min and max just swap.
+			if (Number.isNaN(this.#fixed))
+				this.#fixed = fixedEdge(
+					brush.resizeEdge === 'start',
+					brush.dataMin as number,
+					brush.dataMax as number,
+					scale
+				);
+			const fixed = this.#fixed;
 			const at = scale.invert!(coord);
 			brush.setExtent(Math.min(fixed, at), Math.max(fixed, at));
 		}
@@ -124,7 +145,9 @@ export class IntervalDrag1D {
 	/** Shift+wheel on the rectangle: scale it about its centre. */
 	zoom(scaleFactor: number): void {
 		const { brush } = this;
-		if (!brush.active) return;
+		// Not during a drag: a resize keeps the edge it started from, which a
+		// zoom would move under it.
+		if (!brush.active || this.#owner !== null) return;
 		const a = brush.dataMin as number;
 		const b = brush.dataMax as number;
 		const [min, max] = scaleBrushExtent1D(Math.min(a, b), Math.max(a, b), scaleFactor);
@@ -175,6 +198,7 @@ export class IntervalDrag1D {
 		this.brush.phase = 'idle';
 		this.brush.resizeEdge = null;
 		this.#hasDragged = false;
+		this.#fixed = NaN;
 	}
 }
 
@@ -186,6 +210,9 @@ export class IntervalDrag2D {
 	#anchorX = 0;
 	#anchorY = 0;
 	#hasDragged = false;
+	/** The edges a resize keeps (data), from its first move; NaN: none yet. */
+	#fixedX = NaN;
+	#fixedY = NaN;
 	/** The last written range (x0, x1, y0, y1); NaN: none. */
 	readonly #last = [NaN, NaN, NaN, NaN];
 
@@ -244,19 +271,33 @@ export class IntervalDrag2D {
 			this.#anchorX = x;
 			this.#anchorY = y;
 		} else if (brush.phase === 'resizing') {
+			// The edges kept are found by screen side on the first move and kept for
+			// the whole drag: dragged past one, min and max just swap.
 			const corner = brush.resizeCorner;
 			const edge = brush.x.resizeEdge || brush.y.resizeEdge;
 			if (corner || edge === 'left' || edge === 'right') {
-				const right = corner ? corner.includes('e') : edge === 'right';
-				const fixed = (right ? brush.x.dataMin : brush.x.dataMax) as number;
+				const { x: bx } = brush;
+				if (Number.isNaN(this.#fixedX))
+					this.#fixedX = fixedEdge(
+						corner ? corner.includes('w') : edge === 'left',
+						bx.dataMin as number,
+						bx.dataMax as number,
+						xScale
+					);
 				const at = xScale.invert!(x);
-				brush.x.setExtent(Math.min(fixed, at), Math.max(fixed, at));
+				bx.setExtent(Math.min(this.#fixedX, at), Math.max(this.#fixedX, at));
 			}
 			if (corner || edge === 'top' || edge === 'bottom') {
-				const bottom = corner ? corner.includes('s') : edge === 'bottom';
-				const fixed = (bottom ? brush.y.dataMax : brush.y.dataMin) as number;
+				const { y: by } = brush;
+				if (Number.isNaN(this.#fixedY))
+					this.#fixedY = fixedEdge(
+						corner ? corner.includes('n') : edge === 'top',
+						by.dataMin as number,
+						by.dataMax as number,
+						yScale
+					);
 				const at = yScale.invert!(y);
-				brush.y.setExtent(Math.min(fixed, at), Math.max(fixed, at));
+				by.setExtent(Math.min(this.#fixedY, at), Math.max(this.#fixedY, at));
 			}
 		}
 		this.emit();
@@ -283,7 +324,9 @@ export class IntervalDrag2D {
 
 	zoom(scaleFactor: number): void {
 		const { brush } = this;
-		if (!brush.active) return;
+		// Not during a drag: a resize keeps the edge it started from, which a
+		// zoom would move under it.
+		if (!brush.active || this.#owner !== null) return;
 		const { x, y } = brush;
 		const {
 			x: [x0, x1],
@@ -350,6 +393,8 @@ export class IntervalDrag2D {
 		brush.x.resizeEdge = null;
 		brush.y.resizeEdge = null;
 		this.#hasDragged = false;
+		this.#fixedX = NaN;
+		this.#fixedY = NaN;
 	}
 }
 

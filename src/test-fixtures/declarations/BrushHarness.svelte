@@ -2,6 +2,8 @@
 	import { setContext } from 'svelte';
 	import Interval1D from '$lib/interactors/Interval1D.svelte';
 	import Interval2D from '$lib/interactors/Interval2D.svelte';
+	import ParallelBrushes from '$lib/interactors/ParallelBrushes.svelte';
+	import DerivedIntervalX from '$lib/interactors/DerivedIntervalX.svelte';
 	import FakeCell from './FakeCell.svelte';
 	import {
 		DECLARATION_CHART,
@@ -13,7 +15,8 @@
 
 	/**
 	 * Test fixture (declaration-scope.test.ts), outside src/lib so it is not
-	 * packaged: one brush placed as a chart's child, and a cell per chart
+	 * packaged: one brush (Interval1D, Interval2D, ParallelBrushes or
+	 * DerivedIntervalX) placed as a chart's child, and a cell per chart
 	 * context in `cells` rendering what it declared.
 	 */
 	let {
@@ -22,14 +25,16 @@
 		cells,
 		kind,
 		xScaleState,
-		yScaleState
+		yScaleState,
+		parallelScales = null
 	}: {
 		registry: DeclarationRegistry;
 		groups: unknown;
 		cells: ChartContext[];
-		kind: '1d' | '2d';
+		kind: '1d' | '2d' | 'parallel' | 'derived';
 		xScaleState: ScaleStateInstance;
 		yScaleState: ScaleStateInstance;
+		parallelScales?: DeclarationChart['parallelScales'];
 	} = $props();
 	const chart: DeclarationChart = {
 		chartId: 'chart',
@@ -43,7 +48,10 @@
 		xColumnName: 'delay',
 		yColumnName: 'distance',
 		xLabel: null,
-		yLabel: null
+		yLabel: null,
+		get parallelScales() {
+			return parallelScales;
+		}
 	};
 	setContext(DECLARATION_REGISTRY, registry);
 	setContext(DECLARATION_CHART, chart);
@@ -52,8 +60,12 @@
 
 {#if kind === '1d'}
 	<Interval1D selection="brush" />
-{:else}
+{:else if kind === '2d'}
 	<Interval2D selection="brush" />
+{:else if kind === 'parallel'}
+	<ParallelBrushes selection="brush" />
+{:else}
+	<DerivedIntervalX sourceSelection="brush" selection="derived" offset="-1yw" />
 {/if}
 {#each cells as cell, i (i)}
 	<FakeCell {registry} cellId={`cell-${i}`} chart={cell} />
