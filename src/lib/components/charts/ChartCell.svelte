@@ -13,6 +13,7 @@
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
 	import type { Margin } from '$lib/types';
 	import { WheelInteractionControl } from '$lib/interactors/wheelInteractionControl';
+	import { isContextPress } from '$lib/interactors/modifiers';
 	import { TooltipManager } from '$lib/interactors/TooltipManager.svelte';
 	import type { ChartContext, FieldRef } from '$lib/types';
 	import type { QueryEngine } from '$lib/query-engine/QueryEngine';
@@ -802,7 +803,7 @@
 		// Only the primary button presses. A right press (or Ctrl+press, a right
 		// click on a Mac) opens the context menu: taken as a press, its release
 		// was a click, which cleared the brushes.
-		if (event.button !== 0 || event.ctrlKey) return;
+		if (isContextPress(event)) return;
 		hoverSettle.hold(true);
 		event.preventDefault();
 		chartCellEl?.focus({ preventScroll: true });

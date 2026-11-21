@@ -6,6 +6,7 @@
 	 * the cell stays here: its hover point, axes, inner size and tooltip hit.
 	 */
 	import { getContext, onDestroy } from 'svelte';
+	import { isMultiSelect } from '$lib/interactors/modifiers';
 	import type { ChartContext } from '$lib/types';
 	import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 	import type { ToggleShared } from './toggle-shared';
@@ -75,7 +76,7 @@
 		const tm = chart.tooltipManager;
 		const point = { x: event.offsetX, y: event.offsetY };
 		const { xInBounds, yInBounds, innerPoint } = chart.getActiveAxes(point);
-		const isMulti = event.shiftKey || event.metaKey;
+		const isMulti = isMultiSelect(event);
 
 		// Path 1: Inner area click — use tooltip hit data (don't require visible —
 		// pointer micro-movement during click hides tooltip but data stays valid)
