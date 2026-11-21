@@ -7,6 +7,9 @@ import type { ChartContext } from '$lib/types';
 const scale = scaleLinear().domain([0, 100]).range([0, 200]) as unknown as DragScale;
 /** y, inverted as on screen: 0–100 over 200–0 px. */
 const yScale = scaleLinear().domain([0, 100]).range([200, 0]) as unknown as DragScale;
+/** A brush's data range, rounded past float noise. */
+const rangeOf = (b: { dataMin: unknown; dataMax: unknown }) =>
+	[b.dataMin, b.dataMax].map((v) => Math.round((v as number) * 1e9) / 1e9);
 
 function drag1D() {
 	const sink = { range: vi.fn((_min: number, _max: number) => true), clear: vi.fn() };
@@ -79,6 +82,52 @@ describe('IntervalDrag1D', () => {
 		drag.move(A, 160, scale);
 		drag.release(A);
 		expect(sink.range.mock.lastCall).toEqual([60, 80]);
+	});
+
+	describe('resizing keeps the edge opposite the handle on screen', () => {
+		/** A brush at data [20, 50], made through `s`. */
+		function brushed(s: DragScale) {
+			const made = drag1D();
+			made.drag.setExternal(20, 50);
+			return made;
+		}
+
+		it('inverted y: the top handle moves the top (the max), the bottom stays', () => {
+			const { drag } = brushed(yScale);
+			// data 50 is at y = 100 px (the top edge); drag it up to 60 px = data 70.
+			drag.press(A, 100, 'top');
+			drag.move(A, 60, yScale);
+			drag.release(A);
+			expect([drag.brush.dataMin, drag.brush.dataMax]).toEqual([20, 70]);
+		});
+
+		it('inverted y: the bottom handle moves the bottom (the min)', () => {
+			const { drag } = brushed(yScale);
+			// data 20 is at y = 160 px (the bottom edge); drag it down to 180 px = data 10.
+			drag.press(A, 160, 'bottom');
+			drag.move(A, 180, yScale);
+			drag.release(A);
+			expect(rangeOf(drag.brush)).toEqual([10, 50]);
+		});
+
+		it('x: the left handle moves the min, the right stays', () => {
+			const { drag } = brushed(scale);
+			drag.press(A, 40, 'left');
+			drag.move(A, 20, scale); // data 10
+			drag.release(A);
+			expect([drag.brush.dataMin, drag.brush.dataMax]).toEqual([10, 50]);
+		});
+
+		it('dragged past the fixed edge and on, the same edge stays', () => {
+			const { drag } = brushed(scale);
+			drag.press(A, 40, 'left'); // data 20 moves, 50 stays
+			drag.move(A, 120, scale); // data 60: past 50, min and max swap
+			expect([drag.brush.dataMin, drag.brush.dataMax]).toEqual([50, 60]);
+			drag.move(A, 160, scale); // data 80: 50 still stays
+			drag.move(A, 60, scale); // data 30: back across it
+			drag.release(A);
+			expect([drag.brush.dataMin, drag.brush.dataMax]).toEqual([30, 50]);
+		});
 	});
 
 	it('a range the sink could not write (no column yet) is written by the next emit', () => {
@@ -164,6 +213,20 @@ describe('IntervalDrag2D', () => {
 		drag.move(A, 140, 60, scale, yScale);
 		drag.release(A);
 		expect(round(sink.range.mock.lastCall!)).toEqual([20, 70, 20, 70]);
+	});
+
+	it('resizes by screen side: the top edge on an inverted y, kept when dragged past', () => {
+		const sink = { range: vi.fn((..._: number[]) => true), clear: vi.fn() };
+		const drag = new IntervalDrag2D(sink);
+		drag.brush.x.setExtent(20, 50);
+		drag.brush.y.setExtent(20, 50); // the top edge (data 50) is at y = 100 px
+		drag.press(A, 60, 100, 'top');
+		drag.move(A, 60, 60, scale, yScale); // data 70: the top moves up
+		expect([drag.brush.y.dataMin, drag.brush.y.dataMax]).toEqual([20, 70]);
+		drag.move(A, 60, 180, scale, yScale); // data 10: past the bottom, which stays
+		drag.release(A);
+		expect(rangeOf(drag.brush.y)).toEqual([10, 20]);
+		expect([drag.brush.x.dataMin, drag.brush.x.dataMax]).toEqual([20, 50]);
 	});
 });
 
