@@ -50,7 +50,8 @@ def interval_x(
 
     Args:
         field: Optional field name override for the brush column.
-        selection: Selection group name. Defaults to the first mark's selection.
+        selection: Selection group name. Defaults to the first mark's selection,
+            or the default group, which every mark naming no selection reads.
     """
     return IntervalXSpec(field=field, selection=selection)
 
@@ -62,7 +63,8 @@ def interval_y(
 
     Args:
         field: Optional field name override for the brush column.
-        selection: Selection group name. Defaults to the first mark's selection.
+        selection: Selection group name. Defaults to the first mark's selection,
+            or the default group, which every mark naming no selection reads.
     """
     return IntervalYSpec(field=field, selection=selection)
 
@@ -88,7 +90,8 @@ def interval_2d(
     Args:
         x_field: Optional x-axis field override (auto-detected from chart).
         y_field: Optional y-axis field override (auto-detected from chart).
-        selection: Selection group name. Defaults to the first mark's selection.
+        selection: Selection group name. Defaults to the first mark's selection,
+            or the default group, which every mark naming no selection reads.
     """
     return Interval2DSpec(x_field=x_field, y_field=y_field, selection=selection)
 
@@ -109,7 +112,8 @@ def toggle(
 
     Args:
         field: Column name to toggle on (e.g. ``"weather"``).
-        selection: Selection group name. Defaults to the first mark's selection.
+        selection: Selection group name. Defaults to the first mark's selection,
+            or the default group, which every mark naming no selection reads.
     """
     return ToggleSpec(field=field, selection=selection)
 

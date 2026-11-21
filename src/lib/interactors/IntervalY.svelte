@@ -3,11 +3,12 @@
 	import type { FieldRef } from '$lib/types';
 
 	interface Props {
+		/** Filter group it writes. Default: the default group, which every mark naming none reads. */
 		selection?: string;
 		field?: FieldRef;
 	}
 
-	let { selection = 'brush', field }: Props = $props();
+	let { selection, field }: Props = $props();
 </script>
 
 <Interval1D {selection} {field} axis="y" />
