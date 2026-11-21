@@ -985,6 +985,17 @@
 		stopPan();
 	}
 
+	/**
+	 * Capture lost. Before the press's release (the release clears
+	 * pressPointerId), the release may never come here: end an interactor's drag
+	 * as it stands rather than leave it waiting, which for a brush shared by
+	 * every cell would block it in all of them.
+	 */
+	function handleLostPointerCapture(event: PointerEvent) {
+		hoverSettle.hold(false);
+		if (event.pointerId === pressPointerId && !isPanning) chartContext.onInteractorDragEnd?.();
+	}
+
 	function stopPan() {
 		isPanning = false;
 		activePanX = false;
@@ -1122,7 +1133,7 @@
 				onpointerrawupdate={handlePointerRawUpdate}
 				onpointerup={handlePointerUp}
 				onpointercancel={handlePointerUp}
-				onlostpointercapture={() => hoverSettle.hold(false)}
+				onlostpointercapture={handleLostPointerCapture}
 				ondblclick={handleDoubleClick}
 				onclick={handleClick}
 				oncontextmenu={handleContextMenu}

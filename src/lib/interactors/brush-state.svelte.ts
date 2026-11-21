@@ -14,8 +14,10 @@ export class BrushState1D {
 	phase: BrushPhase = $state('idle');
 	resizeEdge: ResizeEdge = $state(null);
 
-	// Derived
-	active = $derived(this.dataMin != null && this.dataMax != null);
+	/** A getter, not $derived: as cheap, and also right where runes compile for the server (Vitest). */
+	get active(): boolean {
+		return this.dataMin != null && this.dataMax != null;
+	}
 
 	// Screen coordinate conversions (using D3 scale)
 	screenMin(scale: D3Scale): number {
@@ -71,7 +73,8 @@ export class BrushState1D {
 	}
 
 	// Validate brush for current scale
-	validate(scale: { domain: () => number[] }, scaleType: string): boolean {
+	/** Against the domain [domainMin, domainMax], as numbers: no allocation, for per-frame checks. */
+	validate(domainMin: number, domainMax: number, scaleType: string): boolean {
 		if (!this.active) return true;
 
 		// Log scales require positive values
@@ -93,7 +96,6 @@ export class BrushState1D {
 		// Check if brush is entirely outside the domain — clear if so.
 		// Don't clamp to domain bounds: the brush should retain its full extent
 		// even when partially off-screen, so dragging it back restores the size.
-		const [domainMin, domainMax] = scale.domain();
 		if ((this.dataMax as number) <= domainMin || (this.dataMin as number) >= domainMax) {
 			this.clear();
 			return false;
@@ -111,7 +113,9 @@ export class BrushState2D {
 	phase: BrushPhase = $state('idle');
 	resizeCorner: ResizeCorner = $state(null);
 
-	active = $derived(this.x.active && this.y.active);
+	get active(): boolean {
+		return this.x.active && this.y.active;
+	}
 
 	clear(): void {
 		this.x.clear();

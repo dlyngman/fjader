@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { render } from 'svelte/server';
 import ScopeHarness from '../../../test-fixtures/declarations/ScopeHarness.svelte';
 import ToggleHarness from '../../../test-fixtures/declarations/ToggleHarness.svelte';
+import IntervalHarness from '../../../test-fixtures/declarations/IntervalHarness.svelte';
+import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 import type { ChartContext } from '$lib/types';
 import { DeclarationRegistry, type ChartDeclaration } from './declarations.svelte';
 
@@ -78,4 +80,86 @@ describe('Toggle split by responsibility', () => {
 		expect(registerToggle).toHaveBeenCalledWith(['island'], { chart: expect.anything() });
 		expect(adds).toEqual([1, 1, 1]);
 	});
+});
+
+describe('Brushes split by responsibility', () => {
+	/** Three cells of different sizes; each records the activators it is given. */
+	function setup() {
+		const register = vi.fn((_source: string, _opts: unknown) => ({
+			update() {},
+			clear() {},
+			activate() {},
+			destroy() {}
+		}));
+		const groups = { get: () => ({ register }) };
+		const activators: (() => void)[][] = [[], [], []];
+		const cells = activators.map((added, i) => {
+			const set = new Set<() => void>();
+			const add = set.add.bind(set);
+			set.add = (fn) => {
+				added.push(fn);
+				return add(fn);
+			};
+			return {
+				activators: set,
+				innerWidth: 100 * (i + 1),
+				innerHeight: 50 * (i + 1),
+				onInteractorPointerDown: null
+			} as unknown as ChartContext;
+		});
+		return { register, groups, activators, cells };
+	}
+
+	type Dims = { activeDims(): { pixelExtent: number }[] };
+
+	it.each(['1d', '2d'] as const)(
+		'%s: registers once for the chart; each of three cells adds one activator',
+		(kind) => {
+			const { register, groups, activators, cells } = setup();
+			render(IntervalHarness, {
+				props: {
+					registry: new DeclarationRegistry(),
+					groups,
+					cells,
+					kind,
+					xScaleState: new LinearScaleState('x'),
+					yScaleState: new LinearScaleState('y')
+				}
+			});
+
+			expect(register).toHaveBeenCalledTimes(1);
+			expect(register.mock.calls[0][0]).toBe(
+				kind === '1d' ? 'interval-x-chart' : 'interval-2d-chart'
+			);
+			expect(activators.map((a) => a.length)).toEqual([1, 1, 1]);
+		}
+	);
+
+	it.each(['1d', '2d'] as const)(
+		'%s: measures pixels in the cell that activated it, not the chart',
+		(kind) => {
+			const { register, groups, activators, cells } = setup();
+			render(IntervalHarness, {
+				props: {
+					registry: new DeclarationRegistry(),
+					groups,
+					cells,
+					kind,
+					xScaleState: new LinearScaleState('x'),
+					yScaleState: new LinearScaleState('y')
+				}
+			});
+			const opts = register.mock.calls[0][1] as Dims;
+
+			// No cell has activated it: no pixel extent to bin by.
+			expect(opts.activeDims()).toEqual([]);
+
+			activators[1][0]();
+			const dims = opts.activeDims();
+			expect(dims.map((d) => d.pixelExtent)).toEqual(kind === '1d' ? [200] : [200, 100]);
+
+			activators[2][0]();
+			expect(opts.activeDims()[0].pixelExtent).toBe(300);
+		}
+	);
 });

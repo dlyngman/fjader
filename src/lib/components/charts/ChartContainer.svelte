@@ -527,6 +527,18 @@
 		},
 		get yScaleState() {
 			return scales?.yScaleState;
+		},
+		get xColumnName() {
+			return scales?.xColumnName ?? null;
+		},
+		get yColumnName() {
+			return scales?.yColumnName ?? null;
+		},
+		get xLabel() {
+			return scales?.xLabel;
+		},
+		get yLabel() {
+			return scales?.yLabel;
 		}
 	};
 	setContext(DECLARATION_CHART, declarationChart);
