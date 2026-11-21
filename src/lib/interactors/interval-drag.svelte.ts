@@ -145,7 +145,9 @@ export class IntervalDrag1D {
 	/** Shift+wheel on the rectangle: scale it about its centre. */
 	zoom(scaleFactor: number): void {
 		const { brush } = this;
-		if (!brush.active) return;
+		// Not during a drag: a resize keeps the edge it started from, which a
+		// zoom would move under it.
+		if (!brush.active || this.#owner !== null) return;
 		const a = brush.dataMin as number;
 		const b = brush.dataMax as number;
 		const [min, max] = scaleBrushExtent1D(Math.min(a, b), Math.max(a, b), scaleFactor);
@@ -322,7 +324,9 @@ export class IntervalDrag2D {
 
 	zoom(scaleFactor: number): void {
 		const { brush } = this;
-		if (!brush.active) return;
+		// Not during a drag: a resize keeps the edge it started from, which a
+		// zoom would move under it.
+		if (!brush.active || this.#owner !== null) return;
 		const { x, y } = brush;
 		const {
 			x: [x0, x1],

@@ -130,6 +130,17 @@ describe('IntervalDrag1D', () => {
 		});
 	});
 
+	it('ignores shift+wheel while a drag is under way', () => {
+		const { drag } = drag1D();
+		drag.setExternal(20, 50);
+		drag.press(A, 40, 'left');
+		drag.zoom(2);
+		expect([drag.brush.dataMin, drag.brush.dataMax]).toEqual([20, 50]);
+		drag.release(A);
+		drag.zoom(2);
+		expect([drag.brush.dataMin, drag.brush.dataMax]).not.toEqual([20, 50]);
+	});
+
 	it('a range the sink could not write (no column yet) is written by the next emit', () => {
 		const { drag, sink } = drag1D();
 		sink.range.mockReturnValueOnce(false);

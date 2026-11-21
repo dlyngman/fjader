@@ -141,10 +141,13 @@
 	 * A press: move or resize on an axis's brush handles (that axis, from the
 	 * overlay's owner), else draw on the nearest axis; decline in pan mode.
 	 * While another cell drags the same axis (a second pointer), take the press
-	 * and do nothing; another axis's drag doesn't stop it.
+	 * and do nothing; another axis's drag doesn't stop it. Nor does a second
+	 * pointer in this cell while it drags an axis: taking it would leave that
+	 * axis's drag held by this cell, with no release to come.
 	 */
 	function handlePointerDown(target: Element, pointerId: number, innerPoint: Point) {
 		if (!ps) return false;
+		if (activeAxis != null) return true;
 		if (isPanModeActive) return false; // Fall through to ChartCell for parallel axis pan
 
 		const hit = brushHandleAt(target);
@@ -176,10 +179,12 @@
 			if (!isPanModeActive) hoverAxis(nearestAxis(innerPoint.x));
 			return false;
 		}
-		// The axis can have been removed mid-drag: its drag went with it.
+		// The axis can have been removed mid-drag (its drag went with it), or its
+		// scale gone before its source: end the drag rather than strand it.
 		const axis = axes.get(activeAxis);
 		const s = getAxisScale(activeAxis);
 		if (!axis || !s) {
+			axis?.drag.abandon(chart);
 			activeAxis = null;
 			return false;
 		}
