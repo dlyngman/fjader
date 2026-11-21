@@ -159,7 +159,8 @@ export class DeclarationRegistry {
 
 	/**
 	 * The chart's legends at `position`, in registration order. A legend is the
-	 * chart's, not a cell's: wherever it is declared, the chart renders it once.
+	 * chart's, not a cell's: the chart renders each one once. Only a chart's
+	 * child declares one (Legend); in a per-cell snippet it renders in place.
 	 */
 	legends(position: LegendPosition): LegendDeclaration[] {
 		const out: LegendDeclaration[] = [];

@@ -243,7 +243,7 @@ describe('ParallelBrushes and DerivedIntervalX split by responsibility', () => {
 });
 
 describe('Legend as a declaration', () => {
-	it('in a chart: declares itself, for the chart to render at its position', () => {
+	it("as a chart's child: declares itself at its position; in a per-cell snippet, not", () => {
 		const registry = new DeclarationRegistry();
 		const registered: ChartDeclaration[] = [];
 		const register = registry.register.bind(registry);
