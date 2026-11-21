@@ -22,10 +22,10 @@ describe('IntervalDrag1D', () => {
 
 	it('draws a range in data space and writes it once per change', () => {
 		const { drag, sink } = drag1D();
-		expect(drag.press(A, 40, null)).toBe(true);
-		drag.move(A, 100, scale);
-		drag.move(A, 100, scale); // unchanged: no second write
-		expect(drag.release(A)).toBe(true);
+		expect(drag.press(A, 1, 40, null)).toBe(true);
+		drag.move(A, 1, 100, scale);
+		drag.move(A, 1, 100, scale); // unchanged: no second write
+		expect(drag.release(A, 1)).toBe(true);
 
 		expect(sink.range.mock.calls).toEqual([[20, 50]]);
 		expect(drag.brush.phase).toBe('idle');
@@ -34,53 +34,53 @@ describe('IntervalDrag1D', () => {
 
 	it('belongs to the cell that pressed: another cell is declined, and its moves are not the drag', () => {
 		const { drag, sink } = drag1D();
-		drag.press(A, 40, null);
-		drag.move(A, 100, scale);
+		drag.press(A, 1, 40, null);
+		drag.move(A, 1, 100, scale);
 
-		expect(drag.press(B, 10, null)).toBe(false);
-		expect(drag.move(B, 180, scale)).toBe(false);
-		expect(drag.release(B)).toBe(false);
+		expect(drag.press(B, 2, 10, null)).toBe(false);
+		expect(drag.move(B, 2, 180, scale)).toBe(false);
+		expect(drag.release(B, 2)).toBe(false);
 		expect(drag.owns(A)).toBe(true);
 
-		drag.release(A);
+		drag.release(A, 1);
 		expect(sink.range.mock.calls).toEqual([[20, 50]]);
 		// Released: the next press, in any cell, may start a drag.
-		expect(drag.press(B, 10, null)).toBe(true);
+		expect(drag.press(B, 2, 10, null)).toBe(true);
 	});
 
 	it('declines a press before the threshold is crossed, too', () => {
 		const { drag } = drag1D();
-		drag.press(A, 40, null);
-		expect(drag.press(B, 10, null)).toBe(false);
+		drag.press(A, 1, 40, null);
+		expect(drag.press(B, 2, 10, null)).toBe(false);
 	});
 
 	it('a click on the plot clears an active brush', () => {
 		const { drag, sink } = drag1D();
-		drag.press(A, 40, null);
-		drag.move(A, 100, scale);
-		drag.release(A);
+		drag.press(A, 1, 40, null);
+		drag.move(A, 1, 100, scale);
+		drag.release(A, 1);
 
-		drag.press(B, 150, null);
-		drag.release(B);
+		drag.press(B, 2, 150, null);
+		drag.release(B, 2);
 		expect(sink.clear).toHaveBeenCalledTimes(1);
 		expect(drag.brush.active).toBe(false);
 	});
 
 	it('moves by the handle and resizes by an edge, keeping min below max', () => {
 		const { drag, sink } = drag1D();
-		drag.press(A, 40, null);
-		drag.move(A, 100, scale);
-		drag.release(A);
+		drag.press(A, 1, 40, null);
+		drag.move(A, 1, 100, scale);
+		drag.release(A, 1);
 
-		drag.press(A, 60, 'move');
-		drag.move(A, 80, scale); // +20 px = +10
-		drag.release(A);
+		drag.press(A, 1, 60, 'move');
+		drag.move(A, 1, 80, scale); // +20 px = +10
+		drag.release(A, 1);
 		expect([drag.brush.dataMin, drag.brush.dataMax]).toEqual([30, 60]);
 
 		// The start edge dragged past the end: the end stays fixed and becomes the min.
-		drag.press(A, 60, 'left');
-		drag.move(A, 160, scale);
-		drag.release(A);
+		drag.press(A, 1, 60, 'left');
+		drag.move(A, 1, 160, scale);
+		drag.release(A, 1);
 		expect(sink.range.mock.lastCall).toEqual([60, 80]);
 	});
 
@@ -95,37 +95,37 @@ describe('IntervalDrag1D', () => {
 		it('inverted y: the top handle moves the top (the max), the bottom stays', () => {
 			const { drag } = brushed(yScale);
 			// data 50 is at y = 100 px (the top edge); drag it up to 60 px = data 70.
-			drag.press(A, 100, 'top');
-			drag.move(A, 60, yScale);
-			drag.release(A);
+			drag.press(A, 1, 100, 'top');
+			drag.move(A, 1, 60, yScale);
+			drag.release(A, 1);
 			expect([drag.brush.dataMin, drag.brush.dataMax]).toEqual([20, 70]);
 		});
 
 		it('inverted y: the bottom handle moves the bottom (the min)', () => {
 			const { drag } = brushed(yScale);
 			// data 20 is at y = 160 px (the bottom edge); drag it down to 180 px = data 10.
-			drag.press(A, 160, 'bottom');
-			drag.move(A, 180, yScale);
-			drag.release(A);
+			drag.press(A, 1, 160, 'bottom');
+			drag.move(A, 1, 180, yScale);
+			drag.release(A, 1);
 			expect(rangeOf(drag.brush)).toEqual([10, 50]);
 		});
 
 		it('x: the left handle moves the min, the right stays', () => {
 			const { drag } = brushed(scale);
-			drag.press(A, 40, 'left');
-			drag.move(A, 20, scale); // data 10
-			drag.release(A);
+			drag.press(A, 1, 40, 'left');
+			drag.move(A, 1, 20, scale); // data 10
+			drag.release(A, 1);
 			expect([drag.brush.dataMin, drag.brush.dataMax]).toEqual([10, 50]);
 		});
 
 		it('dragged past the fixed edge and on, the same edge stays', () => {
 			const { drag } = brushed(scale);
-			drag.press(A, 40, 'left'); // data 20 moves, 50 stays
-			drag.move(A, 120, scale); // data 60: past 50, min and max swap
+			drag.press(A, 1, 40, 'left'); // data 20 moves, 50 stays
+			drag.move(A, 1, 120, scale); // data 60: past 50, min and max swap
 			expect([drag.brush.dataMin, drag.brush.dataMax]).toEqual([50, 60]);
-			drag.move(A, 160, scale); // data 80: 50 still stays
-			drag.move(A, 60, scale); // data 30: back across it
-			drag.release(A);
+			drag.move(A, 1, 160, scale); // data 80: 50 still stays
+			drag.move(A, 1, 60, scale); // data 30: back across it
+			drag.release(A, 1);
 			expect([drag.brush.dataMin, drag.brush.dataMax]).toEqual([30, 50]);
 		});
 	});
@@ -133,10 +133,10 @@ describe('IntervalDrag1D', () => {
 	it('ignores shift+wheel while a drag is under way', () => {
 		const { drag } = drag1D();
 		drag.setExternal(20, 50);
-		drag.press(A, 40, 'left');
+		drag.press(A, 1, 40, 'left');
 		drag.zoom(2);
 		expect([drag.brush.dataMin, drag.brush.dataMax]).toEqual([20, 50]);
-		drag.release(A);
+		drag.release(A, 1);
 		drag.zoom(2);
 		expect([drag.brush.dataMin, drag.brush.dataMax]).not.toEqual([20, 50]);
 	});
@@ -144,28 +144,42 @@ describe('IntervalDrag1D', () => {
 	it('a range the sink could not write (no column yet) is written by the next emit', () => {
 		const { drag, sink } = drag1D();
 		sink.range.mockReturnValueOnce(false);
-		drag.press(A, 40, null);
-		drag.move(A, 100, scale); // not written
-		drag.release(A); // the same range: written now, not skipped as a duplicate
+		drag.press(A, 1, 40, null);
+		drag.move(A, 1, 100, scale); // not written
+		drag.release(A, 1); // the same range: written now, not skipped as a duplicate
 		expect(sink.range.mock.calls).toEqual([
 			[20, 50],
 			[20, 50]
 		]);
 	});
 
+	it('belongs to the pointer that pressed: a second pointer in the same cell is not the drag', () => {
+		const { drag, sink } = drag1D();
+		drag.press(A, 1, 40, null);
+		drag.move(A, 1, 100, scale);
+		// A second finger or pen in the same cell: its moves and release are not this drag's.
+		expect(drag.move(A, 7, 180, scale)).toBe(false);
+		expect(drag.release(A, 7)).toBe(false);
+		expect(drag.owns(A)).toBe(true);
+		expect(drag.owns(A, 7)).toBe(false);
+		drag.release(A, 1);
+		expect(sink.range.mock.calls).toEqual([[20, 50]]);
+		expect(drag.held).toBe(false);
+	});
+
 	it('is held while a cell owns a drag', () => {
 		const { drag } = drag1D();
 		expect(drag.held).toBe(false);
-		drag.press(A, 40, null);
+		drag.press(A, 1, 40, null);
 		expect(drag.held).toBe(true);
-		drag.release(A);
+		drag.release(A, 1);
 		expect(drag.held).toBe(false);
 	});
 
 	it('an abandoned drag writes nothing more', () => {
 		const { drag, sink } = drag1D();
-		drag.press(A, 40, null);
-		drag.move(A, 100, scale);
+		drag.press(A, 1, 40, null);
+		drag.move(A, 1, 100, scale);
 		sink.range.mockClear();
 		drag.abandon(A);
 		expect(sink.range).not.toHaveBeenCalled();
@@ -173,8 +187,8 @@ describe('IntervalDrag1D', () => {
 
 	it('a drag its cell abandons (pan mode, unmount) keeps what it drew', () => {
 		const { drag, sink } = drag1D();
-		drag.press(A, 40, null);
-		drag.move(A, 100, scale);
+		drag.press(A, 1, 40, null);
+		drag.move(A, 1, 100, scale);
 		drag.abandon(B); // not B's
 		expect(drag.owns(A)).toBe(true);
 		drag.abandon(A);
@@ -212,18 +226,31 @@ describe('IntervalDrag2D', () => {
 			clear: vi.fn()
 		};
 		const drag = new IntervalDrag2D(sink);
-		drag.press(A, 40, 160, null);
-		expect(drag.press(B, 0, 0, null)).toBe(false);
-		drag.move(A, 100, 100, scale, yScale);
-		drag.release(A);
+		drag.press(A, 1, 40, 160, null);
+		expect(drag.press(B, 2, 0, 0, null)).toBe(false);
+		drag.move(A, 1, 100, 100, scale, yScale);
+		drag.release(A, 1);
 		const round = (call: number[]) => call.map((v) => Math.round(v * 1e9) / 1e9);
 		expect(sink.range.mock.calls.map(round)).toEqual([[20, 50, 20, 50]]);
 
 		// The north-east corner: x max and y max move, the opposite corner stays.
-		drag.press(A, 100, 100, 'ne');
-		drag.move(A, 140, 60, scale, yScale);
-		drag.release(A);
+		drag.press(A, 1, 100, 100, 'ne');
+		drag.move(A, 1, 140, 60, scale, yScale);
+		drag.release(A, 1);
 		expect(round(sink.range.mock.lastCall!)).toEqual([20, 70, 20, 70]);
+	});
+
+	it('belongs to the pointer that pressed: a second pointer in the same cell is not the drag', () => {
+		const sink = { range: vi.fn((..._: number[]) => true), clear: vi.fn() };
+		const drag = new IntervalDrag2D(sink);
+		drag.press(A, 1, 40, 160, null);
+		drag.move(A, 1, 100, 100, scale, yScale);
+		expect(drag.move(A, 7, 180, 20, scale, yScale)).toBe(false);
+		expect(drag.release(A, 7)).toBe(false);
+		expect(drag.owns(A, 7)).toBe(false);
+		drag.release(A, 1);
+		expect(sink.range).toHaveBeenCalledTimes(1);
+		expect(drag.held).toBe(false);
 	});
 
 	it('resizes by screen side: the top edge on an inverted y, kept when dragged past', () => {
@@ -231,11 +258,11 @@ describe('IntervalDrag2D', () => {
 		const drag = new IntervalDrag2D(sink);
 		drag.brush.x.setExtent(20, 50);
 		drag.brush.y.setExtent(20, 50); // the top edge (data 50) is at y = 100 px
-		drag.press(A, 60, 100, 'top');
-		drag.move(A, 60, 60, scale, yScale); // data 70: the top moves up
+		drag.press(A, 1, 60, 100, 'top');
+		drag.move(A, 1, 60, 60, scale, yScale); // data 70: the top moves up
 		expect([drag.brush.y.dataMin, drag.brush.y.dataMax]).toEqual([20, 70]);
-		drag.move(A, 60, 180, scale, yScale); // data 10: past the bottom, which stays
-		drag.release(A);
+		drag.move(A, 1, 60, 180, scale, yScale); // data 10: past the bottom, which stays
+		drag.release(A, 1);
 		expect(rangeOf(drag.brush.y)).toEqual([10, 20]);
 		expect([drag.brush.x.dataMin, drag.brush.x.dataMax]).toEqual([20, 50]);
 	});

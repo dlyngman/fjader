@@ -69,7 +69,8 @@
 		if (isPanModeActive) return false;
 		if (drag.held) return true;
 		const hit = brushHandleAt(target);
-		if (!drag.press(chart, innerPoint.x, innerPoint.y, hit?.handle ?? null)) return false;
+		if (!drag.press(chart, pointerId, innerPoint.x, innerPoint.y, hit?.handle ?? null))
+			return false;
 		try {
 			target.setPointerCapture(pointerId);
 		} catch {
@@ -83,17 +84,19 @@
 	}
 
 	function handlePointerMove(event: PointerEvent) {
-		if (!drag.owns(chart)) return false;
+		// Another pointer's (a second finger or pen) is not this drag's: ChartCell handles it.
+		if (!drag.owns(chart, event.pointerId)) return false;
 		point.x = event.offsetX;
 		point.y = event.offsetY;
 		const inner = chart.toInnerCoordinates(point);
-		return drag.move(chart, inner.x, inner.y, chart.xScale, chart.yScale);
+		return drag.move(chart, event.pointerId, inner.x, inner.y, chart.xScale, chart.yScale);
 	}
 
 	function handlePointerUp(event: PointerEvent) {
-		if (!drag.owns(chart)) return false;
+		// Another pointer's (a second finger or pen) is not this drag's: ChartCell handles it.
+		if (!drag.owns(chart, event.pointerId)) return false;
 		(event.target as Element).releasePointerCapture(event.pointerId);
-		return drag.release(chart);
+		return drag.release(chart, event.pointerId);
 	}
 
 	/** The chart re-routes the press: end the drag as it stands, never as a click. */

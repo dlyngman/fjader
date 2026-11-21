@@ -159,7 +159,7 @@
 		// pointer move over the axis first.
 		if (hit) hoverAxis(col);
 
-		if (!axis.drag.press(chart, innerPoint.y, hit?.handle ?? null)) return false;
+		if (!axis.drag.press(chart, pointerId, innerPoint.y, hit?.handle ?? null)) return false;
 		try {
 			target.setPointerCapture(pointerId);
 		} catch {
@@ -173,33 +173,44 @@
 		return true;
 	}
 
+	/** Whether `event` is another pointer's than the one this cell drags `axis` with. */
+	function otherPointer(axis: ParallelAxis, event: PointerEvent) {
+		return axis.drag.owns(chart) && !axis.drag.owns(chart, event.pointerId);
+	}
+
 	function handlePointerMove(event: PointerEvent, innerPoint: Point) {
 		if (activeAxis == null) {
 			// A hover move: track the axis under the pointer, and let ChartCell go on.
 			if (!isPanModeActive) hoverAxis(nearestAxis(innerPoint.x));
 			return false;
 		}
-		// The axis can have been removed mid-drag (its drag went with it), or its
-		// scale gone before its source: end the drag rather than strand it.
 		const axis = axes.get(activeAxis);
+		// Another pointer's move (a second finger or pen) is not this drag's.
+		if (axis && otherPointer(axis, event)) return false;
+		// The axis can have been removed mid-drag (its drag went with it), its
+		// scale gone before its source, or its drag no longer this cell's (its
+		// source remounted, or ended another way): let go rather than hold
+		// activeAxis, which would swallow every later press in this cell.
 		const s = getAxisScale(activeAxis);
-		if (!axis || !s) {
+		if (!axis || !s || !axis.drag.owns(chart)) {
 			axis?.drag.abandon(chart);
 			activeAxis = null;
 			return false;
 		}
 		point.x = event.offsetX;
 		point.y = event.offsetY;
-		return axis.drag.move(chart, chart.toInnerCoordinates(point).y, s);
+		return axis.drag.move(chart, event.pointerId, chart.toInnerCoordinates(point).y, s);
 	}
 
 	function handlePointerUp(event: PointerEvent) {
 		if (activeAxis == null) return false;
 		const axis = axes.get(activeAxis);
+		// Another pointer's release (a second finger or pen) does not end this drag.
+		if (axis && otherPointer(axis, event)) return false;
 		activeAxis = null;
 		(event.target as Element).releasePointerCapture(event.pointerId);
 		// A press that never moved is a click, which clears the axis's brush.
-		return axis ? axis.drag.release(chart) : true;
+		return axis ? axis.drag.release(chart, event.pointerId) : true;
 	}
 
 	/** The chart re-routes the press, or it lost capture: end the drag as it stands. */
