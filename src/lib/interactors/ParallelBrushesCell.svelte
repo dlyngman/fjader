@@ -10,7 +10,7 @@
 	import type { SvelteMap } from 'svelte/reactivity';
 	import BrushOverlay from './BrushOverlay.svelte';
 	import type { ParallelAxis } from './ParallelAxisSource.svelte';
-	import { createPanModeHandlers, brushHandleAt } from './brush-utils';
+	import { createPanModeHandlers, brushHandleAt, WHEEL_SENSITIVITY } from './brush-utils';
 	import type { CellPixels, DragScale } from './interval-drag.svelte';
 	import type { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 	import type { ChartContext, Point } from '$lib/types';
@@ -205,6 +205,14 @@
 		axes.get(col)?.drag.abandon(chart);
 	}
 
+	/** Shift+wheel on an axis's rectangle: scale it about its centre, as the other brushes do. */
+	function handleWheel(event: WheelEvent, col: string) {
+		if (!event.shiftKey) return;
+		event.preventDefault();
+		event.stopPropagation();
+		axes.get(col)?.drag.zoom(1 + event.deltaY * WHEEL_SENSITIVITY);
+	}
+
 	// Brush screen extents, one per active brush, at its axis's x-position —
 	// derived for smooth reactive updates. The axes map is a SvelteMap, and each
 	// brush's $state fields (dataMin/dataMax) are tracked transitively.
@@ -267,7 +275,7 @@
 			height={screen.size}
 			orientation="y"
 			owner={screen.col}
-			onWheel={() => {}}
+			onWheel={(event) => handleWheel(event, screen.col)}
 		/>
 	{/each}
 {/if}
