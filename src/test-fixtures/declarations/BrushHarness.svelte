@@ -17,9 +17,10 @@
 
 	/**
 	 * Test fixture (declarations.harness.test.ts), outside src/lib so it is not
-	 * packaged: one brush (Interval1D, Interval2D, ParallelBrushes or
-	 * DerivedIntervalX) placed as a chart's child, and a cell per chart
-	 * context in `cells` rendering what it declared.
+	 * packaged: one brush (Interval1D, Interval2D, ParallelBrushes,
+	 * DerivedIntervalX, or an IntervalX/IntervalY naming no selection) placed
+	 * as a chart's child, and a cell per chart context in `cells` rendering what
+	 * it declared.
 	 */
 	let {
 		registry,

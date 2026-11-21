@@ -137,9 +137,10 @@ describe('Brushes split by responsibility', () => {
 		}
 	);
 
-	it.each(['x', 'y'] as const)(
-		'Interval%s naming no selection writes the default group, which unnamed marks read',
-		(kind) => {
+	it.each(['X', 'Y'] as const)(
+		'Interval%s naming no selection writes the default group',
+		(axis) => {
+			const kind = axis === 'X' ? 'x' : 'y';
 			const groups = new FilterGroupRegistry();
 			const defaultGroup = groups.get();
 			const register = vi.spyOn(defaultGroup, 'register');
