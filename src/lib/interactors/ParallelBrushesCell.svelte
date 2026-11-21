@@ -338,10 +338,14 @@
 		chart.activators.add(activateHoveredAxis);
 
 		return () => {
-			chart.onInteractorPointerDown = null;
-			chart.onInteractorPointerMove = null;
-			chart.onInteractorPointerUp = null;
-			chart.onInteractorDragEnd = null;
+			// Only if they are still this brush's: another brush in the cell may
+			// have taken them since (the warning above), and keeps them.
+			if (chart.onInteractorPointerDown === handlePointerDown) {
+				chart.onInteractorPointerDown = null;
+				chart.onInteractorPointerMove = null;
+				chart.onInteractorPointerUp = null;
+				chart.onInteractorDragEnd = null;
+			}
 			chart.activators.delete(activateHoveredAxis);
 		};
 	});
