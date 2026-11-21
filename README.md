@@ -18,7 +18,7 @@ pip install "fjader[streamlit]"    # Python: Streamlit
 
 `@uwdata/mosaic-sql` is a peer dependency (0.34 or 0.35), so your app and fjader share one copy. Two copies would not recognise each other's expressions: an aggregate such as `sum(...)` written with one would be misread by the other.
 
-fjader needs Chrome 149 or later, or another Chromium browser on that version. It relies on two recent features other browsers don't ship yet: WebGPU's `immediate_address_space`, through which every chart passes its scales to the shaders (so every zoom and pan uses it), and the `Temporal` API, used for calendar offsets. There is no fallback renderer.
+fjader needs Chrome 157 or later, or another Chromium browser on that version. It relies on three recent features other browsers don't ship yet: WebGPU's `immediate_address_space`, through which every chart passes its scales to the shaders (so every zoom and pan uses it); HTML-in-Canvas (`GPUQueue.drawElementImageToTexture`), through which all of a chart's text, axis labels included, is drawn on the GPU; and the `Temporal` API, used for calendar offsets. There is no fallback renderer: without immediates or HTML-in-Canvas, fjader stops at startup with a message naming what is missing.
 
 Three things to know before using it in a deployed app:
 
@@ -92,7 +92,7 @@ Charts display on their own in marimo and Jupyter; in Streamlit, call `fj.stream
 
 **Marks.** Charts are built from marks (dots, bars, rects, lines, areas, rules, text, parallel coordinates). Marks declare the scales they need, and charts sharing a variable share its scale.
 
-**Rendering.** WebGPU shaders draw the marks. A fixed-timestep spring simulation animates domain changes and transitions between states. Level-of-detail rungs move between dots, bins and smoothed density; shift+scroll moves through them.
+**Rendering.** WebGPU shaders draw the marks, and the text too: axis labels, `TextMark` and `<Labels>` are laid out by the browser and drawn into a texture through HTML-in-Canvas. A fixed-timestep spring simulation animates domain changes and transitions between states. Level-of-detail rungs move between dots, bins and smoothed density; shift+scroll moves through them.
 
 ## Project structure
 
