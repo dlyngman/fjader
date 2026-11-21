@@ -63,10 +63,6 @@ export interface RendererMount {
 	ready?(renderer: BaseGPURenderer): void | Promise<void>;
 }
 
-/** How long to wait for the canvas to come up: 100 tries, 50ms apart. */
-const DEVICE_POLL_LIMIT = 100;
-const DEVICE_POLL_MS = 50;
-
 export class RendererHost {
 	/**
 	 * The renderer, once it exists. `$state`, so a component's `$derived` and
@@ -107,7 +103,7 @@ export class RendererHost {
 	}
 
 	/**
-	 * Wait for the device, then build the renderer. Call once, from `onMount`.
+	 * Wait for the canvas (its `ready`), then build the renderer. Call once, from `onMount`.
 	 *
 	 * Resolves when the renderer is usable, or when it is not: a canvas that
 	 * never initialises leaves `renderer` null and every gated effect inert,
@@ -128,10 +124,14 @@ export class RendererHost {
 			);
 			return;
 		}
-		for (let i = 0; i < DEVICE_POLL_LIMIT && !ctx.isInitialized(); i++) {
-			await new Promise((r) => setTimeout(r, DEVICE_POLL_MS));
+		// However long the canvas takes (thirty configuring at once, a slow
+		// adapter, a background tab): no limit after which a mark gives up and
+		// never draws. It rejects only when the canvas never will be usable.
+		try {
+			await ctx.ready;
+		} catch {
+			return;
 		}
-		if (!ctx.isInitialized()) return;
 
 		const {
 			markType,

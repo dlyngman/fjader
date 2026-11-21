@@ -798,6 +798,13 @@ export interface WebGPUCanvasContext {
 	getDevice(): GPUDevice | undefined;
 	getPresentationFormat(): GPUTextureFormat | undefined;
 	isInitialized(): boolean;
+	/**
+	 * Resolves once the canvas can be drawn to (its context configured, the
+	 * chart registered; in a facet grid's pass-through, once the device is up),
+	 * and rejects when it never will be (no WebGPU, initialisation failed).
+	 * Await it instead of polling isInitialized.
+	 */
+	readonly ready: Promise<void>;
 	invalidate(): void;
 	/**
 	 * The page's text colour at the canvas (its inherited CSS `color`), as
