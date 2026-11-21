@@ -267,6 +267,44 @@
 	}
 	let pendingScaleRegistrations: PendingRegistration[] = [];
 
+	/**
+	 * Register a mark's scale requirement, or queue it until ChartScales exists.
+	 * The one entry point for every context a mark can get (this container's,
+	 * the cells'): a mark that registers from its constructor mounts before the
+	 * scales are created, and a dropped registration leaves its chart with no
+	 * scales at all.
+	 */
+	const registerScaleType: ChartContext['registerScaleType'] = (
+		dimension,
+		type,
+		priority,
+		markId,
+		config,
+		columnName
+	) => {
+		const dim = dimension as 'x' | 'y';
+		if (scales) {
+			scales.registerScaleType(dim, type, priority, markId, config, columnName);
+		} else {
+			pendingScaleRegistrations.push({
+				dimension: dim,
+				type,
+				priority,
+				markId,
+				config,
+				columnName
+			});
+		}
+	};
+	/** Unregister, or drop the queued registration of a mark gone before the scales came. */
+	const unregisterScaleType: ChartContext['unregisterScaleType'] = (dimension, markId) => {
+		if (scales) scales.unregisterScaleType(dimension, markId);
+		else
+			pendingScaleRegistrations = pendingScaleRegistrations.filter(
+				(r) => r.dimension !== dimension || r.markId !== markId
+			);
+	};
+
 	$effect(() => {
 		const x = xLabel;
 		const y = yLabel;
@@ -446,23 +484,8 @@
 			return scales?.yBandwidth;
 		},
 
-		registerScaleType: (dimension, type, priority, markId, config, columnName) => {
-			const dim = dimension as 'x' | 'y';
-			if (scales) {
-				scales.registerScaleType(dim, type, priority, markId, config, columnName);
-			} else {
-				pendingScaleRegistrations.push({
-					dimension: dim,
-					type,
-					priority,
-					markId,
-					config,
-					columnName
-				});
-			}
-		},
-		unregisterScaleType: (dimension, markId) =>
-			scales?.unregisterScaleType(dimension as 'x' | 'y', markId),
+		registerScaleType,
+		unregisterScaleType,
 
 		setParallelColumns: (markId, columns) => scales?.setParallelColumns(markId, columns),
 		reorderParallelAxis: (from, to) => scales?.reorderParallelAxis(from, to),
@@ -612,6 +635,8 @@
 						facetLabel={String(categoryLabel(cat))}
 						margin={{ top: 20, right: 10, bottom: 35, left: 55 }}
 						{scales}
+						{registerScaleType}
+						{unregisterScaleType}
 						{scaleGeneration}
 						{chartVisibility}
 						{chartHover}
@@ -637,6 +662,8 @@
 			margin={cellMargin}
 			{clipPadding}
 			{scales}
+			{registerScaleType}
+			{unregisterScaleType}
 			{scaleGeneration}
 			{chartVisibility}
 			{chartHover}

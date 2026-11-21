@@ -53,6 +53,12 @@
 		height?: number;
 		clipPadding?: number;
 		scales: ChartScales;
+		/**
+		 * The container's scale registration, which queues until its ChartScales
+		 * exists: `scales` is still null when this cell's marks first mount.
+		 */
+		registerScaleType: ChartContext['registerScaleType'];
+		unregisterScaleType: ChartContext['unregisterScaleType'];
 		/** The chart's scale replacements; owned by the container, which outlives its ChartScales. */
 		scaleGeneration: ScaleGeneration;
 		/** Whether any of the chart's cells is on screen; this cell reports into it. */
@@ -79,6 +85,8 @@
 		height = 250,
 		clipPadding = 0,
 		scales,
+		registerScaleType,
+		unregisterScaleType,
 		scaleGeneration,
 		chartVisibility,
 		chartHover,
@@ -417,11 +425,9 @@
 			return yBandwidth;
 		},
 
-		// Scale registration — delegate to ChartScales
-		registerScaleType: (dimension, type, priority, markId, config, columnName) =>
-			scales?.registerScaleType(dimension as 'x' | 'y', type, priority, markId, config, columnName),
-		unregisterScaleType: (dimension, markId) =>
-			scales?.unregisterScaleType(dimension as 'x' | 'y', markId),
+		// Scale registration — the container's, which queues until ChartScales exists
+		registerScaleType,
+		unregisterScaleType,
 		setParallelColumns: (markId, columns) => scales?.setParallelColumns(markId, columns),
 		reorderParallelAxis: (from, to) => scales?.reorderParallelAxis(from, to),
 		get parallelReorderState() {
