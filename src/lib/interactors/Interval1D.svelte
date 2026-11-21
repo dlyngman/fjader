@@ -23,8 +23,8 @@
 	 * (Interval1DCell) turns its pointer events into the drag through its own
 	 * scale and draws the range. In a facet grid it is one selection: a drag in
 	 * any cell replaces it, and every cell draws it. In a per-cell snippet (an
-	 * `interactors` snippet, as PlotFromSpec places it until the snippets go)
-	 * the declaration is per cell, so it registers once per cell, as before.
+	 * `interactors` snippet, until the snippets go) the declaration is per cell,
+	 * so it registers once per cell, as before.
 	 */
 	interface Props {
 		/** Filter group name: which selection this brush writes to. */
