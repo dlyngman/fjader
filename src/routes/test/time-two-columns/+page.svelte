@@ -56,7 +56,7 @@
 	{#if loadError}
 		<p class="error">Error: {loadError}</p>
 	{:else if !isLoaded}
-		<p>Loadingâ¦</p>
+		<p>Loading…</p>
 	{:else}
 		<h3>1. A timeline: BarMarkX, x1 = started, x2 = ended, one row per task</h3>
 		<p>
