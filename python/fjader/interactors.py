@@ -49,7 +49,11 @@ def interval_x(
     """Create an x-axis interval brush interactor.
 
     Args:
-        field: Optional field name override for the brush column.
+        field: The column it selects on. Default: the first column the chart's
+            marks draw on this axis; on a range, its start (x1 or y1), so ranges
+            are selected by where they start. A mark drawing another column on
+            the same axis is not selected by what lies under the brush: name its
+            column here.
         selection: Selection group name. Defaults to the first mark's selection,
             or the default group, which every mark naming no selection reads.
     """
@@ -62,7 +66,11 @@ def interval_y(
     """Create a y-axis interval brush interactor.
 
     Args:
-        field: Optional field name override for the brush column.
+        field: The column it selects on. Default: the first column the chart's
+            marks draw on this axis; on a range, its start (x1 or y1), so ranges
+            are selected by where they start. A mark drawing another column on
+            the same axis is not selected by what lies under the brush: name its
+            column here.
         selection: Selection group name. Defaults to the first mark's selection,
             or the default group, which every mark naming no selection reads.
     """
@@ -88,8 +96,11 @@ def interval_2d(
     """Create a 2D rectangle brush interactor.
 
     Args:
-        x_field: Optional x-axis field override (auto-detected from chart).
-        y_field: Optional y-axis field override (auto-detected from chart).
+        x_field: The column it selects on x. Default: the first column the
+            chart's marks draw on x (on a range, x1). A mark drawing another
+            column on the same axis is not selected by what lies under the
+            brush: name its column here.
+        y_field: As x_field, for y.
         selection: Selection group name. Defaults to the first mark's selection,
             or the default group, which every mark naming no selection reads.
     """
