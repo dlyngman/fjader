@@ -17,7 +17,11 @@ import type {
 } from '$lib/types';
 import { isBinExpression } from '$lib/sql/bin';
 import { isContinuousScale } from '$lib/scales/scale-categories';
-import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
+import {
+	LinearScaleState,
+	DEFAULT_PAN_LIMIT,
+	DEFAULT_ZOOM_LIMIT
+} from '$lib/scales/LinearScaleState.svelte';
 
 /** Type guard: narrows ScaleStateInstance to ContinuousScaleState via supportsPanZoom. */
 function isPanZoomScale(inst: ScaleStateInstance | null): inst is ContinuousScaleState {
@@ -149,29 +153,21 @@ export class ChartScales {
 				}
 			}
 
-			// Apply zoom/pan limits and disable flags
-			{
-				const xInst = this.#xScaleInstance;
-				const yInst = this.#yScaleInstance;
-				if (this.config.xZoomLimit !== undefined && isPanZoomScale(xInst)) {
-					xInst.setZoomLimit(this.config.xZoomLimit);
-				}
-				if (this.config.yZoomLimit !== undefined && isPanZoomScale(yInst)) {
-					yInst.setZoomLimit(this.config.yZoomLimit);
-				}
-				if (this.config.xPanLimit !== undefined && isPanZoomScale(xInst)) {
-					xInst.setPanLimit(this.config.xPanLimit);
-				}
-				if (this.config.yPanLimit !== undefined && isPanZoomScale(yInst)) {
-					yInst.setPanLimit(this.config.yPanLimit);
-				}
-				if (this.config.xDisableZoom && isPanZoomScale(xInst)) {
-					xInst.disableZoom = true;
-				}
-				if (this.config.yDisableZoom && isPanZoomScale(yInst)) {
-					yInst.disableZoom = true;
-				}
-			}
+			// Apply zoom/pan limits and disable flags (props: reactive through getters)
+			this.#applyPanZoom(
+				this.#xScaleInstance,
+				this.config.xZoomLimit,
+				this.config.xPanLimit,
+				this.config.xDisableZoom,
+				this.#appliedPanZoom.x
+			);
+			this.#applyPanZoom(
+				this.#yScaleInstance,
+				this.config.yZoomLimit,
+				this.config.yPanLimit,
+				this.config.yDisableZoom,
+				this.#appliedPanZoom.y
+			);
 		});
 
 		// Effect: Notify GPU coordinator of scale mapping changes
@@ -202,6 +198,40 @@ export class ChartScales {
 		// (forward direction: brush on overview → detail domain)
 		this.#setupSelectionLink('x');
 		this.#setupSelectionLink('y');
+	}
+
+	/**
+	 * What this chart set on each axis scale, so it clears only that. Axis
+	 * scales are shared through the registry: a chart that names no limit must
+	 * leave another chart's alone, but one whose prop goes back to unset (or
+	 * `disableZoom` to false) undoes what it set. The scales are no longer
+	 * rebuilt when a prop changes, which is what used to hide that nothing was
+	 * ever undone.
+	 */
+	#appliedPanZoom = {
+		x: { zoom: false, pan: false, disable: false },
+		y: { zoom: false, pan: false, disable: false }
+	};
+
+	#applyPanZoom(
+		inst: ScaleStateInstance | null,
+		zoomLimit: number | undefined,
+		panLimit: number | undefined,
+		disableZoom: boolean | undefined,
+		applied: { zoom: boolean; pan: boolean; disable: boolean }
+	): void {
+		if (!isPanZoomScale(inst)) return;
+		if (zoomLimit !== undefined) inst.setZoomLimit(zoomLimit);
+		else if (applied.zoom) inst.setZoomLimit(DEFAULT_ZOOM_LIMIT);
+		applied.zoom = zoomLimit !== undefined;
+
+		if (panLimit !== undefined) inst.setPanLimit(panLimit);
+		else if (applied.pan) inst.setPanLimit(DEFAULT_PAN_LIMIT);
+		applied.pan = panLimit !== undefined;
+
+		if (disableZoom) inst.disableZoom = true;
+		else if (applied.disable) inst.disableZoom = false;
+		applied.disable = !!disableZoom;
 	}
 
 	/**

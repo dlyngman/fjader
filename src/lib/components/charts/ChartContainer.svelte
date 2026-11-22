@@ -97,7 +97,9 @@
 		yDisableZoom?: boolean;
 		margin?: Partial<Margin>;
 		clipPadding?: number;
+		/** The x domain follows a brush on the same scale (a linked detail chart). Fixed at mount. */
 		useXSelection?: boolean;
+		/** The y domain follows a brush on the same scale. Fixed at mount. */
 		useYSelection?: boolean;
 		/**
 		 * The tooltip's colours against the color-scheme the chart inherits:
@@ -263,7 +265,7 @@
 
 	// --- ChartScales ---
 	let scales = $state<ChartScales | null>(null);
-	// Survives `scales` being recreated: see ScaleGeneration.
+	// Counts scale id swaps on the chart (a relabel): see ScaleGeneration.
 	const scaleGeneration = new ScaleGeneration(() => scales);
 	// Whether any cell is on screen; the cells report into it.
 	const chartVisibility = new ChartVisibility(
@@ -365,12 +367,11 @@
 			get yDisableZoom() {
 				return yDisableZoom;
 			},
-			get useXSelection() {
-				return useXSelection;
-			},
-			get useYSelection() {
-				return useYSelection;
-			},
+			// Fixed when the chart mounts: ChartScales sets up the selection link in
+			// its constructor, so a getter would subscribe this effect and a toggle
+			// would rebuild the scales from empty.
+			useXSelection: untrack(() => useXSelection),
+			useYSelection: untrack(() => useYSelection),
 			entranceGate: chartConfig.entrance
 		});
 

@@ -5,7 +5,7 @@
 import { scaleLog } from 'd3-scale';
 import type { ScaleLogarithmic } from 'd3-scale';
 import { format } from 'd3-format';
-import { LinearScaleState } from './LinearScaleState.svelte';
+import { LinearScaleState, DEFAULT_PAN_LIMIT, DEFAULT_ZOOM_LIMIT } from './LinearScaleState.svelte';
 import type { LinearScaleOptions, GpuScaleState } from './LinearScaleState.svelte';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 
@@ -31,7 +31,7 @@ export class LogScaleState extends LinearScaleState {
 		name: string,
 		extent: [number, number] = [1, 100],
 		type: string = 'log',
-		zoomLimits: [number, number] = [10, 100],
+		zoomLimits: [number, number] = [DEFAULT_PAN_LIMIT, DEFAULT_ZOOM_LIMIT],
 		options: LinearScaleOptions = {},
 		gpuCoordinator: GPUCoordinator | null = null
 	) {
