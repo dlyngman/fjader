@@ -16,6 +16,7 @@ import { MarkLifecycleV2 } from './MarkLifecycleV2.svelte';
 import { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
 import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
+import { setInitialContinuousDomains } from './domain-registration';
 
 interface DB {
 	run(sql: string): Promise<void>;
@@ -126,5 +127,35 @@ describe('a time axis draws each channel from its own column', () => {
 
 		expect(starts.map((r) => r.x)).toEqual([0, 2 * DAY]);
 		expect(ends.map((r) => r.x)).toEqual([DAY + HOUR, 3 * DAY + HOUR]);
+	});
+});
+
+describe('a time axis spans every channel drawn on it', () => {
+	it('a range reaches its latest end, not only its latest start', async () => {
+		// Field stats as #fetchFieldStats reads them: raw MIN/MAX, as epoch ms.
+		const [row] = await db.all(
+			`SELECT min(started) AS s0, max(started) AS s1, min(ended) AS e0, max(ended) AS e1 FROM events`
+		);
+		const stats = {
+			started: { column: 'started', min: Number(row.s0), max: Number(row.s1) },
+			ended: { column: 'ended', min: Number(row.e0), max: Number(row.e1) }
+		};
+		const x = new TimeScaleState('started', [0, 1], 'time', [1e-6, 1e6], {}, null);
+
+		setInitialContinuousDomains(
+			stats,
+			{ x, y: null },
+			{ x1: 'started', x2: 'ended', y: 'v' },
+			'time',
+			'linear',
+			'rect-1',
+			() => true,
+			() => true
+		);
+
+		expect(x.t0).toEqual(T0);
+		// The latest end is 3 days and an hour after t0; the latest start only 2 days.
+		expect(x.effectiveExtent[0]).toBeLessThanOrEqual(0);
+		expect(x.effectiveExtent[1]).toBeGreaterThanOrEqual(3 * DAY + HOUR);
 	});
 });

@@ -62,7 +62,7 @@ import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
 import type { QueryEngine, StatementClass } from '$lib/query-engine/QueryEngine';
 import { MarkHandle } from '$lib/query-engine/MarkHandle.svelte';
 import type { FilterGroup } from '$lib/query-engine/FilterGroup.svelte';
-import { isContinuousScale, isNumericScale } from '$lib/scales/scale-categories';
+import { isContinuousScale, isTemporalScale } from '$lib/scales/scale-categories';
 import { buildSchemaMap, type ColumnSchema } from '$lib/query-engine/QueryEngine';
 import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
 import { isRollingAvgExpression } from '$lib/sql/rolling-avg';
@@ -1484,7 +1484,9 @@ export class MarkLifecycleV2 {
 		{ column: string; min: number; max: number }
 	> | null> {
 		const select = this.#config.select;
-		const fields: { key: string; expr: unknown }[] = [];
+		// `time`: on a time axis, so read raw (epoch ms) even when the schema
+		// can't name it, as for an expression.
+		const fields: { key: string; expr: unknown; time?: boolean }[] = [];
 
 		// Iterate scaleMap — it has exactly the channels that need domains:
 		// x/y for normal marks, plus each parallel column for parallel mode.
@@ -1503,10 +1505,10 @@ export class MarkLifecycleV2 {
 					fields.push({ key, expr: expr.field });
 					continue;
 				}
-				if (!isNumericScale(scaleType)) continue;
+				if (!isContinuousScale(scaleType)) continue;
 				if (isNode(expr) && isAggregateExpression(expr)) continue;
 				if (isNode(expr) && isWindowExpression(expr)) continue;
-				fields.push({ key, expr });
+				fields.push({ key, expr, time: isTemporalScale(scaleType) });
 			}
 		}
 
@@ -1522,9 +1524,8 @@ export class MarkLifecycleV2 {
 		});
 
 		// Build a single query with MIN/MAX for each field.
-		// Numeric fields get CAST to REAL. Date/timestamp fields from bin
-		// expressions are left uncast — DuckDB returns Date objects that
-		// we convert to epoch ms in JS (same as fetchCategoricalDomains).
+		// Numeric fields get CAST to REAL. Date/timestamp fields, and any field
+		// on a time axis, are left uncast; their values are taken as epoch ms.
 		// describe() is cached on QueryEngine, so this await is free if
 		// it's already running in parallel from the same Promise.all.
 		const schema = buildSchemaMap(await this.#queryEngine.describe(this.#config.table));
@@ -1533,7 +1534,7 @@ export class MarkLifecycleV2 {
 			const colExpr = isNode(unique[i].expr) ? unique[i].expr : sqlColumn(String(unique[i].expr));
 			const colName = String(unique[i].expr).replace(/^["']|["']$/g, '');
 			const jsType = schema?.get(colName)?.jsType;
-			if (jsType === 'date') {
+			if (jsType === 'date' || unique[i].time) {
 				// Date columns: raw MIN/MAX, convert to epoch ms in JS
 				selectDef[`min_${i}`] = min(colExpr as ExprValue);
 				selectDef[`max_${i}`] = max(colExpr as ExprValue);

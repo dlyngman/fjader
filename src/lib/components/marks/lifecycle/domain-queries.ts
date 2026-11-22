@@ -23,7 +23,7 @@ import { identityKeyFor } from '$lib/query-engine/identity-key';
 // ---------------------------------------------------------------------------
 
 /**
- * Fetch categorical (band/point), time, color, size, and series domains
+ * Fetch categorical (band/point), color, size, and series domains
  * via sidecar queries against the coordinator.
  *
  * Returns the number of fetches executed (for logging).
@@ -191,44 +191,8 @@ export async function fetchCategoricalDomains(
 	// reports that case and the mark renders nothing, so populating a domain here
 	// would draw empty cells for categories no mark can put a row in.
 
-	// Time scale sidecar queries: fetch MIN/MAX datetime for t0 computation
-	const setupTimeFetch = (axis: string, field: unknown): void => {
-		if (!field) return;
-		const timeScaleState = axis === 'x' ? xScaleState : yScaleState;
-		if (!(timeScaleState as unknown as { addDatetimeExtent?: unknown })?.addDatetimeExtent) return;
-
-		// Unwrap AutoBinNode to get the underlying column name
-		const rawField = isBinExpression(field) ? field.field : field;
-		const colExpr = isNode(rawField) ? rawField : sqlColumn(String(rawField));
-
-		const q = Query.from(table).select({
-			min_time: min(colExpr),
-			max_time: max(colExpr)
-		});
-
-		fetches.push(
-			coordinator.query(q, { cache: true, source: table }).then((result) => {
-				if (stale()) return;
-				const row = Array.from(result)[0];
-				if (row && row.min_time != null && row.max_time != null) {
-					console.log(`[fetchCategoricalDomains] Time extent for ${axis}:`, [
-						row.min_time,
-						row.max_time
-					]);
-					(
-						timeScaleState as unknown as { addDatetimeExtent: (e: unknown[], id: string) => void }
-					).addDatetimeExtent([row.min_time, row.max_time], markId);
-				}
-			})
-		);
-	};
-
-	if (actualXScaleType === 'time') {
-		setupTimeFetch('x', select.x || select.x1);
-	}
-	if (actualYScaleType === 'time') {
-		setupTimeFetch('y', select.y || select.y1);
-	}
+	// A time axis's range (and its origin t0) comes with the other continuous
+	// axes' field stats: setInitialContinuousDomains.
 
 	// The colour domain, if a colour scale is set and there is a colour field.
 	const colorKey = colorChannel || 'fill';
