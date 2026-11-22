@@ -5,7 +5,8 @@
 		ChartContainer,
 		Grid,
 		DotsMark,
-		RectYMark,
+		BarMarkX,
+		RectMark,
 		AxisLeft,
 		AxisBottom,
 		Crosshair,
@@ -33,8 +34,7 @@
 				([task, started, ended]) => `('${task}', TIMESTAMP '${started}', TIMESTAMP '${ended}')`
 			).join(', ');
 			await queryEngine.exec(
-				`CREATE TABLE tasks AS SELECT *, CAST(date_diff('day', started, ended) AS INTEGER) AS days` +
-					` FROM (VALUES ${rows}) AS t(task, started, ended)`
+				`CREATE TABLE tasks AS SELECT * FROM (VALUES ${rows}) AS t(task, started, ended)`
 			);
 			isLoaded = true;
 		} catch (error) {
@@ -56,28 +56,20 @@
 	{#if loadError}
 		<p class="error">Error: {loadError}</p>
 	{:else if !isLoaded}
-		<p>Loading…</p>
+		<p>Loadingâ¦</p>
 	{:else}
-		<h3>1. A range: x1 = started, x2 = ended</h3>
+		<h3>1. A timeline: BarMarkX, x1 = started, x2 = ended, one row per task</h3>
 		<p>
-			One column per task from its start to its end, as tall as its length in days, on an axis of
-			its own (xScale false) that reaches the last end, 2024-04-15. Broken: no columns (each has
-			zero width), or an axis that stops at the last start, 2024-04-12.
+			Each bar runs from its task's start to its end, on a time axis of its own (xScale false) that
+			reaches the last end, 2024-04-15. Broken: no bars, bars of zero width, or an axis that stops
+			at the last start, 2024-04-12.
 		</p>
 		<div class="chart">
 			<ChartContainer xScale={false}>
 				<AxisLeft />
 				<AxisBottom />
 				<Grid axis="x" />
-				<RectYMark
-					table="tasks"
-					x1="started"
-					x2="ended"
-					y1={0}
-					y2="days"
-					fill="task"
-					opacity={0.7}
-				/>
+				<BarMarkX table="tasks" x1="started" x2="ended" y="task" fill="task" />
 				<Crosshair />
 				<MarginLabel />
 			</ChartContainer>
@@ -96,6 +88,18 @@
 				<DotsMark table="tasks" x="ended" y="task" fill="darkorange" r={6} />
 				<Crosshair />
 				<MarginLabel />
+			</ChartContainer>
+		</div>
+
+		<h3>3. RectMark with a plain y: a category is a bar's job</h3>
+		<p>
+			Draws nothing, and the console says: RectMark: y="task" has no extent … use BarMarkX. No hover
+			errors.
+		</p>
+		<div class="chart small">
+			<ChartContainer xScale={false}>
+				<AxisBottom />
+				<RectMark table="tasks" x1="started" x2="ended" y="task" />
 			</ChartContainer>
 		</div>
 
@@ -120,6 +124,10 @@
 	.chart {
 		height: 280px;
 		margin-bottom: 24px;
+	}
+
+	.chart.small {
+		height: 120px;
 	}
 
 	.error {
