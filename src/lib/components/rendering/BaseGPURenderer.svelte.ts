@@ -30,6 +30,8 @@ export interface RendererOptions {
 	readsChartScales?: boolean;
 	/** Where the layer draws: the plot (default) or the whole cell (axes). */
 	space?: 'plot' | 'cell';
+	/** A recompile for changed scale types failed (`syncScaleTypes`, which never rejects). */
+	onError?: (error: unknown) => void;
 }
 
 export interface InitConfig {
@@ -280,7 +282,10 @@ export class BaseGPURenderer {
 		this.#space = options.space ?? 'plot';
 		this.#xScaleType = options.xScaleType || 'linear';
 		this.#yScaleType = options.yScaleType || 'linear';
+		this.#onError = options.onError ?? null;
 	}
+
+	#onError: ((error: unknown) => void) | null;
 
 	// ... Getters (resourcesCreated, etc.) ...
 	get resourcesCreated(): boolean {
@@ -327,7 +332,7 @@ export class BaseGPURenderer {
 			);
 
 			if (this.#isDestroyed || this.#initGeneration !== currentGen) {
-				this.#gpuCoordinator.releaseRenderer(this.#rendererId);
+				this.#releaseSuperseded(scaleTypes);
 				return;
 			}
 
@@ -351,7 +356,7 @@ export class BaseGPURenderer {
 					});
 				}
 				if (this.#isDestroyed || this.#initGeneration !== currentGen) {
-					this.#gpuCoordinator.releaseRenderer(this.#rendererId);
+					this.#releaseSuperseded(scaleTypes);
 					return;
 				}
 			}
@@ -375,15 +380,36 @@ export class BaseGPURenderer {
 			// The types were read when this compile started; if the chart's moved
 			// while it ran, the change that announced them was compared against
 			// this compile's types or found no compile to compare against (the
-			// first, at mount). Catch up once.
+			// first, at mount). Catch up once; syncScaleTypes never rejects.
 			const now = this.#scaleTypes();
 			if (now.x !== scaleTypes.x || now.y !== scaleTypes.y) void this.syncScaleTypes();
 		} catch (error) {
 			if (!this.#isDestroyed && this.#initGeneration === currentGen) {
+				// Nothing was built for the types this compile read: compare against
+				// what was, or a sync back to these types would skip the retry.
+				this.#compilingScaleTypes = this.#builtScaleTypes;
 				console.error(`${this.#markType} initialization failed:`, error);
 				throw error;
 			}
 		}
+	}
+
+	/**
+	 * A compile that a newer one superseded (or that finished after destroy)
+	 * releases what it acquired itself: its pipeline and kernels, keyed by the
+	 * types it read. Not everything under this renderer's id, which would also
+	 * drop the newer compile's resources when it finished first (a cached
+	 * pipeline does) — unless the newer one reads the same types, in which case
+	 * the resources are the same entries and stay.
+	 */
+	#releaseSuperseded(scaleTypes: { x: string; y: string }): void {
+		if (this.#isDestroyed) {
+			this.#gpuCoordinator.releaseRenderer(this.#rendererId);
+			return;
+		}
+		const newest = this.#compilingScaleTypes;
+		if (newest && newest.x === scaleTypes.x && newest.y === scaleTypes.y) return;
+		this.#gpuCoordinator.releaseRendererTypes(this.#rendererId, scaleTypes);
 	}
 
 	/**
@@ -421,6 +447,9 @@ export class BaseGPURenderer {
 	 * The chart's render plan caches a pipeline per layer, so it has to be
 	 * rebuilt too — otherwise the swap is invisible and the chart keeps drawing
 	 * through the old one.
+	 *
+	 * Never rejects: a failed recompile goes to the `onError` option (the host
+	 * records it as it does a failed mount), so a caller may drop the promise.
 	 */
 	async syncScaleTypes(): Promise<void> {
 		const config = this.#initConfig;
@@ -433,10 +462,15 @@ export class BaseGPURenderer {
 
 		console.warn(
 			`[${this.#markType}] rebuilding pipeline: the chart's scales moved from ` +
-				`(${built.x}, ${built.y}) to (${want.x}, ${want.y}) after this mark compiled ` +
+				`(${target.x}, ${target.y}) to (${want.x}, ${want.y}) after this mark compiled ` +
 				`against them. Anything drawn in between used the wrong axis logic.`
 		);
-		await this.initialize(config);
+		try {
+			await this.initialize(config);
+		} catch (error) {
+			this.#onError?.(error);
+			return;
+		}
 		this.#gpuCoordinator.rebuildRenderPlan(this.#chartContext.chartId);
 		for (const { chartId } of this.#facetLayerControls) {
 			this.#gpuCoordinator.rebuildRenderPlan(chartId);

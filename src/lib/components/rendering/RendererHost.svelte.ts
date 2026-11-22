@@ -161,7 +161,12 @@ export class RendererHost {
 				xScaleType,
 				yScaleType,
 				readsChartScales,
-				space
+				space,
+				// A recompile for changed scale types: recorded as a failed mount is.
+				onError: (error) => {
+					console.error(`${this.#options.label ?? markType} renderer recompile failed:`, error);
+					this.error = (error as Error).message;
+				}
 			});
 			// Published before `initialize` is awaited, as the copies did by
 			// assigning first: a component's draw callback closes over this, and

@@ -24,8 +24,13 @@ beforeAll(() => {
 	(globalThis as Record<string, unknown>).GPUShaderStage ??= { VERTEX: 1, FRAGMENT: 2 };
 });
 
-function fakes(scaleTypes: { x?: string; y?: string }, held = false) {
-	/** With `held`, each compile waits until `release()` lets the pending ones finish. */
+type Types = { x: string; y: string };
+
+function fakes(
+	scaleTypes: { x?: string; y?: string },
+	{ hold, fail }: { hold?: (t: Types) => boolean; fail?: (t: Types) => boolean } = {}
+) {
+	/** A compile `hold` names waits until `release()` lets the pending ones finish. */
 	let pending: (() => void)[] = [];
 	const release = async () => {
 		const now = pending;
@@ -38,14 +43,19 @@ function fakes(scaleTypes: { x?: string; y?: string }, held = false) {
 	/** Every scale-type pair a pipeline has been acquired for, in order. */
 	const acquired: { x: string; y: string }[] = [];
 	const plansRebuilt: string[] = [];
+	/** What compiles gave back: everything (`all`), or one pair of types. */
+	const released: string[] = [];
+	const errors: unknown[] = [];
 
 	const coordinator = {
 		async acquirePipeline(_rendererId: string, _markType: string, types: { x: string; y: string }) {
 			acquired.push({ ...types });
-			if (held) await new Promise<void>((finish) => pending.push(finish));
+			if (hold?.(types)) await new Promise<void>((finish) => pending.push(finish));
+			if (fail?.(types)) throw new Error(`no pipeline for ${types.x},${types.y}`);
 			return { pipeline: { id: `${types.x}-${types.y}` }, dataLayout: {} };
 		},
-		releaseRenderer: () => {},
+		releaseRenderer: () => released.push('all'),
+		releaseRendererTypes: (_id: string, t: Types) => released.push(`${t.x},${t.y}`),
 		rebuildRenderPlan: (chartId: string) => plansRebuilt.push(chartId),
 		registerLayer: () => ({ remove: () => {} }),
 		invalidateChart: () => {}
@@ -64,7 +74,8 @@ function fakes(scaleTypes: { x?: string; y?: string }, held = false) {
 		'dots',
 		{ getDevice: () => device } as never,
 		coordinator as never,
-		chartContext as never
+		chartContext as never,
+		{ onError: (error) => errors.push(error) }
 	);
 
 	const init = {
@@ -74,7 +85,7 @@ function fakes(scaleTypes: { x?: string; y?: string }, held = false) {
 		rendererDefinition: {}
 	};
 
-	return { renderer, acquired, plansRebuilt, chartContext, init, release };
+	return { renderer, acquired, plansRebuilt, released, errors, chartContext, init, release };
 }
 
 describe('a renderer whose chart resolves its scale type late', () => {
@@ -129,7 +140,7 @@ describe('a scale type that changes while a compile runs', () => {
 		// recompile then finished for (linear, linear) in a band chart.
 		const { renderer, acquired, chartContext, init, release } = fakes(
 			{ x: 'band', y: 'linear' },
-			true
+			{ hold: () => true }
 		);
 		const mounted = renderer.initialize(init);
 		await release();
@@ -151,7 +162,10 @@ describe('a scale type that changes while a compile runs', () => {
 	});
 
 	it('catches up when the types move during the first compile, before any sync can run', async () => {
-		const { renderer, acquired, plansRebuilt, chartContext, init, release } = fakes({}, true);
+		const { renderer, acquired, plansRebuilt, chartContext, init, release } = fakes(
+			{},
+			{ hold: () => true }
+		);
 		const mounted = renderer.initialize(init);
 		// The chart resolves band while the mount's compile (linear) runs; the
 		// host's sync finds nothing built yet and returns.
@@ -166,5 +180,57 @@ describe('a scale type that changes while a compile runs', () => {
 			{ x: 'band', y: 'linear' }
 		]);
 		expect(plansRebuilt).toEqual(['chart-1']);
+	});
+
+	it('a superseded compile releases only what it acquired, not the newer compile’s pipeline', async () => {
+		// band → linear → band: the linear compile is slow, the band one (cached)
+		// finishes first; the linear one, superseded, finishing after it must not
+		// take the band pipeline with it.
+		const { renderer, acquired, released, chartContext, init, release } = fakes(
+			{ x: 'band', y: 'linear' },
+			{ hold: (t) => t.x === 'linear' }
+		);
+		await renderer.initialize(init);
+		released.length = 0;
+
+		chartContext.scaleTypes.x = 'linear';
+		const away = renderer.syncScaleTypes();
+		chartContext.scaleTypes.x = 'band';
+		await renderer.syncScaleTypes();
+		expect(renderer.resourcesCreated).toBe(true);
+
+		await release();
+		await away;
+		expect(acquired.at(-1)).toEqual({ x: 'band', y: 'linear' });
+		// 'all': the first recompile gave back the mount's pipeline as it started.
+		// Then the superseded one gave back its own, linear, and not band.
+		expect(released).toEqual(['all', 'linear,linear']);
+		expect(renderer.resourcesCreated).toBe(true);
+	});
+});
+
+describe('a recompile that fails', () => {
+	it('reports to onError instead of rejecting, and is retried when the types come back', async () => {
+		let failing = true;
+		const { renderer, acquired, errors, chartContext, init } = fakes(
+			{ x: 'band', y: 'linear' },
+			{ fail: (t) => failing && t.x === 'linear' }
+		);
+		await renderer.initialize(init);
+
+		chartContext.scaleTypes.x = 'linear';
+		await expect(renderer.syncScaleTypes()).resolves.toBeUndefined();
+		expect(errors).toHaveLength(1);
+
+		// Nothing was built for linear: compared against band, a sync back to
+		// linear after the cause is gone compiles again rather than being skipped.
+		chartContext.scaleTypes.x = 'band';
+		await renderer.syncScaleTypes();
+		failing = false;
+		chartContext.scaleTypes.x = 'linear';
+		await renderer.syncScaleTypes();
+
+		expect(acquired.filter((t) => t.x === 'linear')).toHaveLength(2);
+		expect(errors).toHaveLength(1);
 	});
 });
