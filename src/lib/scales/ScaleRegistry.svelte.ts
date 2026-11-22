@@ -77,6 +77,50 @@ export class ScaleRegistry {
 	#colorCharts = new Map<ColorScaleState, { expression: boolean; charts: Map<string, number> }>();
 	/** Bumped when `#colorCharts` changes: what `colorScalesOf` tracks. */
 	#colorChartsVersion = $state(0);
+
+	/**
+	 * Categorical colour fields in the order marks declared them (mount order,
+	 * which is document order): a field's colours start after those of the
+	 * fields before it on the same palette (`#placeColorFields`), so two fields
+	 * don't share colours for different meanings. Fixed colours: an explicit
+	 * range or pinned values (`ColorScaleState.colorBlockSize`).
+	 *
+	 * A better default, not a guarantee, and simple on purpose: a value's
+	 * colour is its field's base plus its rank, placed as categories arrive,
+	 * with nothing waiting. The trade-offs that buys:
+	 * - An earlier field gaining categories (within its room) shifts the fields
+	 *   after it once. In practice that happens while categories load.
+	 * - Fields are never released: a mark that switches fields appends the new
+	 *   one, so after a few switches a field starts mid-palette, and its colours
+	 *   depend on the order of switches until reload. Distinct within the field,
+	 *   and the fields switched away from are off screen, so nothing visibly
+	 *   collides.
+	 * - A chart's colours depend on what else is on the page.
+	 *
+	 * Follow-up, if field switching shows it (exploratory color-by dropdowns):
+	 * - Release a field's room when no live declaration uses it, deferred a
+	 *   tick so a remount gets it back, and place a field in the first gap that
+	 *   fits instead of after the last. Cost: reference-counted declarations
+	 *   (MarkColor un-declaring on a field change and on unmount), the deferral,
+	 *   and a gap search here. The part to do first.
+	 * - Let a field that outgrows its room take free slots elsewhere rather
+	 *   than shift the fields after it. Cost: a slot list per field (rank ->
+	 *   palette slot) instead of base + rank, in the rank table, the legend
+	 *   and getColor.
+	 * Both together amount to a slot allocator; a placement that waits for
+	 * every declared field (no shift at all) would also delay rendering.
+	 */
+	#colorFieldOrder: string[] = [];
+	/**
+	 * Each field's block as its scale last reported it, on its palette (its
+	 * key and length), and the room it was placed in (`reserve`).
+	 */
+	#colorBlocks = new Map<
+		string,
+		{ size: number; palette: string; length: number; reserve: number }
+	>();
+	/** Where each placed field's colours start; absent: not placed (from 0). */
+	#colorBases = new Map<string, number>();
 	#gpuCoordinator: GPUCoordinator | null = null;
 
 	// ============================================================
@@ -516,6 +560,72 @@ export class ScaleRegistry {
 			}
 		}
 		return out;
+	}
+
+	/**
+	 * A mark colours by `field` (its colour scale's key): its place in the
+	 * colour order, kept for the page. Idempotent; the first declaration wins.
+	 */
+	declareColorField(field: string): void {
+		if (!this.#colorFieldOrder.includes(field)) this.#colorFieldOrder.push(field);
+	}
+
+	/**
+	 * A colour scale's ranks, scheme or palette changed: record its block and,
+	 * if that moved, place the fields again. Runs when categories arrive or a
+	 * scheme changes, never per frame.
+	 */
+	reportColorField(scale: ColorScaleState): void {
+		if (scale.isDestroyed) return;
+		const size = scale.colorBlockSize;
+		const palette = scale.paletteKey;
+		const length = scale.paletteLength;
+		const block = this.#colorBlocks.get(scale.field);
+		if (block && block.size === size && block.palette === palette && block.length === length) {
+			// Nothing moved for the others; this scale (perhaps a new instance for a
+			// field seen before) still takes its place.
+			untrack(() => scale.setRankBase(this.#colorBases.get(scale.field) ?? 0));
+			return;
+		}
+		// The room it was placed in stays reserved on the same palette (below).
+		const reserve = block && block.palette === palette ? block.reserve : 0;
+		this.#colorBlocks.set(scale.field, { size, palette, length, reserve });
+		this.#placeColorFields();
+		untrack(() => {
+			for (const other of this.scales.color?.values() ?? []) {
+				if (other instanceof ColorScaleState && !other.isDestroyed)
+					other.setRankBase(this.#colorBases.get(other.field) ?? 0);
+			}
+		});
+	}
+
+	/**
+	 * Place the declared fields, in declaration order, per palette. A field is
+	 * placed only if its whole block fits what is left of its palette, so its
+	 * ranks stay below the palette's length: the shader's wrap and the
+	 * legend's then cannot disagree, and no field wraps onto another's colours.
+	 * One that does not fit cycles from the palette's first colour, as before.
+	 *
+	 * A field keeps the room it was once placed in (`reserve`), even after it
+	 * outgrows it or opts out: the fields after it stay where they are. What
+	 * still shifts later fields is an earlier field growing within its room's
+	 * limits, which happens when its categories load.
+	 */
+	#placeColorFields(): void {
+		this.#colorBases.clear();
+		const used = new Map<string, number>();
+		for (const field of this.#colorFieldOrder) {
+			const block = this.#colorBlocks.get(field);
+			if (!block) continue;
+			const base = used.get(block.palette) ?? 0;
+			if (block.size > 0 && base + block.size <= block.length) {
+				this.#colorBases.set(field, base);
+				block.reserve = Math.max(block.reserve, block.size);
+				used.set(block.palette, base + block.reserve);
+			} else if (block.reserve > 0) {
+				used.set(block.palette, base + block.reserve);
+			}
+		}
 	}
 
 	/**
