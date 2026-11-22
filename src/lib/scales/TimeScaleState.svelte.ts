@@ -1,12 +1,11 @@
 // =============================================================================
-// TimeScaleState.svelte.ts - Time scale with derived offset columns
+// TimeScaleState.svelte.ts - Time scale drawn as offsets from an origin t0
 // =============================================================================
 
 import { scaleUtc } from 'd3-scale';
 import { LinearScaleState } from './LinearScaleState.svelte';
 import type { LinearScaleOptions } from './LinearScaleState.svelte';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
-import { timeOffsetColumn } from '$lib/sql/derived-columns';
 
 /**
  * TimeScaleState extends LinearScaleState with datetime awareness.
@@ -36,10 +35,6 @@ export class TimeScaleState extends LinearScaleState {
 
 	// --- Datetime Extent Tracking ---
 	#datetimeExtents: Map<string, [Date, Date]> = new Map(); // Map<markId, [minDate, maxDate]>
-
-	// --- ViewManager Integration ---
-	#registeredTables: Set<string> = new Set();
-	#viewsCreated: Set<string> = new Set();
 
 	// --- Batching ---
 	#suppressUpdate: boolean = false;
@@ -93,7 +88,7 @@ export class TimeScaleState extends LinearScaleState {
 		const maxDate = toDate(datetimeRange[1]);
 		this.#datetimeExtents.set(markId, [minDate, maxDate]);
 
-		// Recompute t0 (may trigger view recreation if t0 changes)
+		// Recompute t0 (marks re-query their offsets when it changes)
 		this.#recomputeT0();
 
 		// Recompute ALL parent offsets with current t0, suppress intermediate updates
@@ -184,44 +179,13 @@ export class TimeScaleState extends LinearScaleState {
 		this.resetZoom(instant);
 	}
 
-	// ===========================================================================
-	// VIEWMANAGER INTEGRATION
-	// ===========================================================================
-
-	/** The actual database column name (may differ from scale registry key). */
+	/**
+	 * The column this scale was registered with (may differ from the registry
+	 * key). It tells two columns' time scales apart; marks draw their own
+	 * columns, each offset from t0.
+	 */
 	get sourceField(): string {
 		return this.#sourceField;
-	}
-
-	/** The derived column name for this time scale's offsets. */
-	get offsetColumnName(): string {
-		return timeOffsetColumn(this.#sourceField);
-	}
-
-	/**
-	 * Register a source table for derived view column creation.
-	 * View is created once t0 is known.
-	 */
-	registerTable(sourceTable: string): void {
-		this.#registeredTables.add(sourceTable);
-		if (this.#t0) {
-			this.#maybeCreateView(sourceTable);
-		}
-	}
-
-	/**
-	 * Create derived offset column in DuckDB view if not already created.
-	 */
-	#maybeCreateView(sourceTable: string): void {
-		if (this.#viewsCreated.has(sourceTable)) return;
-		if (!this.#t0) return;
-
-		this.#viewsCreated.add(sourceTable);
-	}
-
-	#unregisterFromViewManager(): void {
-		this.#registeredTables.clear();
-		this.#viewsCreated.clear();
 	}
 
 	// ===========================================================================
@@ -344,7 +308,7 @@ export class TimeScaleState extends LinearScaleState {
 
 	/**
 	 * Recompute t0 from all datetime extents.
-	 * If t0 changes, recreate all views with new offset expression.
+	 * A changed t0 makes every offset another date: ticks are invalidated, and marks rebuild their offset select from it.
 	 */
 	#recomputeT0(): void {
 		let minMs = Infinity;
@@ -359,21 +323,6 @@ export class TimeScaleState extends LinearScaleState {
 		this.#t0 = newT0;
 		// The same offsets are other dates now: ticks and labels kept by domain are stale.
 		this.invalidateTicks();
-
-		// t0 changed: recreate all views with updated offset expression
-		this.#viewsCreated.clear();
-		for (const table of this.#registeredTables) {
-			this.#maybeCreateView(table);
-		}
-	}
-
-	// ===========================================================================
-	// CLEANUP
-	// ===========================================================================
-
-	destroy(): void {
-		this.#unregisterFromViewManager();
-		super.destroy();
 	}
 }
 
