@@ -204,8 +204,11 @@ def plot(
         legend: Legend config — ``True`` for auto-detect, or a dict like
             ``{"color": "species", "position": "right"}``.
         interactors: List of interactor specs (e.g. ``[fj.interval_x()]``).
-        use_selection: Follow the shared scale's selection extent —
-            ``'x'``, ``'y'``, or ``'xy'`` for both axes.
+        use_selection: Follow a brush as a linked detail chart — ``'x'``,
+            ``'y'``, or ``'xy'`` for both axes. Follows an ``interval_x()``
+            (``interval_y()`` for y) on an axis with the same label, else the
+            same column, of the same scale type. ``interval_2d()`` only filters:
+            it can't be followed.
         zoom_limit: Max zoom depth. A number applies to both axes;
             a ``(x, y)`` tuple sets per-axis limits.
         pan_limit: How far past data edges the user can pan. A number
