@@ -207,6 +207,16 @@ export class ChartScales {
 	 * `disableZoom` to false) undoes what it set. The scales are no longer
 	 * rebuilt when a prop changes, which is what used to hide that nothing was
 	 * ever undone.
+	 *
+	 * Two limits, by design:
+	 * - The record is per axis, not per scale instance. If a relabel moves the
+	 *   axis to another scale in the same update that this chart's prop goes
+	 *   back to unset, the reset lands on the new scale (perhaps another
+	 *   chart's) and the old one keeps this chart's value. Storing the instance
+	 *   with the record would fix that, should it ever matter.
+	 * - A shared scale holds one value: when two charts set a limit on it and
+	 *   the last to set it unsets, it goes back to the default, not to the
+	 *   other chart's value.
 	 */
 	#appliedPanZoom = {
 		x: { zoom: false, pan: false, disable: false },
