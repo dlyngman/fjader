@@ -695,6 +695,12 @@ export class ColorScaleState {
 		this.#rankBase = base;
 		this._version++;
 		this.#refreshRanks();
+		// The shader wraps ranks by the rank space, which now includes the base: the
+		// config goes up again, as for a new range.
+		if (this.domain.length > 0) {
+			this.#uploadToGPU();
+			this.#registry.invalidateChartsUsingScale?.(this);
+		}
 	}
 
 	#hasRanks(): boolean {

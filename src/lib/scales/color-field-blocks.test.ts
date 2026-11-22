@@ -128,3 +128,42 @@ describe('colour blocks per field', () => {
 		expect(colours(again.scale, ['Biscoe'])).toEqual([schemeTableau10[3]]);
 	});
 });
+
+describe('a field’s base reaches the GPU', () => {
+	it('uploads the config again with a rank space that spans the base', () => {
+		// The shader wraps a rank by the config's palette size. Left at the
+		// field's own count (3), ranks 3..5 wrapped back to the first colours:
+		// the legend and tooltips (CPU) were right, the points were not.
+		const paletteSizes: number[] = [];
+		const coordinator = {
+			addAnimatedSource: () => {},
+			removeAnimatedSource: () => {},
+			writeColorConfig: (_slot: number, data: ArrayBufferLike) =>
+				paletteSizes.push(new Uint32Array(data as ArrayBuffer)[4]),
+			writeColorConfigSlotBase: () => {},
+			writeColorPalette: () => {},
+			writeColorRamp: () => {}
+		};
+		const registry = {
+			allocateColorSlot: () => 0,
+			allocatePaletteSlot: () => 0,
+			allocateRampSlot: () => 0,
+			releasePaletteSlot: () => {},
+			invalidateChartsUsingScale: () => {},
+			chartsUsing: () => ['chart-1']
+		};
+		const values = ['Biscoe', 'Dream', 'Torgersen'];
+		const scale = new ColorScaleState(
+			{ field: 'island', type: 'ordinal', scheme: 'tableau10', domain: values },
+			registry as never,
+			coordinator as never
+		);
+		scale.setIdentity(new FieldIdentity(values));
+		expect(paletteSizes.at(-1)).toBe(3);
+
+		scale.setRankBase(3);
+
+		expect(paletteSizes.at(-1)).toBe(6);
+		expect(Array.from(scale.slots.to as Float32Array)).toEqual([3, 4, 5]);
+	});
+});
