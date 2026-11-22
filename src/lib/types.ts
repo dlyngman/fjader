@@ -718,6 +718,12 @@ export interface ChartContext {
 		axis: 'x' | 'y' | 'fx',
 		state: { removeMark(id: string): unknown }
 	) => boolean;
+	/** As `placeExtent`, for a parallel mark's extent on the scale of `column`. */
+	placeColumnExtent: (
+		markId: string,
+		column: string,
+		state: { removeMark(id: string): unknown }
+	) => boolean;
 	/**
 	 * The mark leaves the chart (its unmount): the chart takes back what it
 	 * contributed under its id (extents, scale-type requirements, parallel

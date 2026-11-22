@@ -1237,6 +1237,9 @@ export class LinearScaleState {
 	 * Recompute extent from all registered marks.
 	 */
 	updateExtentFromExtents(nice: boolean = true, instant: boolean = false): void {
+		// No extents left (the axis's last mark left its chart): the domain stays
+		// as it was, by design. Collapsing to a default the moment its only mark
+		// unmounts would flicker, and a new mark animates in from it.
 		if (!this.#enableUpdates || this.#extents.size === 0) return;
 
 		const extents = Array.from(this.#extents.values());

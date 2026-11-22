@@ -24,6 +24,14 @@
  *
  * `place` runs on every data update: a lookup, an identity comparison and a
  * set check, the entry per mark kept and updated in place.
+ *
+ * The departed ids grow by one per unmount for the chart's lifetime: short
+ * strings, freed with the chart, kept because a write may land at any time
+ * after its mark left.
+ *
+ * When the last mark leaves an axis, the axis keeps its domain (a scale with
+ * no extents does not recompute): collapsing to a default the moment its only
+ * mark unmounts would flicker, and a new mark animates in from it.
  */
 export type ExtentAxis = 'x' | 'y' | 'fx';
 
@@ -37,11 +45,15 @@ export interface ExtentHolder {
  * write, false when the mark has left (write nothing).
  */
 export type PlaceExtent = (axis: ExtentAxis, state: ExtentHolder) => boolean;
+/** The same for a parallel mark's column scales, keyed by column name. */
+export type PlaceColumnExtent = (column: string, state: ExtentHolder) => boolean;
 
 interface MarkExtents {
 	x: ExtentHolder | null;
 	y: ExtentHolder | null;
 	fx: ExtentHolder | null;
+	/** A parallel mark's column scales; created on its first column write. */
+	columns: Map<string, ExtentHolder> | null;
 }
 
 export class MarkContributions {
@@ -59,17 +71,35 @@ export class MarkContributions {
 	 */
 	place(markId: string, axis: ExtentAxis, state: ExtentHolder): boolean {
 		if (this.#departed.has(markId)) return false;
-		let entry = this.#extents.get(markId);
-		if (!entry) {
-			entry = { x: null, y: null, fx: null };
-			this.#extents.set(markId, entry);
-		}
+		const entry = this.#entry(markId);
 		const previous = entry[axis];
 		if (previous !== state) {
 			previous?.removeMark(markId);
 			entry[axis] = state;
 		}
 		return true;
+	}
+
+	/** As `place`, for a parallel mark's extent on the scale of `column`. */
+	placeColumn(markId: string, column: string, state: ExtentHolder): boolean {
+		if (this.#departed.has(markId)) return false;
+		const entry = this.#entry(markId);
+		const columns = (entry.columns ??= new Map());
+		const previous = columns.get(column);
+		if (previous !== state) {
+			previous?.removeMark(markId);
+			columns.set(column, state);
+		}
+		return true;
+	}
+
+	#entry(markId: string): MarkExtents {
+		let entry = this.#extents.get(markId);
+		if (!entry) {
+			entry = { x: null, y: null, fx: null, columns: null };
+			this.#extents.set(markId, entry);
+		}
+		return entry;
 	}
 
 	/** The mark left: take its extents off every state they are on, and refuse its later writes. */
@@ -80,6 +110,7 @@ export class MarkContributions {
 		entry.x?.removeMark(markId);
 		entry.y?.removeMark(markId);
 		entry.fx?.removeMark(markId);
+		if (entry.columns) for (const state of entry.columns.values()) state.removeMark(markId);
 		this.#extents.delete(markId);
 	}
 }

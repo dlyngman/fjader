@@ -57,6 +57,7 @@
 		unregisterScaleType: ChartContext['unregisterScaleType'];
 		/** The container's: what the chart's marks contributed is owned there (MarkContributions). */
 		placeExtent: ChartContext['placeExtent'];
+		placeColumnExtent: ChartContext['placeColumnExtent'];
 		unregisterMark: ChartContext['unregisterMark'];
 		setParallelColumns: ChartContext['setParallelColumns'];
 		/** The chart's scale replacements; owned by the container, which outlives its ChartScales. */
@@ -84,6 +85,7 @@
 		registerScaleType,
 		unregisterScaleType,
 		placeExtent,
+		placeColumnExtent,
 		unregisterMark,
 		setParallelColumns,
 		scaleGeneration,
@@ -423,6 +425,7 @@
 		registerScaleType,
 		unregisterScaleType,
 		placeExtent,
+		placeColumnExtent,
 		unregisterMark,
 		setParallelColumns,
 		reorderParallelAxis: (from, to) => scales?.reorderParallelAxis(from, to),

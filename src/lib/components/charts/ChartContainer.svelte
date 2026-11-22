@@ -344,6 +344,8 @@
 	};
 	const placeExtent: ChartContext['placeExtent'] = (markId, axis, state) =>
 		markContributions.place(markId, axis, state);
+	const placeColumnExtent: ChartContext['placeColumnExtent'] = (markId, column, state) =>
+		markContributions.placeColumn(markId, column, state);
 	/**
 	 * A mark leaves the chart (its unmount): its extents, scale-type
 	 * requirements, parallel columns and entrance hold go, and its later writes
@@ -566,6 +568,7 @@
 		registerScaleType,
 		unregisterScaleType,
 		placeExtent,
+		placeColumnExtent,
 		unregisterMark,
 
 		// Not queued, unlike registerScaleType: a facet pass-through mark that sets
@@ -705,6 +708,7 @@
 						{registerScaleType}
 						{unregisterScaleType}
 						{placeExtent}
+						{placeColumnExtent}
 						{unregisterMark}
 						{setParallelColumns}
 						{scaleGeneration}
@@ -735,6 +739,7 @@
 			{registerScaleType}
 			{unregisterScaleType}
 			{placeExtent}
+			{placeColumnExtent}
 			{unregisterMark}
 			{setParallelColumns}
 			{scaleGeneration}

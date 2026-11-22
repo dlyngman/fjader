@@ -8,7 +8,7 @@ import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 import type { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { ScaleStateInstance, ContinuousScaleState } from '$lib/types';
-import type { PlaceExtent } from '$lib/components/charts/MarkContributions';
+import type { PlaceExtent, PlaceColumnExtent } from '$lib/components/charts/MarkContributions';
 import {
 	isContinuousScale,
 	isNumericScale,
@@ -113,7 +113,9 @@ export function setInitialContinuousDomains(
 	actualYScaleType: string,
 	markId: string,
 	/** Before each extent write: the chart records where it lands (false: the mark has left). */
-	place: PlaceExtent
+	place: PlaceExtent,
+	/** The same for a parallel mark's column scales (aliases other than x and y). */
+	placeColumn: PlaceColumnExtent
 ): void {
 	if (!fieldInfo) return;
 
@@ -151,8 +153,11 @@ export function setInitialContinuousDomains(
 				console.log(
 					`📐 [${markId}] Domain ${alias}: fieldInfo path → [${combinedMin}, ${combinedMax}]`
 				);
-				if (place(alias as 'x' | 'y', scaleState))
-					(scaleState as LinearScaleState).addMark([combinedMin, combinedMax], markId);
+				const placed =
+					alias === 'x' || alias === 'y'
+						? place(alias, scaleState)
+						: placeColumn(alias, scaleState);
+				if (placed) (scaleState as LinearScaleState).addMark([combinedMin, combinedMax], markId);
 			}
 		}
 	}

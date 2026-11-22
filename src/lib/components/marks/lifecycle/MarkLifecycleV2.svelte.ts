@@ -136,7 +136,7 @@ import {
 import { fetchCategoricalDomains, fetchGlobalAggregates } from './domain-queries';
 import { transformScaleKey } from './transform-scale-key';
 import { OtherRows, type SplitPlan } from './other-rows.svelte';
-import type { PlaceExtent } from '$lib/components/charts/MarkContributions';
+import type { PlaceExtent, PlaceColumnExtent } from '$lib/components/charts/MarkContributions';
 
 /** One result's rows as a remap reads them, with the bins and window they were computed over. */
 type TakenSide = BinRemapSide & { binKey: string | null; window: BinWindow | null };
@@ -239,6 +239,8 @@ export class MarkLifecycleV2 {
 	 */
 	readonly #placeExtent: PlaceExtent = (axis, state) =>
 		this.#chartContext.placeExtent(this.#markId, axis, state);
+	readonly #placeColumnExtent: PlaceColumnExtent = (column, state) =>
+		this.#chartContext.placeColumnExtent(this.#markId, column, state);
 	#filterGroup: FilterGroup;
 	#scaleMap: Record<string, ScaleStateInstance | null> = {};
 	#colorScaleState = $state<ColorScaleState | null>(null);
@@ -817,6 +819,11 @@ export class MarkLifecycleV2 {
 				config,
 				inferredScaleColumns?.x
 			);
+		} else {
+			// The chart keeps one requirement per mark per dimension, replaced by
+			// the next registration: a dimension this config no longer declares
+			// would otherwise keep its predecessor's.
+			this.#chartContext.unregisterScaleType('x', this.#markId);
 		}
 
 		if (scaleRequirements?.y) {
@@ -838,6 +845,8 @@ export class MarkLifecycleV2 {
 				config,
 				inferredScaleColumns?.y
 			);
+		} else {
+			this.#chartContext.unregisterScaleType('y', this.#markId);
 		}
 
 		if (this.#config.parallelMode && this.#config.parallelColumns) {
@@ -1303,7 +1312,8 @@ export class MarkLifecycleV2 {
 					this.actualXScaleType,
 					this.actualYScaleType,
 					this.#markId,
-					this.#placeExtent
+					this.#placeExtent,
+					this.#placeColumnExtent
 				);
 			}
 
@@ -3161,6 +3171,9 @@ export class MarkLifecycleV2 {
 
 	destroy(): void {
 		this.#destroyed = true;
+		// A fit still in flight would land on the mark's extent after its
+		// successor's, under the same id: its sequence check now fails.
+		++this.#fitDomainQuerySequence;
 		// Not releasing the entrance here: a mark rebuilds its lifecycle when
 		// its scales resolve, and the rebuilt one re-holds the same id. The
 		// mark's unmount releases it (ChartConfig.unregisterMark).

@@ -291,13 +291,13 @@
 	$effect(() => {
 		(void config, scaleGeneration);
 		untrack(() => {
-			const successor = !!(entry.table && effectiveXScaleType && queryEngine);
-			// The renderer is kept drawing only for a successor to take over.
-			if (setup && successor) gpuCoordinator?.markForRetain(markId);
+			if (setup) {
+				gpuCoordinator?.markForRetain(markId);
+			}
 			setup?.destroy();
 			setup = null;
 			// Gate on effectiveXScaleType (blocks while schema loads)
-			if (successor) {
+			if (entry.table && effectiveXScaleType && queryEngine) {
 				setup = new MarkLifecycleV2(
 					config,
 					reactiveConfig,
