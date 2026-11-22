@@ -81,11 +81,34 @@ export class ScaleRegistry {
 	/**
 	 * Categorical colour fields in the order marks declared them (mount order,
 	 * which is document order): a field's colours start after those of the
-	 * fields before it on the same palette, so two fields don't share colours
-	 * for different meanings. A better default, not a guarantee: a chart's
-	 * colours depend on what else is on the page, and a field's can shift once
-	 * while earlier fields' categories load. Fixed colours: an explicit range
-	 * or pinned values (`ColorScaleState.colorBlockSize`).
+	 * fields before it on the same palette (`#placeColorFields`), so two fields
+	 * don't share colours for different meanings. Fixed colours: an explicit
+	 * range or pinned values (`ColorScaleState.colorBlockSize`).
+	 *
+	 * A better default, not a guarantee, and simple on purpose: a value's
+	 * colour is its field's base plus its rank, placed as categories arrive,
+	 * with nothing waiting. The trade-offs that buys:
+	 * - An earlier field gaining categories (within its room) shifts the fields
+	 *   after it once. In practice that happens while categories load.
+	 * - Fields are never released: a mark that switches fields appends the new
+	 *   one, so after a few switches a field starts mid-palette, and its colours
+	 *   depend on the order of switches until reload. Distinct within the field,
+	 *   and the fields switched away from are off screen, so nothing visibly
+	 *   collides.
+	 * - A chart's colours depend on what else is on the page.
+	 *
+	 * Follow-up, if field switching shows it (exploratory color-by dropdowns):
+	 * - Release a field's room when no live declaration uses it, deferred a
+	 *   tick so a remount gets it back, and place a field in the first gap that
+	 *   fits instead of after the last. Cost: reference-counted declarations
+	 *   (MarkColor un-declaring on a field change and on unmount), the deferral,
+	 *   and a gap search here. The part to do first.
+	 * - Let a field that outgrows its room take free slots elsewhere rather
+	 *   than shift the fields after it. Cost: a slot list per field (rank ->
+	 *   palette slot) instead of base + rank, in the rank table, the legend
+	 *   and getColor.
+	 * Both together amount to a slot allocator; a placement that waits for
+	 * every declared field (no shift at all) would also delay rendering.
 	 */
 	#colorFieldOrder: string[] = [];
 	/**
