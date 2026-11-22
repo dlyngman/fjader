@@ -365,7 +365,8 @@ export class ChartScales {
 		const col = axisConfig.columnName;
 		if (typeof col === 'string') {
 			// Band/point: sourceField for ViewManager index columns.
-			// Time: sourceField for EPOCH() SQL in TimeScaleState.
+			// Time: sourceField keeps two columns' time scales apart, and a brushed
+			// time scale found by its column (selectionSourceScale).
 			// sourceField is NOT added to linear scales to avoid changing their
 			// config hash, which would break scale sharing for use_selection.
 			if (axisConfig.type === 'band' || axisConfig.type === 'point' || axisConfig.type === 'time') {
@@ -412,9 +413,9 @@ export class ChartScales {
 
 	/**
 	 * The group this axis is named into, if it can be. Not on band or point (two
-	 * columns' categories are not one axis), and not on time: a time scale
-	 * writes its own column into its marks' SQL (TimeScaleState.offsetExpression),
-	 * so a second column sharing it would be drawn from the first one's values.
+	 * columns' categories are not one axis), and not yet on time: its marks draw
+	 * their own columns from the shared origin, but a time scale is still told
+	 * apart by its column (sourceField), and a follower finds a brushed one by it.
 	 */
 	#groupName(axis: 'x' | 'y', config: ResolvedScaleConfiguration): string | null {
 		const share = axis === 'x' ? this.config.xScale : this.config.yScale;

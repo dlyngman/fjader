@@ -19,7 +19,14 @@
 	 */
 	interface Props {
 		selection?: string;
+		/**
+		 * The columns it selects on. Default: the first column the chart's marks
+		 * draw on each axis (on a range, x1 or y1). A mark drawing another column
+		 * on the same axis is not selected by what lies under the brush: name
+		 * its column here.
+		 */
 		xField?: FieldRef;
+		/** As `xField`, for y. */
 		yField?: FieldRef;
 	}
 

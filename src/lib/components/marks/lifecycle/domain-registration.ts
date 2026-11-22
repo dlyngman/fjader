@@ -11,7 +11,6 @@ import type { ScaleStateInstance, ContinuousScaleState } from '$lib/types';
 import type { PlaceExtent, PlaceColumnExtent } from '$lib/components/charts/MarkContributions';
 import {
 	isContinuousScale,
-	isNumericScale,
 	isCategoricalScale,
 	isTemporalScale
 } from '$lib/scales/scale-categories';
@@ -102,8 +101,8 @@ export function markDeferredScalesReady(
 
 /**
  * Set initial continuous scale domains from fieldInfo min/max stats.
- * Called once when fieldInfo arrives (Effect 6). Only applies to numeric
- * (non-temporal) scales with non-aggregated, non-binned fields.
+ * Called once when fieldInfo arrives (Effect 6). Continuous scales (numeric and
+ * time) with non-aggregated fields; binned ones only on a time axis.
  */
 export function setInitialContinuousDomains(
 	fieldInfo: Record<string, FieldInfoEntry> | null,
@@ -125,12 +124,15 @@ export function setInitialContinuousDomains(
 
 		const scaleType = alias === 'x' ? actualXScaleType : actualYScaleType;
 
-		// Time scales get their domain from sidecar query, skip fieldInfo path
-		if (isNumericScale(scaleType)) {
-			// Try direct alias first, then extent variants (x1/x2, y1/y2)
-			const candidates = [select[alias], select[`${alias}1`], select[`${alias}2`]].filter(
-				(f) => f != null && !isBinExpression(f)
-			);
+		if (isContinuousScale(scaleType)) {
+			const time = isTemporalScale(scaleType);
+			// Direct alias and extent variants (x1/x2, y1/y2): an axis spans every
+			// channel drawn on it. A binned numeric axis takes its domain from the
+			// data; a binned time axis takes its column's range here, because t0
+			// must be known before the bins can be drawn as offsets from it.
+			const candidates = [select[alias], select[`${alias}1`], select[`${alias}2`]]
+				.filter((f) => f != null && (time || !isBinExpression(f)))
+				.map((f) => (isBinExpression(f) ? f.field : f));
 
 			if (candidates.length === 0) continue;
 
@@ -157,7 +159,11 @@ export function setInitialContinuousDomains(
 					alias === 'x' || alias === 'y'
 						? place(alias, scaleState)
 						: placeColumn(alias, scaleState);
-				if (placed) (scaleState as LinearScaleState).addMark([combinedMin, combinedMax], markId);
+				if (!placed) continue;
+				// A time axis takes epoch ms and sets its origin t0 from them.
+				if (time)
+					(scaleState as TimeScaleState).addDatetimeExtent([combinedMin, combinedMax], markId);
+				else (scaleState as LinearScaleState).addMark([combinedMin, combinedMax], markId);
 			}
 		}
 	}

@@ -62,7 +62,7 @@ import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
 import type { QueryEngine, StatementClass } from '$lib/query-engine/QueryEngine';
 import { MarkHandle } from '$lib/query-engine/MarkHandle.svelte';
 import type { FilterGroup } from '$lib/query-engine/FilterGroup.svelte';
-import { isContinuousScale, isNumericScale } from '$lib/scales/scale-categories';
+import { isContinuousScale, isTemporalScale } from '$lib/scales/scale-categories';
 import { buildSchemaMap, type ColumnSchema } from '$lib/query-engine/QueryEngine';
 import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
 import { isRollingAvgExpression } from '$lib/sql/rolling-avg';
@@ -1437,9 +1437,9 @@ export class MarkLifecycleV2 {
 	}
 
 	/**
-	 * Inline time offset expressions for time scales.
-	 * Replaces ViewManager's offset column with direct SQL in the SELECT.
-	 * Handles base channel + extent variants (x1/x2, y1/y2 from bin expansion).
+	 * Rewrite a time axis's channels as seconds from the scale's origin t0, which
+	 * the GPU draws in float32. Handles base channel + extent variants (x1/x2,
+	 * y1/y2: a range, or bin expansion).
 	 */
 	#inlineTimeOffsets(select: Record<string, unknown>): void {
 		for (const [axis, channels] of [
@@ -1448,18 +1448,15 @@ export class MarkLifecycleV2 {
 		] as const) {
 			const t0Epoch = this.#timeOrigin(axis);
 			if (t0Epoch === null) continue;
-			const scaleState = this.#chartContext[`${axis}ScaleState`] as TimeScaleState;
 
+			// The scale gives the origin; each channel keeps its own column. A
+			// range's x1 and x2, or two marks on different date columns, share an
+			// axis but not their values.
 			for (const ch of channels) {
 				if (!(ch in select)) continue;
 				const val = select[ch];
-				if (typeof val === 'string') {
-					if (scaleState.offsetExpression) {
-						select[ch] = sql`${scaleState.offsetExpression}`;
-					}
-				} else if (isNode(val)) {
-					select[ch] = sql`CAST((epoch(${val}) - ${t0Epoch}) AS REAL)`;
-				}
+				const expr = typeof val === 'string' ? sqlColumn(val) : isNode(val) ? val : null;
+				if (expr) select[ch] = sql`CAST((epoch(${expr}) - ${t0Epoch}) AS REAL)`;
 			}
 		}
 	}
@@ -1487,7 +1484,9 @@ export class MarkLifecycleV2 {
 		{ column: string; min: number; max: number }
 	> | null> {
 		const select = this.#config.select;
-		const fields: { key: string; expr: unknown }[] = [];
+		// `time`: on a time axis, so read raw (epoch ms) even when the schema
+		// can't name it, as for an expression.
+		const fields: { key: string; expr: unknown; time?: boolean }[] = [];
 
 		// Iterate scaleMap — it has exactly the channels that need domains:
 		// x/y for normal marks, plus each parallel column for parallel mode.
@@ -1506,10 +1505,10 @@ export class MarkLifecycleV2 {
 					fields.push({ key, expr: expr.field });
 					continue;
 				}
-				if (!isNumericScale(scaleType)) continue;
+				if (!isContinuousScale(scaleType)) continue;
 				if (isNode(expr) && isAggregateExpression(expr)) continue;
 				if (isNode(expr) && isWindowExpression(expr)) continue;
-				fields.push({ key, expr });
+				fields.push({ key, expr, time: isTemporalScale(scaleType) });
 			}
 		}
 
@@ -1525,9 +1524,8 @@ export class MarkLifecycleV2 {
 		});
 
 		// Build a single query with MIN/MAX for each field.
-		// Numeric fields get CAST to REAL. Date/timestamp fields from bin
-		// expressions are left uncast — DuckDB returns Date objects that
-		// we convert to epoch ms in JS (same as fetchCategoricalDomains).
+		// Numeric fields get CAST to REAL. Date/timestamp fields, and any field
+		// on a time axis, are left uncast; their values are taken as epoch ms.
 		// describe() is cached on QueryEngine, so this await is free if
 		// it's already running in parallel from the same Promise.all.
 		const schema = buildSchemaMap(await this.#queryEngine.describe(this.#config.table));
@@ -1536,7 +1534,7 @@ export class MarkLifecycleV2 {
 			const colExpr = isNode(unique[i].expr) ? unique[i].expr : sqlColumn(String(unique[i].expr));
 			const colName = String(unique[i].expr).replace(/^["']|["']$/g, '');
 			const jsType = schema?.get(colName)?.jsType;
-			if (jsType === 'date') {
+			if (jsType === 'date' || unique[i].time) {
 				// Date columns: raw MIN/MAX, convert to epoch ms in JS
 				selectDef[`min_${i}`] = min(colExpr as ExprValue);
 				selectDef[`max_${i}`] = max(colExpr as ExprValue);
@@ -2163,14 +2161,13 @@ export class MarkLifecycleV2 {
 	// ===========================================================================
 
 	/**
-	 * Build a viewport count query for DensityHost LOD measurement.
-	 * Wraps the mark's assembled query as a subquery and counts rows within
-	 * the given viewport bounds. Returns null before setup completes (scale
-	 * domains and time offsets aren't available yet).
+	 * The mark's query: its resolved parts, under the filter its selection
+	 * applies. What the tooltip table is written from and the viewport count
+	 * wraps. Null before setup completes (scale domains and time offsets aren't
+	 * available yet).
 	 */
-	buildViewportCountQuery(xLo: number, xHi: number, yLo: number, yHi: number): string | null {
+	buildQuery(): string | null {
 		if (!this.setupComplete || !this.#resolvedQueryParts) return null;
-
 		const filter = this.#filterGroup.selection.predicate(this.#route) ?? [];
 		const q = assembleQuery({
 			table: this.#sourceTable,
@@ -2179,8 +2176,17 @@ export class MarkLifecycleV2 {
 			transformCompiler: this.#transformCompiler,
 			limit: this.#reactiveConfig.limit
 		});
-		if (!q) return null;
-		const sqlStr = q.toString();
+		return q ? q.toString() : null;
+	}
+
+	/**
+	 * Build a viewport count query for DensityHost LOD measurement.
+	 * Wraps the mark's query as a subquery and counts rows within the given
+	 * viewport bounds; filters on `x`, so only for a mark with one (LineMark).
+	 */
+	buildViewportCountQuery(xLo: number, xHi: number, yLo: number, yHi: number): string | null {
+		const sqlStr = this.buildQuery();
+		if (!sqlStr) return null;
 
 		const parts: string[] = [`SELECT COUNT(*) AS cnt FROM (${sqlStr}) AS _vp`];
 		const conditions: string[] = [`_vp.x BETWEEN ${xLo} AND ${xHi}`];
@@ -2464,7 +2470,7 @@ export class MarkLifecycleV2 {
 			if (!this.#transformCompiler.hasJSTransforms()) {
 				// Path A: Build a query with original field names (not CAST-wrapped).
 				// Uses channel-named aliases so tooltip columns match expectations.
-				const tooltipQuery = this.#buildTooltipQuery();
+				const tooltipQuery = this.buildQuery();
 				if (!tooltipQuery) return;
 
 				// Pre-cast numeric axis columns to DOUBLE (avoids DECIMAL overflow
@@ -2597,25 +2603,6 @@ export class MarkLifecycleV2 {
 		} catch (error) {
 			console.error(`Failed to write tooltip table "${tableName}":`, error);
 		}
-	}
-
-	/**
-	 * Build a tooltip query using original field names (not CAST-wrapped).
-	 * Uses the same query assembly path but without Float32 coercion.
-	 */
-	#buildTooltipQuery(): string | null {
-		if (!this.#resolvedQueryParts) return null;
-		const filter = this.#filterGroup.selection.predicate(this.#route) ?? [];
-
-		const q = assembleQuery({
-			table: this.#sourceTable,
-			parts: this.#resolvedQueryParts,
-			filter: filter as unknown[],
-			transformCompiler: this.#transformCompiler,
-			limit: this.#reactiveConfig.limit
-		});
-		if (!q) return null;
-		return q.toString();
 	}
 
 	/** Extract expression nodes from the tip prop as { label: exprNode } pairs. */
@@ -3096,9 +3083,9 @@ export class MarkLifecycleV2 {
 	 * Used by fitDomain (MIN/MAX) and potentially DensityHost (COUNT).
 	 */
 	#buildSidecarQuery(outerSelect: Record<string, unknown>, where?: unknown): Query | null {
-		const tooltipQuery = this.#buildTooltipQuery();
-		if (!tooltipQuery) return null;
-		const q = Query.from({ mark_data: sql`(${tooltipQuery})` }).select(
+		const markQuery = this.buildQuery();
+		if (!markQuery) return null;
+		const q = Query.from({ mark_data: sql`(${markQuery})` }).select(
 			outerSelect as Record<string, ExprValue>
 		);
 		if (where) q.where(where as FilterExpr);
