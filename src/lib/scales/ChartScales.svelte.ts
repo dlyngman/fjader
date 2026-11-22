@@ -262,21 +262,6 @@ export class ChartScales {
 		const useSelection = axis === 'x' ? this.config.useXSelection : this.config.useYSelection;
 		if (!useSelection) return;
 
-		// Helper: find the source (overview) scale by direct key lookup.
-		// The source scale's config is #buildAxisScaleConfig() WITHOUT the
-		// __selectionConsumer / __fitDomain discriminators that consumer
-		// charts add. Direct lookup is O(1) and immune to bucket iteration
-		// order (which caused bugs when multiple consumers shared a name).
-		const findSourceScale = (): LinearScaleState | null => {
-			const config = axis === 'x' ? this.scaleConfigurations?.x : this.scaleConfigurations?.y;
-			if (!config) return null;
-			const name = this.#scaleKey(axis, config);
-			const sourceConfig = this.#buildAxisScaleConfig(config);
-			const scale = this.#scaleRegistry.findScale(name, config.type, sourceConfig);
-			if (scale instanceof LinearScaleState) return scale;
-			return null;
-		};
-
 		// Effect A (forward): source.selectionExtent → render scale domain
 		// Tracks: sourceScale.selectionExtent (the input signal)
 		// Untracks: renderInst.domain.target (comparison-only, not a trigger)
@@ -284,7 +269,7 @@ export class ChartScales {
 			const renderInst = axis === 'x' ? this.#xScaleInstance : this.#yScaleInstance;
 			if (!renderInst || !(renderInst instanceof LinearScaleState)) return;
 
-			const sourceScale = findSourceScale();
+			const sourceScale = axis === 'x' ? this.#xSource : this.#ySource;
 			if (!sourceScale || sourceScale === renderInst) return;
 
 			const extent = sourceScale.selectionExtent; // reactive trigger
@@ -305,7 +290,7 @@ export class ChartScales {
 			const renderInst = axis === 'x' ? this.#xScaleInstance : this.#yScaleInstance;
 			if (!renderInst || !(renderInst instanceof LinearScaleState)) return;
 
-			const sourceScale = findSourceScale();
+			const sourceScale = axis === 'x' ? this.#xSource : this.#ySource;
 			if (!sourceScale || sourceScale === renderInst) return;
 
 			const [targetMin, targetMax] = renderInst.domain.target; // reactive trigger
@@ -372,23 +357,121 @@ export class ChartScales {
 	/**
 	 * Which axis scale this chart uses: charts whose axes get the same key share
 	 * one scale state, its domain and its zoom and pan. Shared by default:
-	 * - `xScale` names a group: shared with every chart naming it (different
-	 *   columns that are one measurement).
+	 * - `xScale` names a group: shared with the charts naming it, and only those
+	 *   (its key has a prefix, so no label or column falls into it). Numeric
+	 *   axes only, see #groupName.
 	 * - `xScale={false}`: this chart's own.
 	 * - Otherwise the label: axes with the same title are the same axis.
 	 * - Otherwise the column (a bin's field), across tables.
-	 * - An aggregate without a label (count(), sum(x)), or no column: this
-	 *   chart's own, since two counts are rarely one quantity.
+	 * - An axis showing an aggregate (count(), sum(x)) without a label, or no
+	 *   column: this chart's own, since two counts are rarely one quantity.
+	 *
+	 * Band, point and time scales also key by their column (#buildAxisScaleConfig),
+	 * so a label only joins those that show the same one.
 	 */
 	#scaleKey(axis: 'x' | 'y', config: ResolvedScaleConfiguration): string {
-		const share = axis === 'x' ? this.config.xScale : this.config.yScale;
-		if (typeof share === 'string' && share) return share;
+		const group = this.#groupName(axis, config);
+		if (group) return `group:${group}`;
 		const own = `${this.chartId}:${axis}`;
-		if (share === false) return own;
+		if ((axis === 'x' ? this.config.xScale : this.config.yScale) === false) return own;
 		const label = axis === 'x' ? this.xLabel : this.yLabel;
 		if (label) return label;
 		if (config.columnName && !config.aggregate) return config.columnName;
 		return own;
+	}
+
+	#warnedGroup = new Set<string>();
+
+	// What a following chart follows. Derived, so the link's effects re-run when
+	// the source changes, not whenever a brush registers somewhere on the page:
+	// the backward one writes, and clears the source's selection at full extent.
+	// Fields, which are lazy: nothing resolves before the marks register.
+	#xSource = $derived.by(() => this.selectionSourceScale('x'));
+	#ySource = $derived.by(() => this.selectionSourceScale('y'));
+
+	/**
+	 * The group this axis is named into, if it can be. Not on band or point (two
+	 * columns' categories are not one axis), and not on time: a time scale
+	 * writes its own column into its marks' SQL (TimeScaleState.offsetExpression),
+	 * so a second column sharing it would be drawn from the first one's values.
+	 */
+	#groupName(axis: 'x' | 'y', config: ResolvedScaleConfiguration): string | null {
+		const share = axis === 'x' ? this.config.xScale : this.config.yScale;
+		if (!share) return null;
+		const { type } = config;
+		if (type !== 'band' && type !== 'point' && type !== 'time') return share;
+		const warning = `${axis}:${type}:${share}`;
+		if (!this.#warnedGroup.has(warning)) {
+			this.#warnedGroup.add(warning);
+			console.warn(
+				`<ChartContainer> ${axis}Scale="${share}" is ignored on a ${type} axis: named ` +
+					`groups are for numeric axes. It shares by label or column instead.`
+			);
+		}
+		return null;
+	}
+
+	/**
+	 * What links a detail chart to its overview: the label, else the column,
+	 * whatever either chart's `xScale` says and aggregates included. Linking
+	 * follows what an axis shows; `xScale` only says who shares a scale.
+	 */
+	#linkKey(axis: 'x' | 'y', config: ResolvedScaleConfiguration): string | null {
+		return (axis === 'x' ? this.xLabel : this.yLabel) || config.columnName;
+	}
+
+	/**
+	 * A brush on `axis` writes its extent to this chart's scale: announce it to
+	 * the charts that follow it. Returns the release. Not for a chart that is
+	 * itself following, whose scale is no source.
+	 */
+	registerBrushTarget(axis: 'x' | 'y'): (() => void) | undefined {
+		if (axis === 'x' ? this.config.useXSelection : this.config.useYSelection) return;
+		const scale = axis === 'x' ? this.#xScaleInstance : this.#yScaleInstance;
+		const config = this.scaleConfigurations?.[axis];
+		if (!(scale instanceof LinearScaleState) || !config) return;
+		const linkKey = this.#linkKey(axis, config);
+		if (linkKey) return this.#scaleRegistry.addBrushTarget(scale, linkKey);
+	}
+
+	/**
+	 * The scale a following chart (`useXSelection`) takes its domain from:
+	 * 1. its named group's scale, if another chart holds one;
+	 * 2. a scale a brush writes to under the same link key (preferring the
+	 *    shared one when several do), which also finds an overview that keeps
+	 *    its axis to itself;
+	 * 3. the scale shared under the link key, brushed or not.
+	 * A source has the follower's type, and on a time axis its column.
+	 */
+	selectionSourceScale(axis: 'x' | 'y'): LinearScaleState | null {
+		const config = this.scaleConfigurations?.[axis];
+		if (!config) return null;
+		// Without the __selectionConsumer / __fitDomain discriminators a following
+		// chart adds, so a lookup by key cannot return a follower's scale.
+		const sourceConfig = this.#buildAxisScaleConfig(config);
+		const byKey = (key: string) => {
+			const scale = this.#scaleRegistry.findScale(key, config.type, sourceConfig);
+			return scale instanceof LinearScaleState ? scale : null;
+		};
+
+		const group = this.#groupName(axis, config);
+		const grouped = group ? byKey(`group:${group}`) : null;
+		if (grouped) return grouped;
+
+		const linkKey = this.#linkKey(axis, config);
+		if (!linkKey) return null;
+		const shared = byKey(linkKey);
+		const brushed = this.#scaleRegistry
+			.brushTargetsOf(linkKey)
+			.filter(
+				(scale) =>
+					scale.type === config.type &&
+					(config.type !== 'time' ||
+						(scale as LinearScaleState & { sourceField?: string }).sourceField ===
+							sourceConfig.sourceField)
+			);
+		if (shared && brushed.includes(shared)) return shared;
+		return brushed[0] ?? shared;
 	}
 
 	/**

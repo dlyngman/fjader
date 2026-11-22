@@ -75,6 +75,14 @@ export class ScaleRegistry {
 	 * without coloring, and which is per chart while coloring is per mark.
 	 */
 	#colorCharts = new Map<ColorScaleState, { expression: boolean; charts: Map<string, number> }>();
+	/**
+	 * The scales brushes write their extent to, each under its axis's link key
+	 * (label, else column): what a `useXSelection` chart follows.
+	 */
+	#brushTargets = new Set<{ scale: LinearScaleState; linkKey: string }>();
+	/** Bumped when `#brushTargets` changes: what `brushTargetsOf` tracks. */
+	#brushTargetsVersion = $state(0);
+
 	/** Bumped when `#colorCharts` changes: what `colorScalesOf` tracks. */
 	#colorChartsVersion = $state(0);
 
@@ -558,6 +566,30 @@ export class ScaleRegistry {
 			for (let i = 0; i < charts.length; i++) {
 				if (!out.includes(charts[i])) out.push(charts[i]);
 			}
+		}
+		return out;
+	}
+
+	/** A brush writes to `scale`, on an axis linked by `linkKey`. Returns its release. */
+	addBrushTarget(scale: LinearScaleState, linkKey: string): () => void {
+		const target = { scale, linkKey };
+		untrack(() => {
+			this.#brushTargets.add(target);
+			this.#brushTargetsVersion++;
+		});
+		return () => {
+			untrack(() => {
+				if (this.#brushTargets.delete(target)) this.#brushTargetsVersion++;
+			});
+		};
+	}
+
+	/** The scales brushes write to under `linkKey`, oldest brush first. Reactive. */
+	brushTargetsOf(linkKey: string): LinearScaleState[] {
+		void this.#brushTargetsVersion;
+		const out: LinearScaleState[] = [];
+		for (const target of this.#brushTargets) {
+			if (target.linkKey === linkKey) out.push(target.scale);
 		}
 		return out;
 	}

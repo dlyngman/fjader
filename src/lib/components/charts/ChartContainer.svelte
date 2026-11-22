@@ -33,9 +33,10 @@
 		/**
 		 * Which charts share the x axis (domain, zoom and pan). By default axes
 		 * with the same label share, else the same column, across tables; an
-		 * aggregate without a label is this chart's own. A name shares with every
-		 * chart naming it (different columns that are one measurement); false
-		 * keeps the axis to this chart.
+		 * aggregate without a label is this chart's own. A name shares with the
+		 * charts naming it (different columns that are one measurement) on numeric
+		 * axes; band, point and time ignore it with a warning, and share only the
+		 * same column. False keeps the axis to this chart.
 		 */
 		xScale?: string | false;
 		/** As `xScale`, for the y axis. */
@@ -669,6 +670,7 @@
 		get parallelScales() {
 			return scales?.parallelScales ?? null;
 		},
+		registerBrushTarget: (axis) => scales?.registerBrushTarget(axis),
 		get colorScales() {
 			return scaleRegistry.colorScalesOf(layout.chartId);
 		}

@@ -30,7 +30,8 @@
 		xLabel: null,
 		yLabel: null,
 		parallelScales: null,
-		colorScales: []
+		colorScales: [],
+		registerBrushTarget: () => undefined
 	};
 	setContext(DECLARATION_REGISTRY, registry);
 	setContext(DECLARATION_CHART, chart);

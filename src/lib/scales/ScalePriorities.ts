@@ -35,7 +35,7 @@ export interface ResolvedScaleConfiguration {
 	type: string;
 	config: Record<string, unknown>;
 	columnName: string | null;
-	/** Whether the requirement that named the column names an aggregate. */
+	/** Whether any requirement on the axis names an aggregate, whatever order they registered in. */
 	aggregate: boolean;
 }
 
@@ -86,10 +86,12 @@ export function resolveScaleConfiguration(
 	const resolvedConfig = resolveConfigurationForType(typeRequirements, resolvedType);
 
 	const sorted = [...typeRequirements].sort((a, b) => (b.priority || 0) - (a.priority || 0));
-	const named = sorted.find((req) => req.columnName);
-	const columnName = named?.columnName || null;
+	const columnName = sorted.find((req) => req.columnName)?.columnName || null;
+	// Any, not the one that named the column: that is registration order at equal
+	// priority, and an axis showing a count is not the other column's axis.
+	const aggregate = requirements.some((req) => req.aggregate);
 
-	return { type: resolvedType, config: resolvedConfig, columnName, aggregate: !!named?.aggregate };
+	return { type: resolvedType, config: resolvedConfig, columnName, aggregate };
 }
 
 function resolveConfigurationForType(

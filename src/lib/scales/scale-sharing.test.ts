@@ -4,16 +4,18 @@
  * without a label is the chart's own. `xScale` names a group, or keeps the
  * axis to the chart (false).
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { count } from '@uwdata/mosaic-sql';
 import { ChartScales } from './ChartScales.svelte';
 import { ScaleRegistry } from './ScaleRegistry.svelte';
-import { SCALE_PRIORITIES } from './ScalePriorities';
+import { SCALE_PRIORITIES, resolveScaleConfiguration } from './ScalePriorities';
 
 const registry = new ScaleRegistry();
 let charts = 0;
 
-function chart(options: { xLabel?: string; xScale?: string | false } = {}) {
+function chart(
+	options: { xLabel?: string; xScale?: string | false; useXSelection?: boolean } = {}
+) {
 	return new ChartScales({
 		gpuCoordinator: {} as never,
 		scaleRegistry: registry,
@@ -62,5 +64,89 @@ describe('which charts share an axis', () => {
 		const a = onX(chart({ xLabel: 'price' }), 'price');
 		const b = onX(chart({ xLabel: 'price', xScale: false }), 'price');
 		expect(a).not.toBe(b);
+	});
+});
+
+describe('named groups', () => {
+	it('do not capture a chart whose column or label has the same text', () => {
+		const named = onX(chart({ xScale: 'capture' }), 'dep_delay');
+		expect(named).not.toBe(onX(chart(), 'capture'));
+		expect(named).not.toBe(onX(chart({ xLabel: 'capture' }), 'arr_delay'));
+	});
+
+	it.each(['band', 'point', 'time'])('are ignored with one warning on a %s axis', (type) => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const on = (column: string, xScale?: string) => {
+			const scales = chart({ xScale });
+			scales.registerScaleType('x', type, SCALE_PRIORITIES.MANDATE, 'm', {}, column);
+			return scales.xScaleState;
+		};
+		const departure = on(`dep_${type}`, 'schedule');
+		expect(warn.mock.calls.filter(([m]) => String(m).includes('is ignored'))).toHaveLength(1);
+		// Never one scale for two columns; the same column shares as it does unnamed.
+		expect(on(`arr_${type}`, 'schedule')).not.toBe(departure);
+		expect(on(`dep_${type}`)).toBe(departure);
+		warn.mockRestore();
+	});
+});
+
+describe('an aggregate among several marks', () => {
+	it.each([
+		['first', [count(), 'target']],
+		['last', ['target', count()]]
+	] as const)('registered %s: the axis counts as an aggregate’s', (_order, columns) => {
+		const mixed = chart();
+		columns.forEach((column, i) => onX(mixed, column, `mark-${i}`));
+		// Resolved directly: Vitest compiles runes for the server, where
+		// scaleConfigurations keeps what it computed after the first registration.
+		const resolved = resolveScaleConfiguration(mixed.scaleRequirements.x as never);
+		expect(resolved?.aggregate).toBe(true);
+	});
+});
+
+describe('the scale a following chart takes its domain from', () => {
+	function link(
+		overview: Parameters<typeof chart>[0],
+		detail: Parameters<typeof chart>[0],
+		column: () => unknown
+	) {
+		const source = chart(overview);
+		const written = onX(source, column());
+		const release = source.registerBrushTarget('x');
+		const follower = chart({ ...detail, useXSelection: true });
+		const own = onX(follower, column());
+		return { written, release, follower, own };
+	}
+
+	it.each([
+		['both default', {}, {}, () => 'link_a'],
+		['detail xScale={false}', {}, { xScale: false }, () => 'link_b'],
+		['overview xScale={false}', { xScale: false }, {}, () => 'link_c'],
+		['different group names', { xScale: 'over' }, { xScale: 'detail' }, () => 'link_d'],
+		['an unlabelled aggregate', {}, {}, () => count()]
+	] as const)('%s: the scale the brush writes', (_name, overview, detail, column) => {
+		const { written, release, follower, own } = link(overview, detail, column);
+		expect(follower.selectionSourceScale('x')).toBe(written);
+		expect(own).not.toBe(written);
+		release?.();
+	});
+
+	it('prefers the brushed overview to an unbrushed chart sharing the column', () => {
+		onX(chart(), 'link_e');
+		const { written, follower, release } = link({ xScale: false }, {}, () => 'link_e');
+		expect(follower.selectionSourceScale('x')).toBe(written);
+		release?.();
+	});
+
+	it('stops following a chart-local overview once its brush is gone', () => {
+		const { follower, release } = link({ xScale: false }, {}, () => 'link_f');
+		release?.();
+		expect(follower.selectionSourceScale('x')).toBeNull();
+	});
+
+	it('a following chart’s own brush is no source', () => {
+		const follower = chart({ useXSelection: true });
+		onX(follower, 'link_g');
+		expect(follower.registerBrushTarget('x')).toBeUndefined();
 	});
 });

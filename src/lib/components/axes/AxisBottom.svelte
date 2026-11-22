@@ -3,10 +3,10 @@
 	import type { AxisSpec, TickFormat } from './axis-spec';
 
 	/**
-	 * The x axis, below the plot: its ticks, their labels, and the scale's label
-	 * as its title. Drawn on the GPU in the chart's margins: this component
-	 * declares the axis (charts/declarations), wherever it is placed, and the chart's
-	 * canvas draws it (GpuAxis).
+	 * The x axis, below the plot: its ticks, their labels, and its title (the
+	 * scale's label, else its column). Drawn on the GPU in the chart's margins:
+	 * this component declares the axis (charts/declarations), wherever it is
+	 * placed, and the chart's canvas draws it (GpuAxis).
 	 */
 	interface Props {
 		ticksNumber?: number;
@@ -16,8 +16,10 @@
 		 */
 		tickFormat?: TickFormat | null;
 		/**
-		 * Draw the scale's label as the axis title (default). `false` draws none; the
-		 * label still names the scale, so charts sharing it still link their zoom.
+		 * Draw the axis title (default): the scale's label, else the column it shows
+		 * (an aggregate's SQL text, `count(*)`). An empty label or `false` draws
+		 * none; with `false` a label still names the scale, so charts sharing it
+		 * still link their zoom.
 		 */
 		title?: boolean;
 		/**

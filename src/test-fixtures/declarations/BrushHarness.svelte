@@ -56,7 +56,8 @@
 		get parallelScales() {
 			return parallelScales;
 		},
-		colorScales: []
+		colorScales: [],
+		registerBrushTarget: () => undefined
 	};
 	setContext(DECLARATION_REGISTRY, registry);
 	setContext(DECLARATION_CHART, chart);
