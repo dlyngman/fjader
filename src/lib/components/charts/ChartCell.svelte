@@ -20,6 +20,7 @@
 	import type { DimValue } from '$lib/query-engine/categorical-identity';
 	import type { D3Scale, Point } from '$lib/types';
 	import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
+	import { isCategoricalScale } from '$lib/scales/scale-categories';
 	import { HoverSettle } from './hover-settle';
 	import Tooltip from '$lib/interactors/Tooltip.svelte';
 	import HoverIndicator from '$lib/interactors/HoverIndicator.svelte';
@@ -163,6 +164,13 @@
 		return ss.updateScaleDomain(ownXScale!) as D3Scale;
 	});
 
+	/**
+	 * A continuous y grows upward; a band or point y lists its slots from the top,
+	 * as the GPU draws them (its base scale already runs that way).
+	 */
+	const yRange = (scaleType: string): [number, number] =>
+		isCategoricalScale(scaleType) ? [0, layout.innerHeight] : [layout.innerHeight, 0];
+
 	const cellYScale = $derived.by((): D3Scale | null => {
 		const ss = scales?.yScaleState;
 		if (!layout.isReady || !ss) return null;
@@ -171,7 +179,7 @@
 			ownYScale = (ss.getBaseScale('y', layout.innerHeight) as CellScale).copy();
 			ownYSource = ss;
 		}
-		ownYScale!.range([layout.innerHeight, 0]);
+		ownYScale!.range(yRange(ss.scaleType));
 		return ss.updateScaleDomain(ownYScale!) as D3Scale;
 	});
 
@@ -196,7 +204,7 @@
 			ownYScale = (ss.getBaseScale('y', layout.innerHeight) as CellScale).copy();
 			ownYSource = ss;
 		}
-		ownYScale!.range([layout.innerHeight, 0]);
+		ownYScale!.range(yRange(ss.scaleType));
 		return ss.updateScaleDomain(ownYScale!) as D3Scale;
 	});
 
