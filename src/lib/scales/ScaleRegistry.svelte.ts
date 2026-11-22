@@ -77,6 +77,19 @@ export class ScaleRegistry {
 	#colorCharts = new Map<ColorScaleState, { expression: boolean; charts: Map<string, number> }>();
 	/** Bumped when `#colorCharts` changes: what `colorScalesOf` tracks. */
 	#colorChartsVersion = $state(0);
+
+	/**
+	 * Categorical colour fields in the order marks declared them (mount order,
+	 * which is document order): a field's colours start after those of the
+	 * fields before it on the same palette, so two fields don't share colours
+	 * for different meanings. A better default, not a guarantee: a chart's
+	 * colours depend on what else is on the page, and a field's can shift once
+	 * while earlier fields' categories load. Fixed colours: an explicit range
+	 * or pinned values (`ColorScaleState.colorBlockSize`).
+	 */
+	#colorFieldOrder: string[] = [];
+	/** Each field's block, as its scale last reported it. */
+	#colorBlocks = new Map<string, { size: number; palette: string }>();
 	#gpuCoordinator: GPUCoordinator | null = null;
 
 	// ============================================================
@@ -516,6 +529,51 @@ export class ScaleRegistry {
 			}
 		}
 		return out;
+	}
+
+	/**
+	 * A mark colours by `field` (its colour scale's key): its place in the
+	 * colour order, kept for the page. Idempotent; the first declaration wins.
+	 */
+	declareColorField(field: string): void {
+		if (!this.#colorFieldOrder.includes(field)) this.#colorFieldOrder.push(field);
+	}
+
+	/**
+	 * A colour scale's ranks changed: record its block, and if it changed,
+	 * place every categorical field again. Runs when categories arrive, never
+	 * per frame.
+	 */
+	reportColorField(scale: ColorScaleState): void {
+		const size = scale.colorBlockSize;
+		const palette = scale.paletteKey;
+		const block = this.#colorBlocks.get(scale.field);
+		if (block?.size === size && block.palette === palette) {
+			// Nothing moved for the others; this scale (perhaps a new instance for a
+			// field seen before) still takes its place.
+			untrack(() => scale.setRankBase(this.#colorBase(scale)));
+			return;
+		}
+		this.#colorBlocks.set(scale.field, { size, palette });
+		untrack(() => {
+			for (const other of this.scales.color?.values() ?? []) {
+				if (other instanceof ColorScaleState) other.setRankBase(this.#colorBase(other));
+			}
+		});
+	}
+
+	/** Where `scale`'s colours start: the blocks of the fields declared before it on its palette. */
+	#colorBase(scale: ColorScaleState): number {
+		const own = this.#colorBlocks.get(scale.field);
+		// Takes no part (or a field no mark declared, like a line's series).
+		if (!own?.size || !this.#colorFieldOrder.includes(scale.field)) return 0;
+		let base = 0;
+		for (const field of this.#colorFieldOrder) {
+			if (field === scale.field) break;
+			const block = this.#colorBlocks.get(field);
+			if (block && block.palette === own.palette) base += block.size;
+		}
+		return base;
 	}
 
 	/**

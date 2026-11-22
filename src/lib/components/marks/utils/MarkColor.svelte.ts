@@ -52,6 +52,16 @@ export class MarkColor {
 		this.#scaleRegistry = scaleRegistry;
 		this.#chartContext = chartContext;
 
+		// Its place in the page's colour order: declared at mount, which runs in
+		// document order, not when the scale is created (that waits for the
+		// table's schema). A field that changes later is declared then.
+		untrack(() => {
+			if (this.#mode === 'field' && this.#field) {
+				const field = this.#field;
+				scaleRegistry.declareColorField(isNode(field) ? field.toString() : (field as string));
+			}
+		});
+
 		// 1. Lifecycle: Create/Destroy Scale (type-based key, NOT scheme)
 		// Blocks scale creation until type is determined (schema ready)
 		$effect(() => {
@@ -73,6 +83,7 @@ export class MarkColor {
 					// For aggregate nodes, use the SQL string as the scale key
 					// This ensures each unique aggregate expression gets its own scale
 					const scaleKey = isNode(field) ? field.toString() : field;
+					this.#scaleRegistry.declareColorField(scaleKey as string);
 
 					// Pass type, scheme, and transform params in config
 					// Registry will use only 'type' for caching, 'scheme' for initialization/updates

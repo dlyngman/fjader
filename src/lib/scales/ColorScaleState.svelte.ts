@@ -150,6 +150,13 @@ export class ColorScaleState {
 	#pinned: readonly ColorDomainValue[] | null = null;
 	#nextRank = 0;
 	/**
+	 * Where this field's colours start in its palette: the ranks of the fields
+	 * declared before it on the same palette (ScaleRegistry.#assignColorBases),
+	 * so two legends for different fields don't use the same colours for
+	 * different meanings. 0 for a field that takes no part.
+	 */
+	#rankBase = 0;
+	/**
 	 * id -> rank as a dense array, packed into the shared identity slot table so
 	 * the fragment shader can resolve a channel id to a palette index. -1 for an
 	 * id this scale has never ranked.
@@ -637,7 +644,7 @@ export class ColorScaleState {
 		const table = new Float32Array(identity.values.length);
 		table.fill(-1);
 		for (const [id, rank] of this.#paletteRank) {
-			if (id >= 0 && id < table.length) table[id] = rank;
+			if (id >= 0 && id < table.length) table[id] = this.#rankBase + rank;
 		}
 		// The NULL category and the Other buckets draw the null colour: no palette
 		// slot, so they read as missing data or "the rest" and shift no category's
@@ -660,6 +667,34 @@ export class ColorScaleState {
 		slots.to = table;
 		slots.count = table.length;
 		slots.version++;
+		// Its block size may have changed: the registry places the fields again.
+		// Optional: a test's registry stand-in may not place fields.
+		this.#registry.reportColorField?.(this);
+	}
+
+	/**
+	 * How many palette colours this field takes from the fields declared after
+	 * it: its ranks, when it is ordinal on its scheme (no explicit range or
+	 * pinned values) and fits the palette. 0 takes no part: it cycles on its
+	 * own from the palette's first colour, as before.
+	 */
+	get colorBlockSize(): number {
+		if (!this.isOrdinal || !this.hasIdentity || this.#range || this.#pinned) return 0;
+		const n = this.#nextRank;
+		return n > 0 && n <= this.#colors().length ? n : 0;
+	}
+
+	/** The palette the block is taken from: fields on different ones don't share. */
+	get paletteKey(): string {
+		return this.#reverse ? `${this.#scheme}:reversed` : this.#scheme;
+	}
+
+	/** Set by the registry: where this field's colours start (see #rankBase). */
+	setRankBase(base: number): void {
+		if (base === this.#rankBase) return;
+		this.#rankBase = base;
+		this._version++;
+		this.#refreshRanks();
 	}
 
 	#hasRanks(): boolean {
@@ -717,7 +752,9 @@ export class ColorScaleState {
 			const id = identity.ids.get(value as never);
 			const rank = id === undefined ? undefined : this.#paletteRank.get(id);
 			// Same wrap the shader applies, so an over-32 palette agrees too.
-			return rank === undefined ? ColorScaleState.NULL_COLOR : colors[rank % colors.length];
+			return rank === undefined
+				? ColorScaleState.NULL_COLOR
+				: colors[(this.#rankBase + rank) % colors.length];
 		});
 
 		// No .unknown(): it widens d3's third type param past D3ColorScale, and
@@ -756,8 +793,9 @@ export class ColorScaleState {
 		// Capped at 32, the palette's size, so a chart with more categories than
 		// that wraps as it always has. Floored at 1: this is a u32 modulus and 0
 		// is undefined behaviour in WGSL.
+		// The field's block starts at #rankBase, so the rank space spans it too.
 		const rankSpace = this.hasIdentity
-			? this.#nextRank
+			? this.#rankBase + this.#nextRank
 			: (this.#pinned?.length ?? this.domain.length);
 		const config = this.#buildColorConfig({
 			type: 0, // ORDINAL
@@ -1015,7 +1053,9 @@ export class ColorScaleState {
 		if (rank === undefined) return ColorScaleState.NULL_COLOR;
 		const colors = this.#colors();
 		// Same wrap the shader applies, so an over-32 palette agrees too.
-		return colors.length ? colors[rank % colors.length] : ColorScaleState.NULL_COLOR;
+		return colors.length
+			? colors[(this.#rankBase + rank) % colors.length]
+			: ColorScaleState.NULL_COLOR;
 	}
 
 	/**
