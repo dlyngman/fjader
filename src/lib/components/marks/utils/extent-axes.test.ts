@@ -84,6 +84,7 @@ describe('rectExtent', () => {
 		expect(y.hi).toBeNull();
 		expect(y.error).toContain('RectMark: y="task" has no extent');
 		expect(y.error).toContain('use BarMarkX');
+		expect(y.error).toContain('A grid of two categories has no mark yet');
 
 		expect(rectExtent('RectYMark', 'x', 'task', { lo: null, hi: null }).error).toContain(
 			'use BarMarkY'

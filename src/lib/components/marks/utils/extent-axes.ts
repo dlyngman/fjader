@@ -86,6 +86,7 @@ export function rectExtent(
 		hi: null,
 		error:
 			`${mark}: ${axis}="${String(value)}" has no extent. A rect spans ${axis}1 to ${axis}2, ` +
-			`or bin("${String(value)}"); for one row per category, use ${bar}.`
+			`or bin("${String(value)}"); for one row per category, use ${bar}. (A grid of two ` +
+			`categories has no mark yet.)`
 	};
 }
