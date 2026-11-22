@@ -237,6 +237,15 @@ export class BaseGPURenderer {
 	 * re-checked.
 	 */
 	#compilingScaleTypes: { x: string; y: string } | null = null;
+	/**
+	 * Whether the latest compile ran before the chart's scales were ready: its
+	 * types were provisional (an unresolved axis reads as `linear`, and marks
+	 * still register at mount), and nothing it drew had a domain. A rebuild then
+	 * is startup; one after the scales were ready corrects what was drawn, and is
+	 * said. Kept beside the types: set when a compile starts, reset on failure.
+	 */
+	#compiledProvisional = false;
+	#builtProvisional = false;
 
 	/**
 	 * Bindings whose buffer belongs to another renderer (a label reads its
@@ -321,6 +330,8 @@ export class BaseGPURenderer {
 
 			const scaleTypes = this.#scaleTypes();
 			this.#compilingScaleTypes = scaleTypes;
+			const provisional = !this.#chartContext.scalesReady;
+			this.#compiledProvisional = provisional;
 			const result = await this.#gpuCoordinator.acquirePipeline(
 				this.#rendererId,
 				this.#markType,
@@ -365,6 +376,7 @@ export class BaseGPURenderer {
 			this.#perDataLayout = result.dataLayout;
 			this.#initConfig = config;
 			this.#builtScaleTypes = scaleTypes;
+			this.#builtProvisional = provisional;
 			this.#placement = config.placement ?? null;
 			this.#kernels = kernels;
 			if (this.#placement) this.#ensureRecord(this.#instanceCount);
@@ -388,6 +400,7 @@ export class BaseGPURenderer {
 				// Nothing was built for the types this compile read: compare against
 				// what was, or a sync back to these types would skip the retry.
 				this.#compilingScaleTypes = this.#builtScaleTypes;
+				this.#compiledProvisional = this.#builtProvisional;
 				console.error(`${this.#markType} initialization failed:`, error);
 				throw error;
 			}
@@ -436,7 +449,9 @@ export class BaseGPURenderer {
 	 * Called whenever the chart's types change. Two cases reach it — an axis
 	 * whose type resolved after this renderer was built (a mark that infers its
 	 * scale from the table schema), and one that genuinely changes later,
-	 * when a mark joins the chart and MANDATEs a different type.
+	 * when a mark joins the chart and MANDATEs a different type. Only the second
+	 * warns: the first compiled before the chart's scales were ready, against
+	 * provisional types, and is how every guide on a time or band axis starts.
 	 *
 	 * The data survives: `initialize` releases the coordinator's pipeline and
 	 * shader references but not the buffers this renderer owns, and rebuilds the
@@ -460,11 +475,14 @@ export class BaseGPURenderer {
 		const want = this.#scaleTypes();
 		if (want.x === target.x && want.y === target.y) return;
 
-		console.warn(
-			`[${this.#markType}] rebuilding pipeline: the chart's scales moved from ` +
-				`(${target.x}, ${target.y}) to (${want.x}, ${want.y}) after this mark compiled ` +
-				`against them. Anything drawn in between used the wrong axis logic.`
-		);
+		// A compile from before the scales were ready had provisional types: rebuilt
+		// quietly. Types that move after they were ready are said.
+		if (!this.#compiledProvisional)
+			console.warn(
+				`[${this.#markType}] rebuilding pipeline: the chart's scales moved from ` +
+					`(${target.x}, ${target.y}) to (${want.x}, ${want.y}) after this mark compiled ` +
+					`against them. Anything drawn in between used the wrong axis logic.`
+			);
 		try {
 			await this.initialize(config);
 		} catch (error) {

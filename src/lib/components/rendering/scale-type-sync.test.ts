@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
 import { BaseGPURenderer } from './BaseGPURenderer.svelte';
 
 /**
@@ -232,5 +232,52 @@ describe('a recompile that fails', () => {
 
 		expect(acquired.filter((t) => t.x === 'linear')).toHaveLength(2);
 		expect(errors).toHaveLength(1);
+	});
+});
+
+describe('which rebuilds warn', () => {
+	/** console.warn's rebuild messages while `run` runs. */
+	async function warnings(run: () => Promise<void>): Promise<string[]> {
+		const said: string[] = [];
+		const warn = vi.spyOn(console, 'warn').mockImplementation((m: unknown) => {
+			said.push(String(m));
+		});
+		try {
+			await run();
+		} finally {
+			warn.mockRestore();
+		}
+		return said.filter((m) => m.includes('rebuilding pipeline'));
+	}
+
+	it('a compile from before the scales were ready rebuilds quietly', async () => {
+		// Every guide on a time or band axis: it compiles at mount, against the
+		// chart's provisional (linear, linear), and the marks resolve the rest.
+		const { renderer, acquired, chartContext, init } = fakes({});
+		await renderer.initialize(init);
+
+		const said = await warnings(async () => {
+			chartContext.scaleTypes.x = 'time';
+			(chartContext as Record<string, unknown>).scalesReady = true;
+			await renderer.syncScaleTypes();
+		});
+
+		expect(acquired.at(-1)).toEqual({ x: 'time', y: 'linear' });
+		expect(said).toEqual([]);
+	});
+
+	it('types that move after the scales were ready are said', async () => {
+		const { renderer, acquired, chartContext, init } = fakes({ x: 'time', y: 'linear' });
+		(chartContext as Record<string, unknown>).scalesReady = true;
+		await renderer.initialize(init);
+
+		const said = await warnings(async () => {
+			chartContext.scaleTypes.x = 'band';
+			await renderer.syncScaleTypes();
+		});
+
+		expect(acquired.at(-1)).toEqual({ x: 'band', y: 'linear' });
+		expect(said).toHaveLength(1);
+		expect(said[0]).toContain('from (time, linear) to (band, linear)');
 	});
 });
