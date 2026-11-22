@@ -5,7 +5,7 @@
 	import { Rects } from '../rendering';
 	import { getGPUContext } from '$lib/gpu';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
-	import { expandBinForExtent } from '$lib/sql/bin';
+	import { rectExtent } from './utils/extent-axes';
 	import { isCategoricalScale } from '$lib/scales/scale-categories';
 	import {
 		buildSelectFromChannels,
@@ -119,20 +119,15 @@
 
 	let setup = $state<MarkLifecycleV2 | null>(null);
 
-	// --- INTERNAL BIN EXPANSION --- reads from entry
-	const expandedX = $derived.by(() => {
-		if (entry.x != null) return expandBinForExtent(entry.x, 'x', 'rect');
-		return { x1: entry.x1, x2: entry.x2 };
-	});
-	const ex1 = $derived(expandedX.x1 as FieldRef | null);
-	const ex2 = $derived(expandedX.x2 as FieldRef | null);
+	// --- EXTENTS --- reads from entry: bin() or explicit edges on each axis
+	const extentX = $derived(rectExtent('RectMark', 'x', entry.x, { lo: entry.x1, hi: entry.x2 }));
+	const ex1 = $derived(extentX.lo);
+	const ex2 = $derived(extentX.hi);
 
-	const expandedY = $derived.by(() => {
-		if (entry.y != null) return expandBinForExtent(entry.y, 'y', 'rect');
-		return { y1: entry.y1, y2: entry.y2 };
-	});
-	const ey1 = $derived(expandedY.y1 as FieldRef | null);
-	const ey2 = $derived(expandedY.y2 as FieldRef | null);
+	const extentY = $derived(rectExtent('RectMark', 'y', entry.y, { lo: entry.y1, hi: entry.y2 }));
+	const ey1 = $derived(extentY.lo);
+	const ey2 = $derived(extentY.hi);
+	const extentError = $derived(extentX.error ?? extentY.error);
 
 	// --- SCALE TYPE INFERENCE --- reads from entry
 	const effectiveXScaleType = $derived.by(() =>
@@ -301,13 +296,18 @@
 	// --- SETUP LIFECYCLE ---
 
 	$effect(() => {
-		(void config, scaleGeneration);
+		(void config, scaleGeneration, extentError);
 		untrack(() => {
 			if (setup) {
 				gpuCoordinator?.markForRetain(markId);
 			}
 			setup?.destroy();
 			setup = null;
+			// A plain channel on an extent axis: said once per config, nothing drawn.
+			if (extentError) {
+				console.error(extentError);
+				return;
+			}
 			// Gate on BOTH scale types being resolved
 			if (entry.table && effectiveXScaleType && effectiveYScaleType && queryEngine) {
 				setup = new MarkLifecycleV2(

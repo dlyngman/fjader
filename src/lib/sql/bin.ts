@@ -268,24 +268,3 @@ export function isBinExpression(expr: unknown): expr is AutoBinNode {
 		expr.isAutoBinNode === true
 	);
 }
-
-export function expandBinForExtent(
-	binExpr: AutoBinNode | unknown,
-	channel: string,
-	markType: string
-): Record<string, unknown> {
-	if (!isBinExpression(binExpr)) {
-		return { [channel]: binExpr };
-	}
-
-	const needsExtent = ['rect', 'rectX', 'rectY', 'rule', 'ruleX', 'ruleY'].includes(markType);
-
-	if (!needsExtent) {
-		return { [channel]: binExpr };
-	}
-
-	return {
-		[`${channel}1`]: binExpr,
-		[`${channel}2`]: binExpr.withOffset(1)
-	};
-}
