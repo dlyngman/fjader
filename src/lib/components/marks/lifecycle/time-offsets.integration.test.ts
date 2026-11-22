@@ -101,15 +101,11 @@ async function rowsOf(chart: ReturnType<typeof timeChart>, select: Record<string
 	// What the setup's domain and schema queries would do once they land.
 	lifecycle.setupComplete = true;
 
-	// The viewport count wraps the mark's own query; unwrap it to read the rows.
-	const count = lifecycle.buildViewportCountQuery(-Infinity, Infinity, -Infinity, Infinity);
+	const query = lifecycle.buildQuery();
 	lifecycle.destroy();
-	expect(count).not.toBeNull();
-	const prefix = 'SELECT COUNT(*) AS cnt FROM (';
-	expect(count!.startsWith(prefix)).toBe(true);
-	const query = count!.slice(prefix.length, count!.lastIndexOf(') AS _vp'));
+	expect(query).not.toBeNull();
 
-	const rows = await db.all(query);
+	const rows = await db.all(query!);
 	return rows.sort((a, b) => Number(a.y) - Number(b.y));
 }
 

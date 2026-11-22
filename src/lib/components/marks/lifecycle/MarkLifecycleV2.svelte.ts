@@ -2160,14 +2160,13 @@ export class MarkLifecycleV2 {
 	// ===========================================================================
 
 	/**
-	 * Build a viewport count query for DensityHost LOD measurement.
-	 * Wraps the mark's assembled query as a subquery and counts rows within
-	 * the given viewport bounds. Returns null before setup completes (scale
-	 * domains and time offsets aren't available yet).
+	 * The mark's query: its resolved parts, under the filter its selection
+	 * applies. What the tooltip table is written from and the viewport count
+	 * wraps. Null before setup completes (scale domains and time offsets aren't
+	 * available yet).
 	 */
-	buildViewportCountQuery(xLo: number, xHi: number, yLo: number, yHi: number): string | null {
+	buildQuery(): string | null {
 		if (!this.setupComplete || !this.#resolvedQueryParts) return null;
-
 		const filter = this.#filterGroup.selection.predicate(this.#route) ?? [];
 		const q = assembleQuery({
 			table: this.#sourceTable,
@@ -2176,8 +2175,17 @@ export class MarkLifecycleV2 {
 			transformCompiler: this.#transformCompiler,
 			limit: this.#reactiveConfig.limit
 		});
-		if (!q) return null;
-		const sqlStr = q.toString();
+		return q ? q.toString() : null;
+	}
+
+	/**
+	 * Build a viewport count query for DensityHost LOD measurement.
+	 * Wraps the mark's query as a subquery and counts rows within the given
+	 * viewport bounds; filters on `x`, so only for a mark with one (LineMark).
+	 */
+	buildViewportCountQuery(xLo: number, xHi: number, yLo: number, yHi: number): string | null {
+		const sqlStr = this.buildQuery();
+		if (!sqlStr) return null;
 
 		const parts: string[] = [`SELECT COUNT(*) AS cnt FROM (${sqlStr}) AS _vp`];
 		const conditions: string[] = [`_vp.x BETWEEN ${xLo} AND ${xHi}`];
@@ -2461,7 +2469,7 @@ export class MarkLifecycleV2 {
 			if (!this.#transformCompiler.hasJSTransforms()) {
 				// Path A: Build a query with original field names (not CAST-wrapped).
 				// Uses channel-named aliases so tooltip columns match expectations.
-				const tooltipQuery = this.#buildTooltipQuery();
+				const tooltipQuery = this.buildQuery();
 				if (!tooltipQuery) return;
 
 				// Pre-cast numeric axis columns to DOUBLE (avoids DECIMAL overflow
@@ -2594,25 +2602,6 @@ export class MarkLifecycleV2 {
 		} catch (error) {
 			console.error(`Failed to write tooltip table "${tableName}":`, error);
 		}
-	}
-
-	/**
-	 * Build a tooltip query using original field names (not CAST-wrapped).
-	 * Uses the same query assembly path but without Float32 coercion.
-	 */
-	#buildTooltipQuery(): string | null {
-		if (!this.#resolvedQueryParts) return null;
-		const filter = this.#filterGroup.selection.predicate(this.#route) ?? [];
-
-		const q = assembleQuery({
-			table: this.#sourceTable,
-			parts: this.#resolvedQueryParts,
-			filter: filter as unknown[],
-			transformCompiler: this.#transformCompiler,
-			limit: this.#reactiveConfig.limit
-		});
-		if (!q) return null;
-		return q.toString();
 	}
 
 	/** Extract expression nodes from the tip prop as { label: exprNode } pairs. */
@@ -3093,9 +3082,9 @@ export class MarkLifecycleV2 {
 	 * Used by fitDomain (MIN/MAX) and potentially DensityHost (COUNT).
 	 */
 	#buildSidecarQuery(outerSelect: Record<string, unknown>, where?: unknown): Query | null {
-		const tooltipQuery = this.#buildTooltipQuery();
-		if (!tooltipQuery) return null;
-		const q = Query.from({ mark_data: sql`(${tooltipQuery})` }).select(
+		const markQuery = this.buildQuery();
+		if (!markQuery) return null;
+		const q = Query.from({ mark_data: sql`(${markQuery})` }).select(
 			outerSelect as Record<string, ExprValue>
 		);
 		if (where) q.where(where as FilterExpr);
