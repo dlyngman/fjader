@@ -167,3 +167,79 @@ describe('a field’s base reaches the GPU', () => {
 		expect(Array.from(scale.slots.to as Float32Array)).toEqual([3, 4, 5]);
 	});
 });
+
+describe('colour blocks: limits of the default', () => {
+	it('a field placed late that does not fit cycles from 0, and the legend matches the GPU', () => {
+		// Five 8-category fields on tableau10 (10 colours): only the first fits.
+		// Every placed rank stays below the palette's length, so the shader's wrap
+		// and the legend's agree for every value.
+		const reg = new ScaleRegistry();
+		const names = ['a', 'b', 'c', 'd', 'e'];
+		for (const name of names) reg.declareColorField(name);
+		const fields = names.map((name) => {
+			const values = Array.from({ length: 8 }, (_, i) => `${name}${i}`);
+			const f = field(reg, name, values);
+			f.load();
+			return { ...f, values };
+		});
+		for (const { scale, values } of fields) {
+			const ranks = Array.from(scale.slots.to as Float32Array);
+			for (let i = 0; i < values.length; i++) {
+				expect(ranks[i]).toBeLessThan(10);
+				expect(scale.getColor(values[i])).toBe(schemeTableau10[ranks[i] % 10]);
+			}
+		}
+		expect(fields[1].scale.getColor('b0')).toBe(schemeTableau10[0]);
+	});
+
+	it('a field outgrowing its room keeps it: the fields after it do not move', () => {
+		const reg = new ScaleRegistry();
+		reg.declareColorField('species');
+		reg.declareColorField('island');
+		const species = field(reg, 'species', ['Adelie', 'Chinstrap', 'Gentoo']);
+		const island = field(reg, 'island', ['Biscoe', 'Dream', 'Torgersen']);
+		species.load();
+		island.load();
+		expect(island.scale.getColor('Biscoe')).toBe(schemeTableau10[3]);
+
+		// species gains categories past what the palette has room for.
+		const many = Array.from({ length: 12 }, (_, i) => `s${i}`);
+		species.scale.setDomain(many);
+		species.scale.setIdentity(new FieldIdentity(many));
+
+		expect(island.scale.getColor('Biscoe')).toBe(schemeTableau10[3]);
+	});
+
+	it('a scheme change files the field under its new palette', () => {
+		const reg = new ScaleRegistry();
+		reg.declareColorField('species');
+		reg.declareColorField('island');
+		const species = field(reg, 'species', ['Adelie', 'Chinstrap', 'Gentoo']);
+		const island = field(reg, 'island', ['Biscoe', 'Dream', 'Torgersen']);
+		species.load();
+		island.load();
+		expect(island.scale.getColor('Biscoe')).toBe(schemeTableau10[3]);
+
+		// species moves to another palette: island's no longer has to leave it room.
+		species.scale.setScheme('set2');
+		expect(island.scale.getColor('Biscoe')).toBe(schemeTableau10[0]);
+	});
+
+	it('a destroyed scale’s late identity changes nothing', () => {
+		const reg = new ScaleRegistry();
+		reg.declareColorField('species');
+		reg.declareColorField('island');
+		const species = field(reg, 'species', ['Adelie', 'Chinstrap', 'Gentoo']);
+		const island = field(reg, 'island', ['Biscoe', 'Dream', 'Torgersen']);
+		species.load();
+		island.load();
+		const before = island.scale.getColor('Biscoe');
+
+		species.scale.destroy();
+		const grown = ['Adelie', 'Chinstrap', 'Gentoo', 'Emperor'];
+		species.scale.setDomain(grown);
+		species.scale.setIdentity(new FieldIdentity(grown));
+
+		expect(island.scale.getColor('Biscoe')).toBe(before);
+	});
+});

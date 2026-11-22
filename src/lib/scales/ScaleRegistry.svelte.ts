@@ -88,8 +88,16 @@ export class ScaleRegistry {
 	 * or pinned values (`ColorScaleState.colorBlockSize`).
 	 */
 	#colorFieldOrder: string[] = [];
-	/** Each field's block, as its scale last reported it. */
-	#colorBlocks = new Map<string, { size: number; palette: string }>();
+	/**
+	 * Each field's block as its scale last reported it, on its palette (its
+	 * key and length), and the room it was placed in (`reserve`).
+	 */
+	#colorBlocks = new Map<
+		string,
+		{ size: number; palette: string; length: number; reserve: number }
+	>();
+	/** Where each placed field's colours start; absent: not placed (from 0). */
+	#colorBases = new Map<string, number>();
 	#gpuCoordinator: GPUCoordinator | null = null;
 
 	// ============================================================
@@ -540,40 +548,61 @@ export class ScaleRegistry {
 	}
 
 	/**
-	 * A colour scale's ranks changed: record its block, and if it changed,
-	 * place every categorical field again. Runs when categories arrive, never
-	 * per frame.
+	 * A colour scale's ranks, scheme or palette changed: record its block and,
+	 * if that moved, place the fields again. Runs when categories arrive or a
+	 * scheme changes, never per frame.
 	 */
 	reportColorField(scale: ColorScaleState): void {
+		if (scale.isDestroyed) return;
 		const size = scale.colorBlockSize;
 		const palette = scale.paletteKey;
+		const length = scale.paletteLength;
 		const block = this.#colorBlocks.get(scale.field);
-		if (block?.size === size && block.palette === palette) {
+		if (block && block.size === size && block.palette === palette && block.length === length) {
 			// Nothing moved for the others; this scale (perhaps a new instance for a
 			// field seen before) still takes its place.
-			untrack(() => scale.setRankBase(this.#colorBase(scale)));
+			untrack(() => scale.setRankBase(this.#colorBases.get(scale.field) ?? 0));
 			return;
 		}
-		this.#colorBlocks.set(scale.field, { size, palette });
+		// The room it was placed in stays reserved on the same palette (below).
+		const reserve = block && block.palette === palette ? block.reserve : 0;
+		this.#colorBlocks.set(scale.field, { size, palette, length, reserve });
+		this.#placeColorFields();
 		untrack(() => {
 			for (const other of this.scales.color?.values() ?? []) {
-				if (other instanceof ColorScaleState) other.setRankBase(this.#colorBase(other));
+				if (other instanceof ColorScaleState && !other.isDestroyed)
+					other.setRankBase(this.#colorBases.get(other.field) ?? 0);
 			}
 		});
 	}
 
-	/** Where `scale`'s colours start: the blocks of the fields declared before it on its palette. */
-	#colorBase(scale: ColorScaleState): number {
-		const own = this.#colorBlocks.get(scale.field);
-		// Takes no part (or a field no mark declared, like a line's series).
-		if (!own?.size || !this.#colorFieldOrder.includes(scale.field)) return 0;
-		let base = 0;
+	/**
+	 * Place the declared fields, in declaration order, per palette. A field is
+	 * placed only if its whole block fits what is left of its palette, so its
+	 * ranks stay below the palette's length: the shader's wrap and the
+	 * legend's then cannot disagree, and no field wraps onto another's colours.
+	 * One that does not fit cycles from the palette's first colour, as before.
+	 *
+	 * A field keeps the room it was once placed in (`reserve`), even after it
+	 * outgrows it or opts out: the fields after it stay where they are. What
+	 * still shifts later fields is an earlier field growing within its room's
+	 * limits, which happens when its categories load.
+	 */
+	#placeColorFields(): void {
+		this.#colorBases.clear();
+		const used = new Map<string, number>();
 		for (const field of this.#colorFieldOrder) {
-			if (field === scale.field) break;
 			const block = this.#colorBlocks.get(field);
-			if (block && block.palette === own.palette) base += block.size;
+			if (!block) continue;
+			const base = used.get(block.palette) ?? 0;
+			if (block.size > 0 && base + block.size <= block.length) {
+				this.#colorBases.set(field, base);
+				block.reserve = Math.max(block.reserve, block.size);
+				used.set(block.palette, base + block.reserve);
+			} else if (block.reserve > 0) {
+				used.set(block.palette, base + block.reserve);
+			}
 		}
-		return base;
 	}
 
 	/**

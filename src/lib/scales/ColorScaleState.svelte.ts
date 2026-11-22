@@ -673,15 +673,20 @@ export class ColorScaleState {
 	}
 
 	/**
-	 * How many palette colours this field takes from the fields declared after
-	 * it: its ranks, when it is ordinal on its scheme (no explicit range or
-	 * pinned values) and fits the palette. 0 takes no part: it cycles on its
-	 * own from the palette's first colour, as before.
+	 * How many palette colours this field asks for: its ranks, when it is
+	 * ordinal on its scheme (no explicit range or pinned values). 0 takes no
+	 * part. Whether it fits its palette is the registry's call
+	 * (ScaleRegistry.#placeColorFields); one that does not cycles from the
+	 * palette's first colour, as before.
 	 */
 	get colorBlockSize(): number {
 		if (!this.isOrdinal || !this.hasIdentity || this.#range || this.#pinned) return 0;
-		const n = this.#nextRank;
-		return n > 0 && n <= this.#colors().length ? n : 0;
+		return this.#nextRank;
+	}
+
+	/** How many colours its palette has: a placed block must fit within them. */
+	get paletteLength(): number {
+		return Math.min(this.#colors().length, 32);
 	}
 
 	/** The palette the block is taken from: fields on different ones don't share. */
@@ -908,6 +913,8 @@ export class ColorScaleState {
 		this.#renderType = resolved.renderType;
 		this.#transformType = resolved.transformType;
 		this._version++;
+		// Filed under its palette: another scheme places the field again.
+		this.#registry.reportColorField?.(this);
 
 		if (this.domain.length > 0) {
 			this.#uploadToGPU();
