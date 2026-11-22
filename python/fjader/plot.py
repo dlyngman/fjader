@@ -14,7 +14,8 @@ if TYPE_CHECKING:
     from ._types import SortConfig
 
 _PLOT_FIELDS = (
-    "width", "height", "margin", "x_label", "y_label", "fx", "columns", "legend",
+    "width", "height", "margin", "x_label", "y_label", "x_scale", "y_scale", "fx",
+    "columns", "legend",
     "interactors", "use_selection", "zoom_limit", "pan_limit", "disable_zoom",
     "entrance",
 )
@@ -30,6 +31,8 @@ class Plot:
     margin: dict[str, int] | None = None
     x_label: str | None = None
     y_label: str | None = None
+    x_scale: str | Literal[False] | None = None
+    y_scale: str | Literal[False] | None = None
     fx: str | None = None
     columns: int | None = None
     legend: dict[str, Any] | bool | None = None
@@ -168,6 +171,8 @@ def plot(
     margin: dict[str, int] | None = None,
     x_label: str | None = None,
     y_label: str | None = None,
+    x_scale: str | Literal[False] | None = None,
+    y_scale: str | Literal[False] | None = None,
     fx: str | None = None,
     columns: int | None = None,
     legend: dict[str, Any] | bool | None = None,
@@ -187,13 +192,23 @@ def plot(
         margin: Dict with ``top``/``right``/``bottom``/``left`` pixel values.
         x_label: X-axis label.
         y_label: Y-axis label.
+        x_scale: Which charts share the x axis (domain, zoom and pan). By
+            default axes with the same label share, else the same column,
+            across tables; an aggregate without a label is this chart's own.
+            A name shares with the charts naming it, on numeric axes only
+            (band, point and time axes ignore it with a warning); ``False``
+            keeps the axis to this chart.
+        y_scale: As ``x_scale``, for the y axis.
         fx: Facet column name.
         columns: Number of columns for facet grid.
         legend: Legend config — ``True`` for auto-detect, or a dict like
             ``{"color": "species", "position": "right"}``.
         interactors: List of interactor specs (e.g. ``[fj.interval_x()]``).
-        use_selection: Follow the shared scale's selection extent —
-            ``'x'``, ``'y'``, or ``'xy'`` for both axes.
+        use_selection: Follow a brush as a linked detail chart — ``'x'``,
+            ``'y'``, or ``'xy'`` for both axes. Follows an ``interval_x()``
+            (``interval_y()`` for y) on an axis with the same label, else the
+            same column, of the same scale type. ``interval_2d()`` only filters:
+            it can't be followed.
         zoom_limit: Max zoom depth. A number applies to both axes;
             a ``(x, y)`` tuple sets per-axis limits.
         pan_limit: How far past data edges the user can pan. A number
@@ -210,7 +225,8 @@ def plot(
     return Plot(
         *marks,
         width=width, height=height, margin=margin,
-        x_label=x_label, y_label=y_label, fx=fx, columns=columns,
+        x_label=x_label, y_label=y_label, x_scale=x_scale, y_scale=y_scale,
+        fx=fx, columns=columns,
         legend=legend, interactors=interactors,
         use_selection=use_selection,
         zoom_limit=zoom_limit, pan_limit=pan_limit,

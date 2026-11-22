@@ -16,6 +16,14 @@ export interface ScaleRequirement {
 	priority?: number;
 	markId?: string;
 	columnName?: string;
+	/** The column is an aggregate (count(), sum(x)): its axis is chart-local unless named. */
+	aggregate?: boolean;
+	/**
+	 * What the mark would title the axis: its column's bare name; null for an
+	 * expression, which has no name to show; absent for a constant, which has
+	 * no say (a rule at 10).
+	 */
+	title?: string | null;
 	config?: Record<string, unknown>;
 }
 
@@ -26,12 +34,18 @@ export interface RegisteredScaleRequirement {
 	markId: string;
 	config: Record<string, unknown>;
 	columnName: string | null;
+	aggregate: boolean;
+	title?: string | null;
 }
 
 export interface ResolvedScaleConfiguration {
 	type: string;
 	config: Record<string, unknown>;
 	columnName: string | null;
+	/** Whether any requirement on the axis names an aggregate, whatever order they registered in. */
+	aggregate: boolean;
+	/** The axis's title without a label: the one column all its marks show, else null. */
+	title: string | null;
 }
 
 export function resolveScaleType(requirements: ScaleRequirement[] | null): string {
@@ -82,8 +96,14 @@ export function resolveScaleConfiguration(
 
 	const sorted = [...typeRequirements].sort((a, b) => (b.priority || 0) - (a.priority || 0));
 	const columnName = sorted.find((req) => req.columnName)?.columnName || null;
+	// Any, not the one that named the column: that is registration order at equal
+	// priority, and an axis showing a count is not the other column's axis.
+	const aggregate = requirements.some((req) => req.aggregate);
+	// Only when they agree: never SQL, and never whichever column mounted first.
+	const titles = new Set(requirements.map((req) => req.title).filter((t) => t !== undefined));
+	const title = titles.size === 1 ? ([...titles][0] ?? null) : null;
 
-	return { type: resolvedType, config: resolvedConfig, columnName };
+	return { type: resolvedType, config: resolvedConfig, columnName, aggregate, title };
 }
 
 function resolveConfigurationForType(

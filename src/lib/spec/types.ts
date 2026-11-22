@@ -70,6 +70,9 @@ export interface PlotSpec {
 	margin?: { top?: number; right?: number; bottom?: number; left?: number };
 	xLabel?: string;
 	yLabel?: string;
+	/** Which charts share the axis: a name (numeric axes only), or false for this chart's own (ChartContainer.xScale). */
+	xScale?: string | false;
+	yScale?: string | false;
 	fx?: string;
 	columns?: number;
 	marks: MarkSpec[];

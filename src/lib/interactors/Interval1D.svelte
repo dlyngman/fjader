@@ -125,6 +125,10 @@
 		return true;
 	}
 
+	// The scale this brush writes, for the charts following it (useXSelection):
+	// again when the chart's scale, label or column changes.
+	$effect(() => chart.registerBrushTarget(isX ? 'x' : 'y'));
+
 	// Clear the brush when the shared scale's domain no longer holds it.
 	$effect(() => {
 		if (scaleState instanceof LinearScaleState) drag.validate(scaleState.domain.current);

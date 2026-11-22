@@ -31,6 +31,17 @@
 		xLabel?: string | null;
 		yLabel?: string | null;
 		/**
+		 * Which charts share the x axis (domain, zoom and pan). By default axes
+		 * with the same label share, else the same column, across tables; an
+		 * aggregate without a label is this chart's own. A name shares with the
+		 * charts naming it (different columns that are one measurement) on numeric
+		 * axes; band, point and time ignore it with a warning, and share only the
+		 * same column. False keeps the axis to this chart.
+		 */
+		xScale?: string | false;
+		/** As `xScale`, for the y axis. */
+		yScale?: string | false;
+		/**
 		 * The facet channel: a column name, or a fixed SQL expression over one.
 		 *
 		 * Whatever a categorical channel accepts anywhere else, because it goes
@@ -98,9 +109,14 @@
 		yDisableZoom?: boolean;
 		margin?: Partial<Margin>;
 		clipPadding?: number;
-		/** The x domain follows a brush on the same scale (a linked detail chart). Fixed at mount. */
+		/**
+		 * The x domain follows an IntervalX brush (a linked detail chart) on an
+		 * axis with the same label, else the same column, of the same scale type,
+		 * whatever either chart's `xScale`. Interval2D and ParallelBrushes only
+		 * filter: they can't be followed. Fixed at mount.
+		 */
 		useXSelection?: boolean;
-		/** The y domain follows a brush on the same scale. Fixed at mount. */
+		/** As `useXSelection`, for y: follows an IntervalY brush. Fixed at mount. */
 		useYSelection?: boolean;
 		/**
 		 * The tooltip's colours against the color-scheme the chart inherits:
@@ -120,6 +136,8 @@
 	let {
 		xLabel = null,
 		yLabel = null,
+		xScale = undefined,
+		yScale = undefined,
 		fx = null,
 		fxDomain = null,
 		columns: facetColumns = null,
@@ -375,6 +393,12 @@
 			get yLabel() {
 				return yLabel;
 			},
+			get xScale() {
+				return xScale;
+			},
+			get yScale() {
+				return yScale;
+			},
 			layout,
 			gpuCoordinator,
 			scaleRegistry: scaleRegistry,
@@ -511,6 +535,12 @@
 		},
 		get yLabel() {
 			return scales?.yLabel;
+		},
+		get xTitle() {
+			return scales?.xTitle ?? null;
+		},
+		get yTitle() {
+			return scales?.yTitle ?? null;
 		},
 		get xColumnName() {
 			return scales?.xColumnName ?? null;
@@ -651,6 +681,7 @@
 		get parallelScales() {
 			return scales?.parallelScales ?? null;
 		},
+		registerBrushTarget: (axis) => scales?.registerBrushTarget(axis),
 		get colorScales() {
 			return scaleRegistry.colorScalesOf(layout.chartId);
 		}

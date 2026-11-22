@@ -62,6 +62,8 @@
 	<ChartContainer
 		xLabel={spec.xLabel ?? null}
 		yLabel={spec.yLabel ?? null}
+		xScale={spec.xScale}
+		yScale={spec.yScale}
 		fx={spec.fx ?? null}
 		columns={spec.columns ?? null}
 		margin={spec.margin}

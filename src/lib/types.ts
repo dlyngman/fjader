@@ -662,6 +662,9 @@ export interface ChartContext {
 	readonly yLabel: string | null | undefined;
 	readonly xColumnName: string | null;
 	readonly yColumnName: string | null;
+	/** What the axes' titles say (ChartScales.xTitle). Not a field: use xColumnName for that. */
+	readonly xTitle: string | null;
+	readonly yTitle: string | null;
 
 	// Data points
 	readonly currentXDataPoint: number | null | undefined;

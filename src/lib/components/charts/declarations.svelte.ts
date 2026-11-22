@@ -109,6 +109,11 @@ export interface DeclarationChart {
 	readonly yLabel: string | null | undefined;
 	/** A parallel coordinates chart's axes (shared scales), or null. */
 	readonly parallelScales: ChartContext['parallelScales'];
+	/**
+	 * A brush on `axis` writes to the chart's scale: announces it to the charts
+	 * following it (ChartScales.registerBrushTarget). Returns the release.
+	 */
+	registerBrushTarget(axis: 'x' | 'y'): (() => void) | undefined;
 	/** The color scales the chart's marks color by, one entry per scale (reactive). */
 	readonly colorScales: readonly ColorUse[];
 }
