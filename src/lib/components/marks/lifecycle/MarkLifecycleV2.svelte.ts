@@ -3145,7 +3145,39 @@ export class MarkLifecycleV2 {
 	// CLEANUP
 	// ===========================================================================
 
+	/**
+	 * The mark leaves its chart (unmount): retire, then give back what the mark
+	 * contributed to the chart's scales under its id. Its x and y extents (or
+	 * band categories) and its facet categories, so the domains spring back to
+	 * the marks that remain, and its x and y scale-type requirements, so a
+	 * departed band mark no longer decides the axis type.
+	 *
+	 * Not on a rebuild (`retire`): the successor holds the same id and replaces
+	 * these itself; removing them would snap the domain back and out again.
+	 */
 	destroy(): void {
+		this.retire();
+		const ctx = this.#chartContext;
+		for (const scale of [ctx.xScaleState, ctx.yScaleState, ctx.facetBandScale]) {
+			(scale as { removeMark?(id: string): unknown } | null | undefined)?.removeMark?.(
+				this.#markId
+			);
+		}
+		ctx.unregisterScaleType('x', this.#markId);
+		ctx.unregisterScaleType('y', this.#markId);
+		// A parallel mark's columns: its axes go with it.
+		if (this.#config.parallelMode) ctx.setParallelColumns(this.#markId, []);
+	}
+
+	/**
+	 * This lifecycle is replaced by a successor under the same mark id (the
+	 * mark rebuilds it when its scales or config change): release what is this
+	 * instance's own, and keep what the successor takes over: the mark's
+	 * extents and scale-type requirements, which it registers again under the
+	 * same id, and its entrance hold. As `GPUCoordinator.markForRetain` keeps
+	 * the mark's GPU resources across the same rebuild.
+	 */
+	retire(): void {
 		this.#destroyed = true;
 		// Not releasing the entrance here: a mark rebuilds its lifecycle when
 		// its scales resolve, and the rebuilt one re-holds the same id. The

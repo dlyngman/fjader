@@ -306,10 +306,19 @@
 			if (setup) {
 				gpuCoordinator?.markForRetain(markId);
 			}
-			setup?.destroy();
-			setup = null;
+			// Replaced by a successor (retire), or gone with none in its place
+			// (destroy: its extents and requirements go too).
 			// Gate on BOTH scale types being resolved
-			if (entry.table && effectiveXScaleType && effectiveYScaleType && queryEngine) {
+			const successor = !!(
+				entry.table &&
+				effectiveXScaleType &&
+				effectiveYScaleType &&
+				queryEngine
+			);
+			if (successor) setup?.retire();
+			else setup?.destroy();
+			setup = null;
+			if (successor) {
 				setup = new MarkLifecycleV2(
 					config,
 					reactiveConfig,

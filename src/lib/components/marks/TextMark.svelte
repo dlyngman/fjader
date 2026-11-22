@@ -285,9 +285,13 @@
 		(void config, scaleGeneration);
 		untrack(() => {
 			if (setup) gpuCoordinator?.markForRetain(markId);
-			setup?.destroy();
+			// Replaced by a successor (retire), or gone with none in its place
+			// (destroy: its extents and requirements go too).
+			const successor = !!(table && effectiveXScaleType && effectiveYScaleType && queryEngine);
+			if (successor) setup?.retire();
+			else setup?.destroy();
 			setup = null;
-			if (table && effectiveXScaleType && effectiveYScaleType && queryEngine) {
+			if (successor) {
 				setup = new MarkLifecycleV2(
 					config,
 					reactiveConfig,

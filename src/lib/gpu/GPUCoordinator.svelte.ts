@@ -2528,7 +2528,7 @@ export class GPUCoordinator {
 
 	/**
 	 * Signal that a mark's renderer should be retained on next unmount.
-	 * Called before setup.destroy() so the renderer keeps drawing during replacement.
+	 * Called before setup.retire() (a rebuild) so the renderer keeps drawing during replacement.
 	 */
 	markForRetain(markId: string): void {
 		// If a previous retained renderer hasn't been released yet (lifecycle $effect
