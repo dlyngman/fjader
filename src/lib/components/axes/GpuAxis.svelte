@@ -259,13 +259,10 @@
 
 	let titleSlot = -1;
 	let titleText: string | null = null;
-	// The label, else the column the axis shows: a title needs no label, so a
-	// label is only written to name the axis, which also shares it (ChartScales).
-	const titleString = $derived(
-		spec.title
-			? ((axis === 'x' ? (c.xLabel ?? c.xColumnName) : (c.yLabel ?? c.yColumnName)) ?? null)
-			: null
-	);
+	// The label, else the column the axis shows (ChartScales.xTitle): a title
+	// needs no label, so a label is only written to name the axis, which also
+	// shares it.
+	const titleString = $derived(spec.title ? (axis === 'x' ? c.xTitle : c.yTitle) : null);
 	const titleSlotNow = $derived.by(() => {
 		const text = titleString;
 		return untrack(() => {

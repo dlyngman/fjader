@@ -16,7 +16,7 @@ import type {
 	FieldRef
 } from '$lib/types';
 import { isBinExpression } from '$lib/sql/bin';
-import { isNode, isAggregateExpression } from '@uwdata/mosaic-sql';
+import { isNode, isAggregateExpression, isColumnRef, isColumnParam } from '@uwdata/mosaic-sql';
 import { isContinuousScale } from '$lib/scales/scale-categories';
 import {
 	LinearScaleState,
@@ -27,6 +27,17 @@ import {
 /** Type guard: narrows ScaleStateInstance to ContinuousScaleState via supportsPanZoom. */
 function isPanZoomScale(inst: ScaleStateInstance | null): inst is ContinuousScaleState {
 	return !!inst?.supportsPanZoom;
+}
+
+/**
+ * What a mark's channel would title its axis (ScaleRequirement.title): the bare
+ * name of a column or of a bin's column. Never an expression's SQL.
+ */
+function columnTitle(channel: unknown): string | null | undefined {
+	const field: unknown = isBinExpression(channel) ? channel.field : channel;
+	if (typeof field === 'string') return field;
+	if (!isNode(field)) return undefined;
+	return isColumnRef(field) && !isColumnParam(field) ? field.column : null;
 }
 
 interface PanContext {
@@ -318,6 +329,16 @@ export class ChartScales {
 		return this.config.yLabel;
 	}
 
+	/** The x axis's title: the label, else the one column its marks show (never SQL). */
+	get xTitle(): string | null {
+		return this.xLabel ?? this.scaleConfigurations?.x?.title ?? null;
+	}
+
+	/** As `xTitle`, for y. */
+	get yTitle(): string | null {
+		return this.yLabel ?? this.scaleConfigurations?.y?.title ?? null;
+	}
+
 	/** Column name from mark registrations — used as interactor field fallback. */
 	get xColumnName(): string | null {
 		return this.scaleConfigurations?.x?.columnName?.toString() ?? null;
@@ -544,13 +565,15 @@ export class ChartScales {
 					type: 'linear',
 					config: {},
 					columnName: null,
-					aggregate: false
+					aggregate: false,
+					title: null
 				} as ResolvedScaleConfiguration,
 				y: {
 					type: 'linear',
 					config: {},
 					columnName: null,
-					aggregate: false
+					aggregate: false,
+					title: null
 				} as ResolvedScaleConfiguration
 			};
 		}
@@ -618,6 +641,7 @@ export class ChartScales {
 		columnName: FieldRef | null = null
 	): void => {
 		let rawColumn: FieldRef | null = columnName;
+		const title = columnTitle(columnName);
 		const aggregate = isNode(rawColumn) && !!isAggregateExpression(rawColumn);
 		if (isBinExpression(rawColumn)) {
 			rawColumn = rawColumn.field;
@@ -640,10 +664,19 @@ export class ChartScales {
 			current.priority === priority &&
 			current.columnName === resolvedColumnName &&
 			current.aggregate === aggregate &&
+			current.title === title &&
 			JSON.stringify(current.config) === JSON.stringify(config);
 
 		if (!unchanged) {
-			const next = { type, priority, markId, config, columnName: resolvedColumnName, aggregate };
+			const next = {
+				type,
+				priority,
+				markId,
+				config,
+				columnName: resolvedColumnName,
+				aggregate,
+				title
+			};
 			this.scaleRequirements[dimension] =
 				index >= 0
 					? requirements.map((req, i) => (i === index ? next : req))

@@ -365,6 +365,12 @@
 		get yLabel() {
 			return scales?.yLabel;
 		},
+		get xTitle() {
+			return scales?.xTitle ?? null;
+		},
+		get yTitle() {
+			return scales?.yTitle ?? null;
+		},
 		get xColumnName() {
 			return scales?.xColumnName ?? null;
 		},

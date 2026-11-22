@@ -16,10 +16,11 @@
 		 */
 		tickFormat?: TickFormat | null;
 		/**
-		 * Draw the axis title (default): the scale's label, else the column it shows
-		 * (an aggregate's SQL text, `count(*)`). An empty label or `false` draws
-		 * none; with `false` a label still names the scale, so charts sharing it
-		 * still link their zoom.
+		 * Draw the axis title (default): the scale's label, else the column its
+		 * marks show. An axis showing an expression (`count()`, a date function) or
+		 * several columns has no title without a label. An empty label or `false`
+		 * draws none; with `false` a label still names the scale, so charts sharing
+		 * it still link their zoom.
 		 */
 		title?: boolean;
 		/**

@@ -5,7 +5,8 @@
  * axis to the chart (false).
  */
 import { describe, it, expect, vi } from 'vitest';
-import { count } from '@uwdata/mosaic-sql';
+import { column, count, dateMonthDay, sql, sum } from '@uwdata/mosaic-sql';
+import { bin } from '$lib/sql/bin';
 import { ChartScales } from './ChartScales.svelte';
 import { ScaleRegistry } from './ScaleRegistry.svelte';
 import { SCALE_PRIORITIES, resolveScaleConfiguration } from './ScalePriorities';
@@ -148,5 +149,51 @@ describe('the scale a following chart takes its domain from', () => {
 		const follower = chart({ useXSelection: true });
 		onX(follower, 'link_g');
 		expect(follower.registerBrushTarget('x')).toBeUndefined();
+	});
+});
+
+describe('the title of an axis without a label', () => {
+	const titleOf = (value: unknown, xLabel?: string) => {
+		const scales = chart({ xLabel });
+		onX(scales, value);
+		return scales.xTitle;
+	};
+
+	it.each([
+		['a column', () => 'temp_max', 'temp_max'],
+		['column(), unquoted', () => column('economy (mpg)'), 'economy (mpg)'],
+		['a bin of a column', () => bin('distance'), 'distance'],
+		['a bin of column()', () => bin(column('flipper_length')), 'flipper_length']
+	] as const)('%s: its name', (_name, value, title) => {
+		expect(titleOf(value())).toBe(title);
+	});
+
+	it.each([
+		['a date function (/mosaic/weather)', () => dateMonthDay('date')],
+		['count()', () => count()],
+		['sum()', () => sum('fare')],
+		['a sql fragment', () => sql`100.0 / ${column('economy (mpg)')}`],
+		['a bin of an expression', () => bin(dateMonthDay('date'))],
+		['a constant', () => 10]
+	] as const)('%s: none, never SQL', (_name, value) => {
+		expect(titleOf(value())).toBeNull();
+	});
+
+	it('a label always wins, and an empty one hides the title', () => {
+		expect(titleOf(dateMonthDay('date'), 'Day of year')).toBe('Day of year');
+		expect(titleOf('temp_max', '')).toBe('');
+	});
+
+	it.each([
+		['one column twice', () => ['temp', 'temp'], 'temp'],
+		['a column and a constant rule', () => [10, 'temp'], 'temp'],
+		['two columns', () => ['Open', 'Close'], null],
+		['a column, then an expression', () => ['target', count()], null],
+		['an expression, then a column', () => [count(), 'target'], null]
+	] as const)('several marks, %s', (_name, values, title) => {
+		const scales = chart();
+		values().forEach((value, i) => onX(scales, value, `title-${i}`));
+		const resolved = resolveScaleConfiguration(scales.scaleRequirements.x as never);
+		expect(resolved?.title).toBe(title);
 	});
 });
