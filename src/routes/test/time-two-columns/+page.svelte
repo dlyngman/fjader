@@ -60,11 +60,12 @@
 	{:else}
 		<h3>1. A range: x1 = started, x2 = ended</h3>
 		<p>
-			One column per task from its start to its end, as tall as its length in days. Broken: no
-			columns (each has zero width).
+			One column per task from its start to its end, as tall as its length in days, on an axis of
+			its own (xScale false) that reaches the last end, 2024-04-15. Broken: no columns (each has
+			zero width), or an axis that stops at the last start, 2024-04-12.
 		</p>
 		<div class="chart">
-			<ChartContainer>
+			<ChartContainer xScale={false}>
 				<AxisLeft />
 				<AxisBottom />
 				<Grid axis="x" />
