@@ -14,6 +14,7 @@ import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { SizeScaleState } from '$lib/scales/SizeScaleState.svelte';
 import type { ContinuousScaleState } from '$lib/types';
+import type { PlaceExtent } from '$lib/components/charts/MarkContributions';
 import { isBinExpression } from '$lib/sql/bin';
 import { identityKeyFor } from '$lib/query-engine/identity-key';
 
@@ -45,6 +46,8 @@ export async function fetchCategoricalDomains(
 	seriesChannel: string | null,
 	bandDomainFromData: boolean,
 	markId: string,
+	/** Before each extent write: the chart records where it lands (false: the mark has left). */
+	place: PlaceExtent,
 	explicitDomain?: { x?: DimValue[]; y?: DimValue[] } | null,
 	/** nulls="drop": the band and facet domains leave out the NULL category. */
 	dropNull = false,
@@ -123,7 +126,8 @@ export async function fetchCategoricalDomains(
 				// A snapshot of the real categories. The scale adopts the live
 				// identity itself in MarkLifecycleV2's #ensureIdentityColumns, which
 				// also covers the explicit-domain axes that never reach this branch.
-				if (categories.length > 0) scaleState.addMark(categories, markId);
+				if (categories.length > 0 && place(axis as 'x' | 'y', scaleState))
+					scaleState.addMark(categories, markId);
 			})()
 		);
 	};
@@ -178,7 +182,8 @@ export async function fetchCategoricalDomains(
 				await coordinator.ensureColumns(table, { categorical: [facetKey] });
 				if (stale()) return;
 				const categories = categoriesOf(facetKey.key);
-				if (categories.length > 0) facetBandScale.addMark(categories, markId);
+				if (categories.length > 0 && place('fx', facetBandScale))
+					facetBandScale.addMark(categories, markId);
 			})()
 		);
 	}
@@ -331,10 +336,10 @@ export async function fetchCategoricalDomains(
 	// Apply explicit domains after all async fetches — ViewManager columns
 	// from color/series scales are now registered, so the band view will
 	// include all necessary index columns.
-	if (deferredExplicitX && xScaleState) {
+	if (deferredExplicitX && xScaleState && place('x', xScaleState)) {
 		xScaleState.addMark(deferredExplicitX, markId, { explicit: true });
 	}
-	if (deferredExplicitY && yScaleState) {
+	if (deferredExplicitY && yScaleState && place('y', yScaleState)) {
 		yScaleState.addMark(deferredExplicitY, markId, { explicit: true });
 	}
 
@@ -365,6 +370,8 @@ export async function fetchGlobalAggregates(
 	yScaleState: ContinuousScaleState | null,
 	colorScaleState: ColorScaleState | null,
 	markId: string,
+	/** As for fetchCategoricalDomains. */
+	place: PlaceExtent,
 	/** As for fetchCategoricalDomains: checked before writing the extents. */
 	stale: () => boolean = () => false
 ): Promise<{ globalAggregatesSet: boolean }> {
@@ -448,13 +455,13 @@ export async function fetchGlobalAggregates(
 		if (channelsNeedingDataDomain.has('x') && extents.min_x != null && extents.max_x != null) {
 			const xExtent = [extents.min_x as number, extents.max_x as number];
 			console.log(`📊 [${markId}] Applying X extent from sidecar:`, xExtent);
-			xScaleState?.addMark(xExtent, markId);
+			if (xScaleState && place('x', xScaleState)) xScaleState.addMark(xExtent, markId);
 		}
 
 		if (channelsNeedingDataDomain.has('y') && extents.min_y != null && extents.max_y != null) {
 			const yExtent = [extents.min_y as number, extents.max_y as number];
 			console.log(`📊 [${markId}] Applying Y extent from sidecar:`, yExtent);
-			yScaleState?.addMark(yExtent, markId);
+			if (yScaleState && place('y', yScaleState)) yScaleState.addMark(yExtent, markId);
 		}
 
 		if (

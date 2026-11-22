@@ -708,6 +708,28 @@ export interface ChartContext {
 		columnName: FieldRef | null
 	) => void;
 	unregisterScaleType: (dimension: 'x' | 'y', markId: string) => void;
+	/**
+	 * Before a mark writes its extent on `axis` to `state`: the chart records
+	 * where it is (MarkContributions.place). False when the mark has left the
+	 * chart: write nothing.
+	 */
+	placeExtent: (
+		markId: string,
+		axis: 'x' | 'y' | 'fx',
+		state: { removeMark(id: string): unknown }
+	) => boolean;
+	/** As `placeExtent`, for a parallel mark's extent on the scale of `column`. */
+	placeColumnExtent: (
+		markId: string,
+		column: string,
+		state: { removeMark(id: string): unknown }
+	) => boolean;
+	/**
+	 * The mark leaves the chart (its unmount): the chart takes back what it
+	 * contributed under its id (extents, scale-type requirements, parallel
+	 * columns, its entrance hold) and refuses its later writes.
+	 */
+	unregisterMark: (markId: string) => void;
 
 	readonly binStepMultiplier: number | undefined;
 	adjustBinMultiplier?: (delta: number) => void;

@@ -339,7 +339,8 @@
 
 	onDestroy(() => {
 		setup?.destroy();
-		chartContext.config.unregisterMark(markId);
+		// The chart takes back what the mark contributed (extents, requirements).
+		chartContext.unregisterMark(markId);
 		gpuCoordinator?.releaseRetained(markId);
 	});
 </script>

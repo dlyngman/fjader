@@ -7,6 +7,7 @@
 	import { ChartLayout } from '$lib/layout/ChartLayout.svelte';
 	import type { Margin } from '$lib/types';
 	import { ChartScales } from '$lib/scales/ChartScales.svelte';
+	import { MarkContributions } from './MarkContributions';
 	import { ChartConfig } from '$lib/config';
 	import { getGPUContext } from '$lib/gpu';
 	import type { ScaleRegistry, AnyScaleState } from '$lib/scales/ScaleRegistry.svelte';
@@ -293,6 +294,10 @@
 	}
 	let pendingScaleRegistrations: PendingRegistration[] = [];
 
+	// What the chart's marks contributed, by mark id: the chart owns it because
+	// it outlives the lifecycles a mark rebuilds (see MarkContributions).
+	const markContributions = new MarkContributions();
+
 	/**
 	 * Register a mark's scale requirement, or queue it until ChartScales exists.
 	 * The one entry point for every context a mark can get (this container's,
@@ -308,6 +313,8 @@
 		config,
 		columnName
 	) => {
+		// A lifecycle's registration landing after its mark left.
+		if (markContributions.departed(markId)) return;
 		const dim = dimension as 'x' | 'y';
 		if (scales) {
 			scales.registerScaleType(dim, type, priority, markId, config, columnName);
@@ -329,6 +336,29 @@
 			pendingScaleRegistrations = pendingScaleRegistrations.filter(
 				(r) => r.dimension !== dimension || r.markId !== markId
 			);
+	};
+	/** A parallel mark's columns; refused for a mark that has left. */
+	const setParallelColumns: ChartContext['setParallelColumns'] = (markId, columns) => {
+		if (markContributions.departed(markId)) return;
+		scales?.setParallelColumns(markId, columns);
+	};
+	const placeExtent: ChartContext['placeExtent'] = (markId, axis, state) =>
+		markContributions.place(markId, axis, state);
+	const placeColumnExtent: ChartContext['placeColumnExtent'] = (markId, column, state) =>
+		markContributions.placeColumn(markId, column, state);
+	/**
+	 * A mark leaves the chart (its unmount): its extents, scale-type
+	 * requirements, parallel columns and entrance hold go, and its later writes
+	 * are refused. Not on a lifecycle rebuild, whose successor holds the same id
+	 * and takes them over. A mark whose table is unset while it stays mounted
+	 * keeps its contributions until it unmounts.
+	 */
+	const unregisterMark: ChartContext['unregisterMark'] = (markId) => {
+		markContributions.release(markId);
+		unregisterScaleType('x', markId);
+		unregisterScaleType('y', markId);
+		scales?.setParallelColumns(markId, []);
+		chartConfig.unregisterMark(markId);
 	};
 
 	// The chart's scales, built once. The props reach them as getters, which
@@ -537,10 +567,13 @@
 
 		registerScaleType,
 		unregisterScaleType,
+		placeExtent,
+		placeColumnExtent,
+		unregisterMark,
 
 		// Not queued, unlike registerScaleType: a facet pass-through mark that sets
 		// columns before the scales exist loses them (no page facets parallel coordinates).
-		setParallelColumns: (markId, columns) => scales?.setParallelColumns(markId, columns),
+		setParallelColumns,
 		reorderParallelAxis: (from, to) => scales?.reorderParallelAxis(from, to),
 		get parallelReorderState() {
 			return { dataIdx: scales?.reorderDataIdx ?? null, currentX: scales?.reorderCurrentX ?? null };
@@ -674,6 +707,10 @@
 						{scales}
 						{registerScaleType}
 						{unregisterScaleType}
+						{placeExtent}
+						{placeColumnExtent}
+						{unregisterMark}
+						{setParallelColumns}
 						{scaleGeneration}
 						{chartVisibility}
 						{chartHover}
@@ -701,6 +738,10 @@
 			{scales}
 			{registerScaleType}
 			{unregisterScaleType}
+			{placeExtent}
+			{placeColumnExtent}
+			{unregisterMark}
+			{setParallelColumns}
 			{scaleGeneration}
 			{chartVisibility}
 			{chartHover}

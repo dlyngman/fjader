@@ -136,6 +136,7 @@ import {
 import { fetchCategoricalDomains, fetchGlobalAggregates } from './domain-queries';
 import { transformScaleKey } from './transform-scale-key';
 import { OtherRows, type SplitPlan } from './other-rows.svelte';
+import type { PlaceExtent, PlaceColumnExtent } from '$lib/components/charts/MarkContributions';
 
 /** One result's rows as a remap reads them, with the bins and window they were computed over. */
 type TakenSide = BinRemapSide & { binKey: string | null; window: BinWindow | null };
@@ -231,6 +232,15 @@ export class MarkLifecycleV2 {
 	#queryEngine: QueryEngine;
 	#chartContext: ChartContext;
 	#markId: string;
+	/**
+	 * Before each extent write: the chart records where the mark's extent lands
+	 * and refuses it once the mark has left (ChartContext.placeExtent). Bound
+	 * once, so the write path allocates nothing.
+	 */
+	readonly #placeExtent: PlaceExtent = (axis, state) =>
+		this.#chartContext.placeExtent(this.#markId, axis, state);
+	readonly #placeColumnExtent: PlaceColumnExtent = (column, state) =>
+		this.#chartContext.placeColumnExtent(this.#markId, column, state);
 	#filterGroup: FilterGroup;
 	#scaleMap: Record<string, ScaleStateInstance | null> = {};
 	#colorScaleState = $state<ColorScaleState | null>(null);
@@ -809,6 +819,11 @@ export class MarkLifecycleV2 {
 				config,
 				inferredScaleColumns?.x
 			);
+		} else {
+			// The chart keeps one requirement per mark per dimension, replaced by
+			// the next registration: a dimension this config no longer declares
+			// would otherwise keep its predecessor's.
+			this.#chartContext.unregisterScaleType('x', this.#markId);
 		}
 
 		if (scaleRequirements?.y) {
@@ -830,6 +845,8 @@ export class MarkLifecycleV2 {
 				config,
 				inferredScaleColumns?.y
 			);
+		} else {
+			this.#chartContext.unregisterScaleType('y', this.#markId);
 		}
 
 		if (this.#config.parallelMode && this.#config.parallelColumns) {
@@ -1254,6 +1271,7 @@ export class MarkLifecycleV2 {
 					seriesKey,
 					this.#bandDomainFromData,
 					this.#markId,
+					this.#placeExtent,
 					this.#reactiveConfig.domain,
 					this.#reactiveConfig.nulls === 'drop',
 					superseded
@@ -1270,6 +1288,7 @@ export class MarkLifecycleV2 {
 					this.#chartContext.yScaleState as ContinuousScaleState | null,
 					this.#colorScaleState,
 					this.#markId,
+					this.#placeExtent,
 					superseded
 				),
 				this.#fetchFieldStats(),
@@ -1292,7 +1311,9 @@ export class MarkLifecycleV2 {
 					this.#config.select,
 					this.actualXScaleType,
 					this.actualYScaleType,
-					this.#markId
+					this.#markId,
+					this.#placeExtent,
+					this.#placeColumnExtent
 				);
 			}
 
@@ -1637,6 +1658,7 @@ export class MarkLifecycleV2 {
 					this.#bandScaleForDomain('x'),
 					this.#bandScaleForDomain('y'),
 					this.#markId,
+					this.#placeExtent,
 					instantFor,
 					this.#colorScaleState,
 					this.#transformCompiler.hasCategoryReducingTransforms()
@@ -2786,9 +2808,11 @@ export class MarkLifecycleV2 {
 		const scaleState =
 			fittedAxis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState;
 		const scaleType = fittedAxis === 'x' ? this.actualXScaleType : this.actualYScaleType;
-		if (scaleType === 'time' && scaleState && 'addOffsetExtent' in scaleState) {
+		if (!scaleState || !this.#placeExtent(fittedAxis, scaleState as ContinuousScaleState)) {
+			// No scale, or the mark has left its chart.
+		} else if (scaleType === 'time' && 'addOffsetExtent' in scaleState) {
 			(scaleState as TimeScaleState).addOffsetExtent([lo, hi], this.#markId, { instant });
-		} else if (scaleState && 'addMark' in scaleState) {
+		} else if ('addMark' in scaleState) {
 			(scaleState as ContinuousScaleState).addMark([lo, hi], this.#markId, { instant });
 		}
 		if (drivingDomain) this.#fitDomainLastTarget = [drivingDomain[0], drivingDomain[1]];
@@ -3147,6 +3171,9 @@ export class MarkLifecycleV2 {
 
 	destroy(): void {
 		this.#destroyed = true;
+		// A fit still in flight would land on the mark's extent after its
+		// successor's, under the same id: its sequence check now fails.
+		++this.#fitDomainQuerySequence;
 		// Not releasing the entrance here: a mark rebuilds its lifecycle when
 		// its scales resolve, and the rebuilt one re-holds the same id. The
 		// mark's unmount releases it (ChartConfig.unregisterMark).

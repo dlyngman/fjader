@@ -333,8 +333,9 @@
 		textSlots.destroy();
 		textAtlas.unwatchColor(pageText);
 		setup?.destroy();
-		// No config entry to unregister, which is where other marks release it.
-		chartContext.config?.entrance.release(markId);
+		// The chart takes back what the mark contributed (extents, requirements)
+		// and releases its entrance hold.
+		chartContext.unregisterMark(markId);
 		gpuCoordinator?.releaseRetained(markId);
 	});
 </script>

@@ -201,10 +201,8 @@
 
 	onDestroy(() => {
 		setup?.destroy();
-		// Here, not in setup.destroy(): a setup re-created for new columns has
-		// already set the new list, under the same mark id.
-		chartContext.setParallelColumns(markId, []);
-		chartContext.config.unregisterMark(markId);
+		// The chart takes back what the mark contributed (extents, requirements).
+		chartContext.unregisterMark(markId);
 	});
 </script>
 
