@@ -55,6 +55,10 @@
 		 */
 		registerScaleType: ChartContext['registerScaleType'];
 		unregisterScaleType: ChartContext['unregisterScaleType'];
+		/** The container's: what the chart's marks contributed is owned there (MarkContributions). */
+		placeExtent: ChartContext['placeExtent'];
+		unregisterMark: ChartContext['unregisterMark'];
+		setParallelColumns: ChartContext['setParallelColumns'];
 		/** The chart's scale replacements; owned by the container, which outlives its ChartScales. */
 		scaleGeneration: ScaleGeneration;
 		/** Whether any of the chart's cells is on screen; this cell reports into it. */
@@ -79,6 +83,9 @@
 		scales,
 		registerScaleType,
 		unregisterScaleType,
+		placeExtent,
+		unregisterMark,
+		setParallelColumns,
 		scaleGeneration,
 		chartVisibility,
 		chartHover,
@@ -415,7 +422,9 @@
 		// Scale registration — the container's, which queues until ChartScales exists
 		registerScaleType,
 		unregisterScaleType,
-		setParallelColumns: (markId, columns) => scales?.setParallelColumns(markId, columns),
+		placeExtent,
+		unregisterMark,
+		setParallelColumns,
 		reorderParallelAxis: (from, to) => scales?.reorderParallelAxis(from, to),
 		get parallelReorderState() {
 			return { dataIdx: scales?.reorderDataIdx ?? null, currentX: scales?.reorderCurrentX ?? null };

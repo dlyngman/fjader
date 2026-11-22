@@ -8,6 +8,7 @@ import type { BandScaleState } from '$lib/scales/BandScaleState.svelte';
 import type { TimeScaleState } from '$lib/scales/TimeScaleState.svelte';
 import type { ColorScaleState } from '$lib/scales/ColorScaleState.svelte';
 import type { ScaleStateInstance, ContinuousScaleState } from '$lib/types';
+import type { PlaceExtent } from '$lib/components/charts/MarkContributions';
 import {
 	isContinuousScale,
 	isNumericScale,
@@ -110,7 +111,9 @@ export function setInitialContinuousDomains(
 	select: Record<string, unknown>,
 	actualXScaleType: string,
 	actualYScaleType: string,
-	markId: string
+	markId: string,
+	/** Before each extent write: the chart records where it lands (false: the mark has left). */
+	place: PlaceExtent
 ): void {
 	if (!fieldInfo) return;
 
@@ -148,7 +151,8 @@ export function setInitialContinuousDomains(
 				console.log(
 					`📐 [${markId}] Domain ${alias}: fieldInfo path → [${combinedMin}, ${combinedMax}]`
 				);
-				(scaleState as LinearScaleState).addMark([combinedMin, combinedMax], markId);
+				if (place(alias as 'x' | 'y', scaleState))
+					(scaleState as LinearScaleState).addMark([combinedMin, combinedMax], markId);
 			}
 		}
 	}
@@ -176,6 +180,8 @@ export function registerDataDerivedDomains(
 	xBandScaleState: BandScaleState | null,
 	yBandScaleState: BandScaleState | null,
 	markId: string,
+	/** As for setInitialContinuousDomains. */
+	place: PlaceExtent,
 	/**
 	 * Whether a scale's change from this result lands without animating: a
 	 * catch-up result on a scale no other visible chart draws. Null: animate.
@@ -248,7 +254,8 @@ export function registerDataDerivedDomains(
 			}
 
 			const instant = !!xScaleState && (instantFor?.(xScaleState) ?? false);
-			registerExtentOnScale(xScaleState, actualXScaleType, extent, markId, instant, 'X');
+			if (xScaleState && place('x', xScaleState))
+				registerExtentOnScale(xScaleState, actualXScaleType, extent, markId, instant, 'X');
 		}
 	}
 
@@ -267,7 +274,8 @@ export function registerDataDerivedDomains(
 			}
 
 			const instant = !!yScaleState && (instantFor?.(yScaleState) ?? false);
-			registerExtentOnScale(yScaleState, actualYScaleType, extent, markId, instant, 'Y');
+			if (yScaleState && place('y', yScaleState))
+				registerExtentOnScale(yScaleState, actualYScaleType, extent, markId, instant, 'Y');
 		}
 	}
 
@@ -282,7 +290,7 @@ export function registerDataDerivedDomains(
 
 			const bandScale = axis === 'x' ? xBandScaleState : yBandScaleState;
 
-			if (!bandScale) continue;
+			if (!bandScale || !place(axis, bandScale)) continue;
 
 			// Which space the rows are in decides which method registers them, and
 			// the two are not distinguishable by inspection: on a numeric band

@@ -508,18 +508,26 @@ export class ChartScales {
 		}
 		const resolvedColumnName: string | null = typeof rawColumn === 'string' ? rawColumn : null;
 
+		// One requirement per mark per dimension: a mark's lifecycle registers one
+		// for each, and its successor's (a rebuilt lifecycle, under the same id)
+		// replaces it. Appended, a changed field or transform left the old one
+		// deciding the axis type until the mark unmounted.
 		const requirements = this.scaleRequirements[dimension];
-		const existing = requirements.find(
-			(req) =>
-				req.type === type &&
-				req.priority === priority &&
-				req.markId === markId &&
-				JSON.stringify(req.config) === JSON.stringify(config)
-		);
+		const index = requirements.findIndex((req) => req.markId === markId);
+		const current = index >= 0 ? requirements[index] : null;
+		const unchanged =
+			current !== null &&
+			current.type === type &&
+			current.priority === priority &&
+			current.columnName === resolvedColumnName &&
+			JSON.stringify(current.config) === JSON.stringify(config);
 
-		if (!existing) {
-			requirements.push({ type, priority, markId, config, columnName: resolvedColumnName });
-			this.scaleRequirements[dimension] = [...requirements];
+		if (!unchanged) {
+			const next = { type, priority, markId, config, columnName: resolvedColumnName };
+			this.scaleRequirements[dimension] =
+				index >= 0
+					? requirements.map((req, i) => (i === index ? next : req))
+					: [...requirements, next];
 		}
 
 		// Eagerly resolve scale instances so MarkLifecycle effects (which may

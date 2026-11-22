@@ -274,19 +274,15 @@
 		void effectiveXScaleType;
 		void effectiveYScaleType;
 		untrack(() => {
-			if (setup) {
-				gpuCoordinator?.markForRetain(markId);
-			}
-			// Replaced by a successor (retire), or gone with none in its place
-			// (destroy: its extents and requirements go too).
 			const successor = !!(
 				entry.table &&
 				effectiveXScaleType &&
 				effectiveYScaleType &&
 				queryEngine
 			);
-			if (successor) setup?.retire();
-			else setup?.destroy();
+			// The renderer is kept drawing only for a successor to take over.
+			if (setup && successor) gpuCoordinator?.markForRetain(markId);
+			setup?.destroy();
 			setup = null;
 			if (successor) {
 				setup = new MarkLifecycleV2(
@@ -570,7 +566,8 @@
 		densityHost?.destroy();
 		m4Decimator?.destroy();
 		setup?.destroy();
-		chartContext.config.unregisterMark(markId);
+		// The chart takes back what the mark contributed (extents, requirements).
+		chartContext.unregisterMark(markId);
 		gpuCoordinator?.releaseRetained(markId);
 	});
 </script>

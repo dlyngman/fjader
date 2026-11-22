@@ -284,12 +284,10 @@
 	$effect(() => {
 		(void config, scaleGeneration);
 		untrack(() => {
-			if (setup) gpuCoordinator?.markForRetain(markId);
-			// Replaced by a successor (retire), or gone with none in its place
-			// (destroy: its extents and requirements go too).
 			const successor = !!(table && effectiveXScaleType && effectiveYScaleType && queryEngine);
-			if (successor) setup?.retire();
-			else setup?.destroy();
+			// The renderer is kept drawing only for a successor to take over.
+			if (setup && successor) gpuCoordinator?.markForRetain(markId);
+			setup?.destroy();
 			setup = null;
 			if (successor) {
 				setup = new MarkLifecycleV2(
@@ -337,8 +335,9 @@
 		textSlots.destroy();
 		textAtlas.unwatchColor(pageText);
 		setup?.destroy();
-		// No config entry to unregister, which is where other marks release it.
-		chartContext.config?.entrance.release(markId);
+		// The chart takes back what the mark contributed (extents, requirements)
+		// and releases its entrance hold.
+		chartContext.unregisterMark(markId);
 		gpuCoordinator?.releaseRetained(markId);
 	});
 </script>

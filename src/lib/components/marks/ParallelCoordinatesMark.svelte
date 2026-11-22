@@ -146,13 +146,9 @@
 		void config;
 		void scaleGeneration;
 		untrack(() => {
-			// Replaced by a successor (retire), or gone with none in its place
-			// (destroy: its extents and requirements go too).
-			const successor = !!(entry.table && queryEngine);
-			if (successor) setup?.retire();
-			else setup?.destroy();
+			setup?.destroy();
 			setup = null;
-			if (successor) {
+			if (entry.table && queryEngine) {
 				setup = new MarkLifecycleV2(
 					config,
 					reactiveConfig,
@@ -204,9 +200,9 @@
 	});
 
 	onDestroy(() => {
-		// Gives back the mark's parallel columns, extents and requirements.
 		setup?.destroy();
-		chartContext.config.unregisterMark(markId);
+		// The chart takes back what the mark contributed (extents, requirements).
+		chartContext.unregisterMark(markId);
 	});
 </script>
 

@@ -136,6 +136,7 @@ import {
 import { fetchCategoricalDomains, fetchGlobalAggregates } from './domain-queries';
 import { transformScaleKey } from './transform-scale-key';
 import { OtherRows, type SplitPlan } from './other-rows.svelte';
+import type { PlaceExtent } from '$lib/components/charts/MarkContributions';
 
 /** One result's rows as a remap reads them, with the bins and window they were computed over. */
 type TakenSide = BinRemapSide & { binKey: string | null; window: BinWindow | null };
@@ -231,6 +232,13 @@ export class MarkLifecycleV2 {
 	#queryEngine: QueryEngine;
 	#chartContext: ChartContext;
 	#markId: string;
+	/**
+	 * Before each extent write: the chart records where the mark's extent lands
+	 * and refuses it once the mark has left (ChartContext.placeExtent). Bound
+	 * once, so the write path allocates nothing.
+	 */
+	readonly #placeExtent: PlaceExtent = (axis, state) =>
+		this.#chartContext.placeExtent(this.#markId, axis, state);
 	#filterGroup: FilterGroup;
 	#scaleMap: Record<string, ScaleStateInstance | null> = {};
 	#colorScaleState = $state<ColorScaleState | null>(null);
@@ -1254,6 +1262,7 @@ export class MarkLifecycleV2 {
 					seriesKey,
 					this.#bandDomainFromData,
 					this.#markId,
+					this.#placeExtent,
 					this.#reactiveConfig.domain,
 					this.#reactiveConfig.nulls === 'drop',
 					superseded
@@ -1270,6 +1279,7 @@ export class MarkLifecycleV2 {
 					this.#chartContext.yScaleState as ContinuousScaleState | null,
 					this.#colorScaleState,
 					this.#markId,
+					this.#placeExtent,
 					superseded
 				),
 				this.#fetchFieldStats(),
@@ -1292,7 +1302,8 @@ export class MarkLifecycleV2 {
 					this.#config.select,
 					this.actualXScaleType,
 					this.actualYScaleType,
-					this.#markId
+					this.#markId,
+					this.#placeExtent
 				);
 			}
 
@@ -1637,6 +1648,7 @@ export class MarkLifecycleV2 {
 					this.#bandScaleForDomain('x'),
 					this.#bandScaleForDomain('y'),
 					this.#markId,
+					this.#placeExtent,
 					instantFor,
 					this.#colorScaleState,
 					this.#transformCompiler.hasCategoryReducingTransforms()
@@ -2786,9 +2798,11 @@ export class MarkLifecycleV2 {
 		const scaleState =
 			fittedAxis === 'x' ? this.#chartContext.xScaleState : this.#chartContext.yScaleState;
 		const scaleType = fittedAxis === 'x' ? this.actualXScaleType : this.actualYScaleType;
-		if (scaleType === 'time' && scaleState && 'addOffsetExtent' in scaleState) {
+		if (!scaleState || !this.#placeExtent(fittedAxis, scaleState as ContinuousScaleState)) {
+			// No scale, or the mark has left its chart.
+		} else if (scaleType === 'time' && 'addOffsetExtent' in scaleState) {
 			(scaleState as TimeScaleState).addOffsetExtent([lo, hi], this.#markId, { instant });
-		} else if (scaleState && 'addMark' in scaleState) {
+		} else if ('addMark' in scaleState) {
 			(scaleState as ContinuousScaleState).addMark([lo, hi], this.#markId, { instant });
 		}
 		if (drivingDomain) this.#fitDomainLastTarget = [drivingDomain[0], drivingDomain[1]];
@@ -3145,39 +3159,7 @@ export class MarkLifecycleV2 {
 	// CLEANUP
 	// ===========================================================================
 
-	/**
-	 * The mark leaves its chart (unmount): retire, then give back what the mark
-	 * contributed to the chart's scales under its id. Its x and y extents (or
-	 * band categories) and its facet categories, so the domains spring back to
-	 * the marks that remain, and its x and y scale-type requirements, so a
-	 * departed band mark no longer decides the axis type.
-	 *
-	 * Not on a rebuild (`retire`): the successor holds the same id and replaces
-	 * these itself; removing them would snap the domain back and out again.
-	 */
 	destroy(): void {
-		this.retire();
-		const ctx = this.#chartContext;
-		for (const scale of [ctx.xScaleState, ctx.yScaleState, ctx.facetBandScale]) {
-			(scale as { removeMark?(id: string): unknown } | null | undefined)?.removeMark?.(
-				this.#markId
-			);
-		}
-		ctx.unregisterScaleType('x', this.#markId);
-		ctx.unregisterScaleType('y', this.#markId);
-		// A parallel mark's columns: its axes go with it.
-		if (this.#config.parallelMode) ctx.setParallelColumns(this.#markId, []);
-	}
-
-	/**
-	 * This lifecycle is replaced by a successor under the same mark id (the
-	 * mark rebuilds it when its scales or config change): release what is this
-	 * instance's own, and keep what the successor takes over: the mark's
-	 * extents and scale-type requirements, which it registers again under the
-	 * same id, and its entrance hold. As `GPUCoordinator.markForRetain` keeps
-	 * the mark's GPU resources across the same rebuild.
-	 */
-	retire(): void {
 		this.#destroyed = true;
 		// Not releasing the entrance here: a mark rebuilds its lifecycle when
 		// its scales resolve, and the rebuilt one re-holds the same id. The
