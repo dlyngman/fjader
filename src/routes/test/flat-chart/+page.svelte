@@ -40,6 +40,12 @@
 	let cells = $state([]);
 	let changes = $state(0);
 
+	// Case 14: an inferred legend as the chart's marks change.
+	let inferredFill = $state('island');
+	let inferredFirst = $state(true);
+	let inferredSecond = $state(false);
+	let inferredBoth = $state(false);
+
 	function startCounting() {
 		const canvases = [...gridEl.querySelectorAll('canvas')];
 		cells = canvases.map(() => ({ paints: 0, top: 0 }));
@@ -346,6 +352,77 @@
 			</div>
 
 			<div class="chart-panel wide">
+				<h3>14. An inferred legend follows the marks</h3>
+				<p class="desc">
+					The Legend names no color. Switch the fill: it shows the new field, and a click toggles
+					that field (selection "inferred", which the bars read). Add a second mark on the same
+					field and remove the first: it stays. Remove every mark that colors: it goes. Color by
+					both fields: it warns once in the console and shows nothing.
+				</p>
+				<div class="controls">
+					<button onclick={() => (inferredFill = inferredFill === 'island' ? 'species' : 'island')}>
+						fill: {inferredFill}
+					</button>
+					<button onclick={() => (inferredFirst = !inferredFirst)}>
+						first mark: {inferredFirst ? 'on' : 'off'}
+					</button>
+					<button onclick={() => (inferredSecond = !inferredSecond)}>
+						second mark (same fill): {inferredSecond ? 'on' : 'off'}
+					</button>
+					<button onclick={() => (inferredBoth = !inferredBoth)}>
+						stroke by the other field: {inferredBoth ? 'on' : 'off'}
+					</button>
+				</div>
+				<div class="legend-row">
+					<div class="chart-wrapper">
+						<ChartContainer xLabel="bill_length" yLabel="bill_depth">
+							<Frame />
+							<AxisLeft />
+							<AxisBottom />
+							{#if inferredFirst}
+								<DotsMark
+									table="penguins"
+									x="bill_length"
+									y="bill_depth"
+									fill={inferredFill}
+									selection="inferred"
+								/>
+							{/if}
+							{#if inferredSecond}
+								<DotsMark
+									table="penguins"
+									x="flipper_length"
+									y="bill_depth"
+									fill={inferredFill}
+									r={2}
+									selection="inferred"
+								/>
+							{/if}
+							{#if inferredBoth}
+								<DotsMark
+									table="penguins"
+									x="bill_length"
+									y="bill_depth"
+									fill="transparent"
+									stroke={inferredFill === 'island' ? 'species' : 'island'}
+									selection="inferred"
+								/>
+							{/if}
+							<Legend position="right" selection="inferred" />
+						</ChartContainer>
+					</div>
+					<div class="chart-wrapper">
+						<ChartContainer xLabel={inferredFill} yLabel="count">
+							<Frame />
+							<AxisLeft />
+							<AxisBottom />
+							<BarMarkY table="penguins" x={inferredFill} y={count()} selection="inferred" />
+						</ChartContainer>
+					</div>
+				</div>
+			</div>
+
+			<div class="chart-panel wide">
 				<h3>6. Legends as children</h3>
 				<p class="desc">
 					A Legend among the children is the chart's: rendered once, above the plot or to its right
@@ -400,6 +477,13 @@
 {/if}
 
 <style>
+	.controls {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		margin-bottom: 8px;
+	}
+
 	.legend-row {
 		display: grid;
 		grid-template-columns: 2fr 1fr;

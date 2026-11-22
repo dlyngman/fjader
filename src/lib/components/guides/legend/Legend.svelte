@@ -67,17 +67,13 @@
 
 	// In a chart, with no `color`: the one scale the chart's marks color by.
 	const chart = inChart ? getContext<DeclarationChart | undefined>(DECLARATION_CHART) : undefined;
-	let warned = false;
+	// Each warning once while it holds; again if it returns after resolving.
+	let warned: string | null = null;
 	const inferredScale = $derived.by((): ColorScaleState | null => {
 		if (color || !chart) return null;
-		const { scale, ambiguous } = inferLegendScale(chart.colorScales);
-		if (ambiguous && !warned) {
-			warned = true;
-			console.warn(
-				`<Legend> names no color and its chart colors by several fields ` +
-					`(${ambiguous.join(', ')}): name one with color="…".`
-			);
-		}
+		const { scale, warning } = inferLegendScale(chart.colorScales);
+		if (warning && warning !== warned) console.warn(warning);
+		warned = warning;
 		return scale;
 	});
 
@@ -97,6 +93,15 @@
 {/if}
 
 {#snippet legend()}
+	<!-- Keyed by the field: a legend registers its toggle on the field once, at
+	     init, so an inferred field that changes (the chart's marks now color by
+	     another) needs a new one, or clicks would still toggle the old field. -->
+	{#key field}
+		{@render byScale()}
+	{/key}
+{/snippet}
+
+{#snippet byScale()}
 	{#if colorScaleState?.ready && (colorScaleState as ColorScaleState).isOrdinal}
 		<OrdinalColorLegend
 			scaleState={colorScaleState as ColorScaleState}
