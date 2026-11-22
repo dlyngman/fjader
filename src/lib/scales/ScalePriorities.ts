@@ -16,6 +16,8 @@ export interface ScaleRequirement {
 	priority?: number;
 	markId?: string;
 	columnName?: string;
+	/** The column is an aggregate (count(), sum(x)): its axis is chart-local unless named. */
+	aggregate?: boolean;
 	config?: Record<string, unknown>;
 }
 
@@ -26,12 +28,15 @@ export interface RegisteredScaleRequirement {
 	markId: string;
 	config: Record<string, unknown>;
 	columnName: string | null;
+	aggregate: boolean;
 }
 
 export interface ResolvedScaleConfiguration {
 	type: string;
 	config: Record<string, unknown>;
 	columnName: string | null;
+	/** Whether the requirement that named the column names an aggregate. */
+	aggregate: boolean;
 }
 
 export function resolveScaleType(requirements: ScaleRequirement[] | null): string {
@@ -81,9 +86,10 @@ export function resolveScaleConfiguration(
 	const resolvedConfig = resolveConfigurationForType(typeRequirements, resolvedType);
 
 	const sorted = [...typeRequirements].sort((a, b) => (b.priority || 0) - (a.priority || 0));
-	const columnName = sorted.find((req) => req.columnName)?.columnName || null;
+	const named = sorted.find((req) => req.columnName);
+	const columnName = named?.columnName || null;
 
-	return { type: resolvedType, config: resolvedConfig, columnName };
+	return { type: resolvedType, config: resolvedConfig, columnName, aggregate: !!named?.aggregate };
 }
 
 function resolveConfigurationForType(

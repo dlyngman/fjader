@@ -14,7 +14,8 @@ if TYPE_CHECKING:
     from ._types import SortConfig
 
 _PLOT_FIELDS = (
-    "width", "height", "margin", "x_label", "y_label", "fx", "columns", "legend",
+    "width", "height", "margin", "x_label", "y_label", "x_scale", "y_scale", "fx",
+    "columns", "legend",
     "interactors", "use_selection", "zoom_limit", "pan_limit", "disable_zoom",
     "entrance",
 )
@@ -30,6 +31,8 @@ class Plot:
     margin: dict[str, int] | None = None
     x_label: str | None = None
     y_label: str | None = None
+    x_scale: str | Literal[False] | None = None
+    y_scale: str | Literal[False] | None = None
     fx: str | None = None
     columns: int | None = None
     legend: dict[str, Any] | bool | None = None
@@ -168,6 +171,8 @@ def plot(
     margin: dict[str, int] | None = None,
     x_label: str | None = None,
     y_label: str | None = None,
+    x_scale: str | Literal[False] | None = None,
+    y_scale: str | Literal[False] | None = None,
     fx: str | None = None,
     columns: int | None = None,
     legend: dict[str, Any] | bool | None = None,
@@ -187,6 +192,12 @@ def plot(
         margin: Dict with ``top``/``right``/``bottom``/``left`` pixel values.
         x_label: X-axis label.
         y_label: Y-axis label.
+        x_scale: Which charts share the x axis (domain, zoom and pan). By
+            default axes with the same label share, else the same column,
+            across tables; an aggregate without a label is this chart's own.
+            A name shares with every chart naming it; ``False`` keeps the
+            axis to this chart.
+        y_scale: As ``x_scale``, for the y axis.
         fx: Facet column name.
         columns: Number of columns for facet grid.
         legend: Legend config — ``True`` for auto-detect, or a dict like
@@ -210,7 +221,8 @@ def plot(
     return Plot(
         *marks,
         width=width, height=height, margin=margin,
-        x_label=x_label, y_label=y_label, fx=fx, columns=columns,
+        x_label=x_label, y_label=y_label, x_scale=x_scale, y_scale=y_scale,
+        fx=fx, columns=columns,
         legend=legend, interactors=interactors,
         use_selection=use_selection,
         zoom_limit=zoom_limit, pan_limit=pan_limit,

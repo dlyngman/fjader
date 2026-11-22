@@ -16,6 +16,7 @@ import type {
 	FieldRef
 } from '$lib/types';
 import { isBinExpression } from '$lib/sql/bin';
+import { isNode, isAggregateExpression } from '@uwdata/mosaic-sql';
 import { isContinuousScale } from '$lib/scales/scale-categories';
 import {
 	LinearScaleState,
@@ -48,6 +49,9 @@ interface ChartScalesConfig {
 	layout: ChartLayout;
 	xLabel?: string | null;
 	yLabel?: string | null;
+	/** Which charts share the axis: a name shares with charts naming it, false keeps it to this chart (see #scaleKey). */
+	xScale?: string | false;
+	yScale?: string | false;
 	getFacetChartIds?: (() => string[]) | null;
 	xZoomLimit?: number;
 	yZoomLimit?: number;
@@ -140,8 +144,8 @@ export class ChartScales {
 				const xConfig = this.scaleConfigurations.x;
 				const yConfig = this.scaleConfigurations.y;
 				if (xConfig && yConfig) {
-					const xKey = this.xLabel || xConfig.columnName || 'x';
-					const yKey = this.yLabel || yConfig.columnName || 'y';
+					const xKey = this.#scaleKey('x', xConfig);
+					const yKey = this.#scaleKey('y', yConfig);
 					const xScaleConfig = this.#buildAxisScaleConfig(xConfig);
 					const yScaleConfig = this.#buildAxisScaleConfig(yConfig);
 					if (this.config.useXSelection) xScaleConfig.__selectionConsumer = this.chartId;
@@ -266,8 +270,7 @@ export class ChartScales {
 		const findSourceScale = (): LinearScaleState | null => {
 			const config = axis === 'x' ? this.scaleConfigurations?.x : this.scaleConfigurations?.y;
 			if (!config) return null;
-			const label = axis === 'x' ? this.xLabel : this.yLabel;
-			const name = label || config.columnName || axis;
+			const name = this.#scaleKey(axis, config);
 			const sourceConfig = this.#buildAxisScaleConfig(config);
 			const scale = this.#scaleRegistry.findScale(name, config.type, sourceConfig);
 			if (scale instanceof LinearScaleState) return scale;
@@ -367,6 +370,28 @@ export class ChartScales {
 	}
 
 	/**
+	 * Which axis scale this chart uses: charts whose axes get the same key share
+	 * one scale state, its domain and its zoom and pan. Shared by default:
+	 * - `xScale` names a group: shared with every chart naming it (different
+	 *   columns that are one measurement).
+	 * - `xScale={false}`: this chart's own.
+	 * - Otherwise the label: axes with the same title are the same axis.
+	 * - Otherwise the column (a bin's field), across tables.
+	 * - An aggregate without a label (count(), sum(x)), or no column: this
+	 *   chart's own, since two counts are rarely one quantity.
+	 */
+	#scaleKey(axis: 'x' | 'y', config: ResolvedScaleConfiguration): string {
+		const share = axis === 'x' ? this.config.xScale : this.config.yScale;
+		if (typeof share === 'string' && share) return share;
+		const own = `${this.chartId}:${axis}`;
+		if (share === false) return own;
+		const label = axis === 'x' ? this.xLabel : this.yLabel;
+		if (label) return label;
+		if (config.columnName && !config.aggregate) return config.columnName;
+		return own;
+	}
+
+	/**
 	 * Resolve scale instances from current scaleConfigurations.
 	 * Called both eagerly (from registerScaleType, synchronous) and
 	 * reactively (from the $effect). Idempotent — a no-op when scales
@@ -378,7 +403,7 @@ export class ChartScales {
 
 		// Resolve each axis independently — parallel coordinates only registers x.
 		if (xConfig) {
-			const xKey = this.xLabel || xConfig.columnName || 'x';
+			const xKey = this.#scaleKey('x', xConfig);
 			const xScaleConfig = this.#buildAxisScaleConfig(xConfig);
 			if (this.config.useXSelection) xScaleConfig.__selectionConsumer = this.chartId;
 			if (this.scaleRequirements.x?.some((r) => r.config?.__fitDomain))
@@ -400,7 +425,7 @@ export class ChartScales {
 		}
 
 		if (yConfig) {
-			const yKey = this.yLabel || yConfig.columnName || 'y';
+			const yKey = this.#scaleKey('y', yConfig);
 			const yScaleConfig = this.#buildAxisScaleConfig(yConfig);
 			if (this.config.useYSelection) yScaleConfig.__selectionConsumer = this.chartId;
 			if (this.scaleRequirements.y?.some((r) => r.config?.__fitDomain))
@@ -432,8 +457,18 @@ export class ChartScales {
 		} catch (error) {
 			console.error('Scale config error', error);
 			return {
-				x: { type: 'linear', config: {}, columnName: null } as ResolvedScaleConfiguration,
-				y: { type: 'linear', config: {}, columnName: null } as ResolvedScaleConfiguration
+				x: {
+					type: 'linear',
+					config: {},
+					columnName: null,
+					aggregate: false
+				} as ResolvedScaleConfiguration,
+				y: {
+					type: 'linear',
+					config: {},
+					columnName: null,
+					aggregate: false
+				} as ResolvedScaleConfiguration
 			};
 		}
 	});
@@ -500,6 +535,7 @@ export class ChartScales {
 		columnName: FieldRef | null = null
 	): void => {
 		let rawColumn: FieldRef | null = columnName;
+		const aggregate = isNode(rawColumn) && !!isAggregateExpression(rawColumn);
 		if (isBinExpression(rawColumn)) {
 			rawColumn = rawColumn.field;
 		}
@@ -520,10 +556,11 @@ export class ChartScales {
 			current.type === type &&
 			current.priority === priority &&
 			current.columnName === resolvedColumnName &&
+			current.aggregate === aggregate &&
 			JSON.stringify(current.config) === JSON.stringify(config);
 
 		if (!unchanged) {
-			const next = { type, priority, markId, config, columnName: resolvedColumnName };
+			const next = { type, priority, markId, config, columnName: resolvedColumnName, aggregate };
 			this.scaleRequirements[dimension] =
 				index >= 0
 					? requirements.map((req, i) => (i === index ? next : req))

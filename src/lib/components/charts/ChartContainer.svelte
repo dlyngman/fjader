@@ -31,6 +31,16 @@
 		xLabel?: string | null;
 		yLabel?: string | null;
 		/**
+		 * Which charts share the x axis (domain, zoom and pan). By default axes
+		 * with the same label share, else the same column, across tables; an
+		 * aggregate without a label is this chart's own. A name shares with every
+		 * chart naming it (different columns that are one measurement); false
+		 * keeps the axis to this chart.
+		 */
+		xScale?: string | false;
+		/** As `xScale`, for the y axis. */
+		yScale?: string | false;
+		/**
 		 * The facet channel: a column name, or a fixed SQL expression over one.
 		 *
 		 * Whatever a categorical channel accepts anywhere else, because it goes
@@ -120,6 +130,8 @@
 	let {
 		xLabel = null,
 		yLabel = null,
+		xScale = undefined,
+		yScale = undefined,
 		fx = null,
 		fxDomain = null,
 		columns: facetColumns = null,
@@ -374,6 +386,12 @@
 			},
 			get yLabel() {
 				return yLabel;
+			},
+			get xScale() {
+				return xScale;
+			},
+			get yScale() {
+				return yScale;
 			},
 			layout,
 			gpuCoordinator,
