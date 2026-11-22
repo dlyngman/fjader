@@ -16,8 +16,10 @@
 		MarkColor,
 		normalizeSortConfig,
 		generateMarkId,
-		resolveTip
+		resolveTip,
+		inferMarkScaleType
 	} from './utils';
+	import { barValueAxis } from './utils/extent-axes';
 	import { buildReactiveConfig } from './utils/reactive-config';
 	import { withImplicitStack } from '$lib/transforms';
 	import type {
@@ -34,7 +36,13 @@
 	interface Props extends BaseMarkProps, BandScaleProps, RectOffsetProps {
 		x: FieldRef;
 		y: FieldRef;
+		/**
+		 * The bar's start; with y2, explicit ends instead of a length from zero.
+		 * Both date columns draw a timeline on a time axis; a date at one end only
+		 * is refused. An expression end is linear, dates or not.
+		 */
 		y1?: number | FieldRef;
+		/** The bar's end; see `y1`. */
 		y2?: FieldRef;
 		fill?: FieldRef | null;
 		opacity?: number;
@@ -113,6 +121,20 @@
 	const hasExplicitBounds = $derived(entry.y1 !== undefined || entry.y2 !== undefined);
 	let y1 = $derived(entry.y1 ?? 0);
 	let y2 = $derived(entry.y2 ?? entry.y);
+	// The value axis: a timeline when both ends are date columns (barValueAxis).
+	const valueAxis = $derived.by(() => {
+		const lo = entry.y1;
+		const typeOf = (end: unknown) =>
+			end == null ? undefined : inferMarkScaleType(end as FieldRef, entry.table, null);
+		return barValueAxis('BarMarkY', 'y', { lo, hi: y2 }, hasExplicitBounds, {
+			lo: typeOf(lo),
+			hi: typeOf(y2)
+		});
+	});
+	// Primitives: the schema version reruns the above for any table, and only a
+	// changed type or error may rebuild the lifecycle.
+	const valueType = $derived(valueAxis.type);
+	const valueError = $derived(valueAxis.error);
 	let effectiveTransforms = $derived(
 		withImplicitStack(entry.transforms ?? [], hasExplicitBounds, 'y')
 	);
@@ -166,11 +188,11 @@
 		markType: 'bary',
 		supportedScaleTypes: {
 			x: ['band'],
-			y: ['linear', 'identity']
+			y: ['linear', 'identity', 'time']
 		},
 		scaleRequirements: {
 			x: { type: 'band', priority: SCALE_PRIORITIES.MANDATE, config: xScaleConfig },
-			y: { type: 'linear', priority: SCALE_PRIORITIES.PREFER }
+			y: { type: valueType ?? 'linear', priority: SCALE_PRIORITIES.PREFER }
 		},
 		inferredScaleColumns: {
 			x: entry.x, // X scale uses categorical column
@@ -256,14 +278,20 @@
 	// --- SETUP LIFECYCLE ---
 
 	$effect(() => {
-		(void config, scaleGeneration);
+		(void config, scaleGeneration, valueError);
 		untrack(() => {
 			if (setup) {
 				gpuCoordinator?.markForRetain(markId);
 			}
 			setup?.destroy();
 			setup = null;
-			if (entry.table && queryEngine) {
+			// A date length: said once per config, nothing drawn. A type not known
+			// yet (explicit ends while the schema loads): wait for it.
+			if (valueError) {
+				console.error(valueError);
+				return;
+			}
+			if (entry.table && valueType && queryEngine) {
 				setup = new MarkLifecycleV2(
 					config,
 					reactiveConfig,

@@ -5,7 +5,8 @@
 	import { Rects } from '../rendering';
 	import { getGPUContext } from '$lib/gpu';
 	import { SCALE_PRIORITIES } from '$lib/scales/ScalePriorities';
-	import { expandBinForExtent, isBinExpression } from '$lib/sql/bin';
+	import { isBinExpression } from '$lib/sql/bin';
+	import { rectExtent } from './utils/extent-axes';
 	import { isCategoricalScale } from '$lib/scales/scale-categories';
 	import {
 		buildSelectFromChannels,
@@ -120,12 +121,9 @@
 	let setup = $state<MarkLifecycleV2 | null>(null);
 
 	// --- INTERNAL BIN EXPANSION --- reads from entry
-	const expandedY = $derived.by(() => {
-		if (entry.y != null) return expandBinForExtent(entry.y, 'y', 'rectX');
-		return { y1: entry.y1, y2: entry.y2 };
-	});
-	const ey1 = $derived(expandedY.y1 as FieldRef | null);
-	const ey2 = $derived(expandedY.y2 as FieldRef | null);
+	const extentY = $derived(rectExtent('RectXMark', 'y', entry.y, { lo: entry.y1, hi: entry.y2 }));
+	const ey1 = $derived(extentY.lo);
+	const ey2 = $derived(extentY.hi);
 
 	// --- SCALE TYPE INFERENCE --- reads from entry
 	const effectiveYScaleType = $derived.by(() =>
@@ -283,13 +281,18 @@
 	// --- SETUP LIFECYCLE ---
 
 	$effect(() => {
-		(void config, scaleGeneration);
+		(void config, scaleGeneration, extentY.error);
 		untrack(() => {
 			if (setup) {
 				gpuCoordinator?.markForRetain(markId);
 			}
 			setup?.destroy();
 			setup = null;
+			// A plain y has no extent: said once per config, nothing drawn.
+			if (extentY.error) {
+				console.error(extentY.error);
+				return;
+			}
 			// Gate on effectiveYScaleType (blocks while schema loads)
 			if (entry.table && effectiveYScaleType && queryEngine) {
 				setup = new MarkLifecycleV2(
