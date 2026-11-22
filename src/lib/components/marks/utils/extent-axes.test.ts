@@ -4,50 +4,60 @@ import { barValueAxis, rectExtent } from './extent-axes';
 
 describe('barValueAxis', () => {
 	const ends = { lo: 'started', hi: 'ended' };
+	const ok = (type: string) => ({ type, error: null });
 
-	it('both ends as date columns: a time axis (a timeline)', () => {
-		expect(barValueAxis('BarMarkX', 'x', ends, true, 'time')).toEqual({
-			type: 'time',
-			error: null
-		});
+	it('both ends date columns: a time axis (a timeline)', () => {
+		expect(barValueAxis('BarMarkX', 'x', ends, true, { lo: 'time', hi: 'time' })).toEqual(
+			ok('time')
+		);
 	});
 
-	it('both ends as numeric columns: linear', () => {
-		expect(barValueAxis('BarMarkX', 'x', ends, true, 'linear')).toEqual({
-			type: 'linear',
-			error: null
-		});
+	it('both ends numeric: linear', () => {
+		expect(barValueAxis('BarMarkX', 'x', ends, true, { lo: 'linear', hi: 'linear' })).toEqual(
+			ok('linear')
+		);
 	});
 
-	it('both ends as columns, schema not loaded yet: waits', () => {
-		expect(barValueAxis('BarMarkX', 'x', ends, true, null)).toEqual({ type: null, error: null });
+	it('explicit ends wait while either column type is unknown', () => {
+		const waiting = { type: null, error: null };
+		expect(barValueAxis('BarMarkX', 'x', ends, true, { lo: null, hi: 'time' })).toEqual(waiting);
+		expect(barValueAxis('BarMarkX', 'x', ends, true, { lo: 'time', hi: null })).toEqual(waiting);
+	});
+
+	it('a date at only one end is refused: the other missing, a constant, or a number', () => {
+		const cases = [
+			[{ lo: undefined, hi: 'ended' }, { lo: undefined, hi: 'time' }, 'x1=(none)'],
+			[{ lo: 0, hi: 'ended' }, { lo: 'linear', hi: 'time' }, 'x1=0'],
+			[{ lo: 'started', hi: 'n' }, { lo: 'time', hi: 'linear' }, 'x2="n"']
+		] as const;
+		for (const [e, types, said] of cases) {
+			const { type, error } = barValueAxis('BarMarkX', 'x', e, true, types);
+			expect(type).toBeNull();
+			expect(error).toContain(said);
+			expect(error).toContain('needs both ends as date columns');
+		}
 	});
 
 	it('a length from zero is linear at once, without waiting for the schema', () => {
-		expect(barValueAxis('BarMarkX', 'x', { lo: undefined, hi: 'n' }, false, null)).toEqual({
-			type: 'linear',
-			error: null
-		});
+		expect(
+			barValueAxis('BarMarkX', 'x', { lo: undefined, hi: 'n' }, false, { hi: null, lo: undefined })
+		).toEqual(ok('linear'));
 	});
 
 	it('a date length is refused, naming both ends', () => {
-		const { type, error } = barValueAxis(
-			'BarMarkY',
-			'y',
-			{ lo: undefined, hi: 'day' },
-			false,
-			'time'
-		);
+		const { type, error } = barValueAxis('BarMarkY', 'y', { lo: undefined, hi: 'day' }, false, {
+			lo: undefined,
+			hi: 'time'
+		});
 		expect(type).toBeNull();
 		expect(error).toContain('y="day" is a date');
 		expect(error).toContain('y1 and y2');
 	});
 
-	it('a constant start is a length, as before', () => {
-		expect(barValueAxis('BarMarkX', 'x', { lo: 0, hi: 'n' }, true, 'linear')).toEqual({
-			type: 'linear',
-			error: null
-		});
+	it('a constant start with a numeric end is a length, as before', () => {
+		expect(
+			barValueAxis('BarMarkX', 'x', { lo: 0, hi: 'n' }, true, { lo: 'linear', hi: 'linear' })
+		).toEqual(ok('linear'));
 	});
 });
 

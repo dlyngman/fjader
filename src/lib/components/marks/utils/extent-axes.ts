@@ -9,39 +9,56 @@
 import { isBinExpression } from '$lib/sql/bin';
 import type { FieldRef } from '$lib/types';
 
+/** The scale type of each end: undefined for an end not given, null while its schema loads. */
+export type EndTypes = { lo: string | null | undefined; hi: string | null | undefined };
+
 /**
- * A bar's value axis. With both ends given as columns (x1 and x2), the axis
- * follows the start column's type, so date columns draw a timeline on a time
- * axis. A length from zero (x alone, or a stack) is linear at once, without
- * waiting for the schema; a date there has no zero to start from.
+ * A bar's value axis. With explicit ends (x1, x2) that are both date columns,
+ * a time axis: a timeline. A date at only one end (the other missing, a
+ * constant, or a number) has no time axis to share and is refused. Otherwise
+ * linear, as before.
  *
- * `inferred` is the start column's type for explicit ends (null while the
- * schema loads), the value column's otherwise (null when not known yet, which
- * does not hold a length back).
+ * A length from zero (x alone, or a stack) is linear at once, without waiting
+ * for the schema; a date there has no zero to start from, and is refused once
+ * its type is known. Explicit ends wait while a column end's type is unknown.
+ *
+ * Only date columns make a time axis: an expression end is linear (as
+ * inferMarkScaleType has it), dates or not.
  */
 export function barValueAxis(
 	mark: string,
 	axis: 'x' | 'y',
-	ends: { lo: number | FieldRef | null | undefined; hi: FieldRef | null | undefined },
+	ends: { lo: unknown; hi: unknown },
 	explicit: boolean,
-	inferred: string | null
+	types: EndTypes
 ): { type: 'linear' | 'time' | null; error: string | null } {
-	const { lo, hi } = ends;
+	const linear = { type: 'linear', error: null } as const;
 	if (!explicit) {
-		if (inferred !== 'time') return { type: 'linear', error: null };
+		if (types.hi !== 'time') return linear;
 		return {
 			type: null,
 			error:
-				`${mark}: ${axis}="${String(hi)}" is a date, and a bar from zero has no meaning on ` +
+				`${mark}: ${axis}=${describe(ends.hi)} is a date, and a bar from zero has no meaning on ` +
 				`a time axis. Give both ends: ${axis}1 and ${axis}2.`
 		};
 	}
-	if (typeof lo !== 'number' && lo != null && hi != null) {
-		if (inferred === null) return { type: null, error: null };
-		return { type: inferred === 'time' ? 'time' : 'linear', error: null };
-	}
-	// One end a constant or missing: a length, as before.
-	return { type: 'linear', error: null };
+	if (types.lo === null || types.hi === null) return { type: null, error: null };
+	const loTime = types.lo === 'time';
+	const hiTime = types.hi === 'time';
+	if (loTime && hiTime) return { type: 'time', error: null };
+	if (!loTime && !hiTime) return linear;
+	return {
+		type: null,
+		error:
+			`${mark}: ${axis}1=${describe(ends.lo)} and ${axis}2=${describe(ends.hi)}: a bar on a time ` +
+			`axis needs both ends as date columns.`
+	};
+}
+
+/** An end as written: a column name quoted, a constant as is, none said so. */
+function describe(end: unknown): string {
+	if (end == null) return '(none)';
+	return typeof end === 'string' ? `"${end}"` : String(end);
 }
 
 /**

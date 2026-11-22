@@ -36,7 +36,13 @@
 
 	interface Props extends BaseMarkProps, BandScaleProps, RectOffsetProps {
 		x: FieldRef;
+		/**
+		 * The bar's start; with x2, explicit ends instead of a length from zero.
+		 * Both date columns draw a timeline on a time axis; a date at one end only
+		 * is refused. An expression end is linear, dates or not.
+		 */
 		x1?: number | FieldRef;
+		/** The bar's end; see `x1`. */
 		x2?: FieldRef;
 		y: FieldRef;
 		fill?: FieldRef | null;
@@ -116,16 +122,15 @@
 	const hasExplicitBounds = $derived(entry.x1 !== undefined || entry.x2 !== undefined);
 	let x1 = $derived(entry.x1 ?? 0);
 	let x2 = $derived(entry.x2 ?? entry.x);
-	// The value axis: a timeline on dates when both ends are columns (barValueAxis).
+	// The value axis: a timeline when both ends are date columns (barValueAxis).
 	const valueAxis = $derived.by(() => {
 		const lo = entry.x1;
-		const start = hasExplicitBounds && lo != null && typeof lo !== 'number' ? lo : x2;
-		// A constant (x={1}) has no column to read: a length, linear.
-		const inferred =
-			typeof start === 'string' || (typeof start === 'object' && start !== null)
-				? inferMarkScaleType(start, entry.table, null)
-				: 'linear';
-		return barValueAxis('BarMarkX', 'x', { lo, hi: x2 }, hasExplicitBounds, inferred);
+		const typeOf = (end: unknown) =>
+			end == null ? undefined : inferMarkScaleType(end as FieldRef, entry.table, null);
+		return barValueAxis('BarMarkX', 'x', { lo, hi: x2 }, hasExplicitBounds, {
+			lo: typeOf(lo),
+			hi: typeOf(x2)
+		});
 	});
 	// Primitives: the schema version reruns the above for any table, and only a
 	// changed type or error may rebuild the lifecycle.
