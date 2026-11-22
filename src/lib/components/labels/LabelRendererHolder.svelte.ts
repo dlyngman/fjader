@@ -31,7 +31,9 @@ export interface AttachedRenderer {
 const FIRST_SLOT_CHANNEL = 16;
 
 export class LabelRendererHolder implements LabelRendererHost {
-	#attached = $state<AttachedRenderer | null>(null);
+	// Raw: a deep $state would hold a proxy of the attached object, which detach's
+	// `===` against the caller's own object never matches, so it never cleared.
+	#attached = $state.raw<AttachedRenderer | null>(null);
 	#next = FIRST_SLOT_CHANNEL;
 	#free: number[] = [];
 	readonly recordWGSL: string;
