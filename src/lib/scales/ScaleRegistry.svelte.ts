@@ -48,6 +48,12 @@ const stableStringify = (obj: unknown): string => {
  */
 const NO_CHARTS: string[] = [];
 
+/** A color scale a chart's marks color by, and whether it is keyed by an expression. */
+export interface ColorUse {
+	readonly scale: ColorScaleState;
+	readonly expression: boolean;
+}
+
 export class ScaleRegistry {
 	// Public field for reactive tracking
 	scaleUsage = $state(new Map<AnyScaleState, Set<string>>());
@@ -62,6 +68,15 @@ export class ScaleRegistry {
 	 * object owned by neither. A scale asks `chartsUsing` now.
 	 */
 	#chartsFor = new Map<AnyScaleState, string[]>();
+	/**
+	 * Which charts' marks color by each color scale (a fill or stroke channel),
+	 * as a count of marks per chart, recorded by `useAsColor`. Not `scaleUsage`,
+	 * which also holds a line's series scale, an ordinal color scale that groups
+	 * without coloring, and which is per chart while coloring is per mark.
+	 */
+	#colorCharts = new Map<ColorScaleState, { expression: boolean; charts: Map<string, number> }>();
+	/** Bumped when `#colorCharts` changes: what `colorScalesOf` tracks. */
+	#colorChartsVersion = $state(0);
 	#gpuCoordinator: GPUCoordinator | null = null;
 
 	// ============================================================
@@ -503,6 +518,59 @@ export class ScaleRegistry {
 		return out;
 	}
 
+	/**
+	 * Record that a mark of `chartId` colors by `scale` (a fill or stroke
+	 * channel), which makes the scale a candidate for the chart's legend
+	 * (`colorScalesOf`). `expression`: the scale is keyed by a SQL expression,
+	 * not a column. Returns the mark's release, for when it switches scales or
+	 * is destroyed: the chart colors by the scale while one of its marks does.
+	 */
+	useAsColor(scale: ColorScaleState, chartId: string, expression = false): () => void {
+		if (!scale || !chartId) return () => {};
+		untrack(() => {
+			let use = this.#colorCharts.get(scale);
+			if (!use) this.#colorCharts.set(scale, (use = { expression, charts: new Map() }));
+			const count = use.charts.get(chartId) ?? 0;
+			use.charts.set(chartId, count + 1);
+			if (count === 0) this.#colorChartsVersion++;
+		});
+		let released = false;
+		return () => {
+			if (released) return;
+			released = true;
+			untrack(() => {
+				// Gone with a destroyed scale: nothing left to release.
+				const use = this.#colorCharts.get(scale);
+				const count = use?.charts.get(chartId);
+				if (!use || !count) return;
+				if (count > 1) return void use.charts.set(chartId, count - 1);
+				use.charts.delete(chartId);
+				if (use.charts.size === 0) this.#colorCharts.delete(scale);
+				this.#colorChartsVersion++;
+			});
+		};
+	}
+
+	/**
+	 * The color scales `chartId`'s marks color by, one per scale however many
+	 * channels share it. Reactive: re-read when a chart starts or stops coloring
+	 * by a scale, which happens at mount, unmount and field changes, never per
+	 * frame.
+	 */
+	colorScalesOf(chartId: string): ColorUse[] {
+		void this.#colorChartsVersion;
+		const out: ColorUse[] = [];
+		for (const [scale, use] of this.#colorCharts) {
+			if (use.charts.has(chartId)) out.push({ scale, expression: use.expression });
+		}
+		return out;
+	}
+
+	/** Drop a destroyed scale's color use: its marks' releases then find nothing. */
+	#dropColorUse(scale: AnyScaleState): void {
+		if (this.#colorCharts.delete(scale as ColorScaleState)) this.#colorChartsVersion++;
+	}
+
 	/** Re-derive one scale's redraw list. The only writer. */
 	#publishCharts(scale: AnyScaleState, chartIds: Set<string>): void {
 		this.#chartsFor.set(scale, Array.from(chartIds));
@@ -516,6 +584,7 @@ export class ScaleRegistry {
 				const usage = this.scaleUsage.get(scale)!;
 				if (usage.delete(chartId)) {
 					if (usage.size === 0) {
+						this.#dropColorUse(scale);
 						// Scale destroyed — topology changes (SSBO layout shifts)
 						if (scale.destroy) scale.destroy();
 						this.scaleUsage.delete(scale);
@@ -542,6 +611,7 @@ export class ScaleRegistry {
 					usageSet.delete(chartId);
 
 					if (usageSet.size === 0) {
+						this.#dropColorUse(scale);
 						if (scale.destroy) scale.destroy();
 						this.scaleUsage.delete(scale);
 						this.#chartsFor.delete(scale);

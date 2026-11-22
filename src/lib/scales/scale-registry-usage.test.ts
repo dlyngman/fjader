@@ -13,6 +13,7 @@
 import { describe, it, expect } from 'vitest';
 import { ScaleRegistry } from './ScaleRegistry.svelte';
 import type { BandScaleState } from './BandScaleState.svelte';
+import type { ColorScaleState } from './ColorScaleState.svelte';
 
 function registry() {
 	// No GPU coordinator: this exercises the refcount only, which is pure
@@ -116,5 +117,89 @@ describe('ScaleRegistry band padding', () => {
 		const config = scale.getConfig();
 		expect(config.paddingInner).toBe(1);
 		expect(config.paddingOuter).toBe(0.3);
+	});
+});
+
+describe('ScaleRegistry color use (what a Legend infers from)', () => {
+	function color(reg: ScaleRegistry, name: string, chartId: string) {
+		return reg.getOrCreateScale(name, 'color', { type: 'ordinal' }, chartId) as ColorScaleState;
+	}
+	const scalesOf = (reg: ScaleRegistry, chartId: string) =>
+		reg.colorScalesOf(chartId).map((u) => u.scale);
+
+	it('lists the scales a chart colors by, once however many channels share one', () => {
+		const reg = registry();
+		const species = color(reg, 'species', 'chart-1');
+		// fill and stroke on the same field: one scale, used twice.
+		reg.useAsColor(species, 'chart-1');
+		reg.useAsColor(species, 'chart-1');
+		const island = color(reg, 'island', 'chart-2');
+		reg.useAsColor(island, 'chart-2', true);
+
+		expect(scalesOf(reg, 'chart-1')).toEqual([species]);
+		expect(reg.colorScalesOf('chart-2')).toEqual([{ scale: island, expression: true }]);
+	});
+
+	it("leaves out a line's series scale, which groups without coloring", () => {
+		const reg = registry();
+		// MarkSeries obtains an ordinal color scale but never calls useAsColor.
+		color(reg, 'carrier', 'chart-1');
+		const species = color(reg, 'species', 'chart-1');
+		reg.useAsColor(species, 'chart-1');
+
+		expect(scalesOf(reg, 'chart-1')).toEqual([species]);
+	});
+
+	it('a mark switching field leaves one candidate', () => {
+		const reg = registry();
+		const release = reg.useAsColor(color(reg, 'species', 'chart-1'), 'chart-1');
+		// MarkColor's effect re-runs: its cleanup releases, then it uses the new scale.
+		release();
+		const island = color(reg, 'island', 'chart-1');
+		reg.useAsColor(island, 'chart-1');
+
+		expect(scalesOf(reg, 'chart-1')).toEqual([island]);
+	});
+
+	it('a mark removed (an {#if}) leaves none; releasing twice changes nothing', () => {
+		const reg = registry();
+		const species = color(reg, 'species', 'chart-1');
+		const release = reg.useAsColor(species, 'chart-1');
+		release();
+		expect(scalesOf(reg, 'chart-1')).toEqual([]);
+
+		reg.useAsColor(species, 'chart-1');
+		release();
+		expect(scalesOf(reg, 'chart-1')).toEqual([species]);
+	});
+
+	it('two marks on one scale, one removed: the chart still colors by it', () => {
+		const reg = registry();
+		const species = color(reg, 'species', 'chart-1');
+		const first = reg.useAsColor(species, 'chart-1');
+		reg.useAsColor(species, 'chart-1');
+		first();
+
+		expect(scalesOf(reg, 'chart-1')).toEqual([species]);
+	});
+
+	it('removeChartUsage keeps color use while the scale lives, and drops it with the scale', () => {
+		const reg = registry();
+		const species = color(reg, 'species', 'chart-1');
+		color(reg, 'species', 'chart-2');
+		const release = reg.useAsColor(species, 'chart-1');
+
+		// A scales rebuild: the chart's usage goes, its marks still color by it.
+		reg.removeChartUsage('chart-1');
+		expect(species.isDestroyed).toBe(false);
+		expect(scalesOf(reg, 'chart-1')).toEqual([species]);
+
+		// The last chart leaves: the scale is destroyed, and its color use with it.
+		reg.removeChartUsage('chart-2');
+		expect(species.isDestroyed).toBe(true);
+		expect(scalesOf(reg, 'chart-1')).toEqual([]);
+		// The mark's later release finds nothing to drop.
+		expect(() => release()).not.toThrow();
+		expect(scalesOf(reg, 'chart-1')).toEqual([]);
 	});
 });

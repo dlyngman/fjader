@@ -25,6 +25,7 @@ import { getContext, onDestroy, type Snippet } from 'svelte';
 import type { AxisSpec, ParallelAxesSpec } from '../axes/axis-spec';
 import type { ChartContext, ScaleStateInstance } from '$lib/types';
 import type { ChartConfig } from '$lib/config';
+import type { ColorUse } from '$lib/scales/ScaleRegistry.svelte';
 
 /** A plot border around the inner plot area (`<Frame/>`). */
 export interface FrameSpec {
@@ -108,6 +109,8 @@ export interface DeclarationChart {
 	readonly yLabel: string | null | undefined;
 	/** A parallel coordinates chart's axes (shared scales), or null. */
 	readonly parallelScales: ChartContext['parallelScales'];
+	/** The color scales the chart's marks color by, one entry per scale (reactive). */
+	readonly colorScales: readonly ColorUse[];
 }
 
 /**

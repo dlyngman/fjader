@@ -595,6 +595,9 @@
 		},
 		get parallelScales() {
 			return scales?.parallelScales ?? null;
+		},
+		get colorScales() {
+			return scaleRegistry.colorScalesOf(layout.chartId);
 		}
 	};
 	setContext(DECLARATION_CHART, declarationChart);

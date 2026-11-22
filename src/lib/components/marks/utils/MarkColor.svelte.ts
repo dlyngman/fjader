@@ -65,6 +65,10 @@ export class MarkColor {
 			void this.#chartContext.scaleGeneration;
 			// Only create scale when type is known (not null)
 			if (mode === 'field' && field && this.#scaleRegistry && type !== null) {
+				// The chart colors by this scale while this mark does: released when
+				// the effect re-runs (another field or type, replaced scales) or the
+				// mark is destroyed.
+				let release = () => {};
 				untrack(() => {
 					// For aggregate nodes, use the SQL string as the scale key
 					// This ensures each unique aggregate expression gets its own scale
@@ -85,7 +89,14 @@ export class MarkColor {
 						},
 						this.#chartContext.chartId
 					) as ColorScaleState;
+					// What the chart's legend may infer its scale from.
+					release = this.#scaleRegistry.useAsColor(
+						this.scaleState,
+						this.#chartContext.chartId,
+						isNode(field)
+					);
 				});
+				return release;
 			} else if (type === null && mode === 'field') {
 				// Schema not ready yet - trigger fetch but don't create scale
 				const table = this.#tableProp();
