@@ -14,7 +14,7 @@ import { timeOffsetColumn } from '$lib/sql/derived-columns';
  * Data flow:
  * 1. Receives raw datetime extents from sidecar queries
  * 2. Computes shared origin t0 = global min datetime
- * 3. Creates derived DuckDB view column: CAST((EPOCH(col) - EPOCH(t0)) AS REAL)
+ * 3. Each mark selects its own columns as offsets: CAST((EPOCH(col) - EPOCH(t0)) AS REAL)
  * 4. All GPU/scale math operates on float offsets (identical to linear)
  * 5. Ticks and labels rehydrate offsets back to datetimes for display
  */
@@ -196,17 +196,6 @@ export class TimeScaleState extends LinearScaleState {
 	/** The derived column name for this time scale's offsets. */
 	get offsetColumnName(): string {
 		return timeOffsetColumn(this.#sourceField);
-	}
-
-	/**
-	 * Inline SQL expression converting datetime to offset (seconds from t0).
-	 * Used by MarkLifecycleV2 to inline in the query SELECT (no ViewManager).
-	 * Returns empty string if t0 is not yet known.
-	 */
-	get offsetExpression(): string {
-		if (!this.#t0) return '';
-		const t0Epoch = Math.floor(this.#t0.getTime() / 1000);
-		return `CAST((EPOCH("${this.#sourceField}") - ${t0Epoch}) AS REAL)`;
 	}
 
 	/**

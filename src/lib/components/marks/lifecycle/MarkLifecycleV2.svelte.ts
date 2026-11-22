@@ -1437,9 +1437,9 @@ export class MarkLifecycleV2 {
 	}
 
 	/**
-	 * Inline time offset expressions for time scales.
-	 * Replaces ViewManager's offset column with direct SQL in the SELECT.
-	 * Handles base channel + extent variants (x1/x2, y1/y2 from bin expansion).
+	 * Rewrite a time axis's channels as seconds from the scale's origin t0, which
+	 * the GPU draws in float32. Handles base channel + extent variants (x1/x2,
+	 * y1/y2: a range, or bin expansion).
 	 */
 	#inlineTimeOffsets(select: Record<string, unknown>): void {
 		for (const [axis, channels] of [
@@ -1448,18 +1448,15 @@ export class MarkLifecycleV2 {
 		] as const) {
 			const t0Epoch = this.#timeOrigin(axis);
 			if (t0Epoch === null) continue;
-			const scaleState = this.#chartContext[`${axis}ScaleState`] as TimeScaleState;
 
+			// The scale gives the origin; each channel keeps its own column. A
+			// range's x1 and x2, or two marks on different date columns, share an
+			// axis but not their values.
 			for (const ch of channels) {
 				if (!(ch in select)) continue;
 				const val = select[ch];
-				if (typeof val === 'string') {
-					if (scaleState.offsetExpression) {
-						select[ch] = sql`${scaleState.offsetExpression}`;
-					}
-				} else if (isNode(val)) {
-					select[ch] = sql`CAST((epoch(${val}) - ${t0Epoch}) AS REAL)`;
-				}
+				const expr = typeof val === 'string' ? sqlColumn(val) : isNode(val) ? val : null;
+				if (expr) select[ch] = sql`CAST((epoch(${expr}) - ${t0Epoch}) AS REAL)`;
 			}
 		}
 	}
