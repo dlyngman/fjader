@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
 import { BaseGPURenderer } from './BaseGPURenderer.svelte';
 
 /**
@@ -232,5 +232,108 @@ describe('a recompile that fails', () => {
 
 		expect(acquired.filter((t) => t.x === 'linear')).toHaveLength(2);
 		expect(errors).toHaveLength(1);
+	});
+});
+
+describe('which rebuilds warn', () => {
+	/** console.warn's rebuild messages while `run` runs. */
+	async function warnings(run: () => Promise<void>): Promise<string[]> {
+		const said: string[] = [];
+		const warn = vi.spyOn(console, 'warn').mockImplementation((m: unknown) => {
+			said.push(String(m));
+		});
+		try {
+			await run();
+		} finally {
+			warn.mockRestore();
+		}
+		return said.filter((m) => m.includes('rebuilding pipeline'));
+	}
+
+	it('a compile from before the scales were ready rebuilds quietly', async () => {
+		// Every guide on a time or band axis: it compiles at mount, against the
+		// chart's provisional (linear, linear), and the marks resolve the rest.
+		const { renderer, acquired, chartContext, init } = fakes({});
+		await renderer.initialize(init);
+
+		const said = await warnings(async () => {
+			chartContext.scaleTypes.x = 'time';
+			(chartContext as Record<string, unknown>).scalesReady = true;
+			await renderer.syncScaleTypes();
+		});
+
+		expect(acquired.at(-1)).toEqual({ x: 'time', y: 'linear' });
+		expect(said).toEqual([]);
+	});
+
+	it('types that move after the scales were ready are said', async () => {
+		const { renderer, acquired, chartContext, init } = fakes({ x: 'time', y: 'linear' });
+		(chartContext as Record<string, unknown>).scalesReady = true;
+		await renderer.initialize(init);
+
+		const said = await warnings(async () => {
+			chartContext.scaleTypes.x = 'band';
+			await renderer.syncScaleTypes();
+		});
+
+		expect(acquired.at(-1)).toEqual({ x: 'band', y: 'linear' });
+		expect(said).toHaveLength(1);
+		expect(said[0]).toContain('from (time, linear) to (band, linear)');
+	});
+
+	it('a compile from before the scales were ready warns once they have been ready', async () => {
+		// A dots mark compiles early; the scales settle on the same types (no
+		// rebuild) and draw. A bar joining later forces band: frames were drawn
+		// with the old axis logic, which is what the warning is for.
+		const { renderer, chartContext, init } = fakes({ x: 'linear', y: 'linear' });
+		await renderer.initialize(init);
+		(chartContext as Record<string, unknown>).scalesReady = true;
+		renderer.noteScalesReady();
+
+		const said = await warnings(async () => {
+			chartContext.scaleTypes.x = 'band';
+			await renderer.syncScaleTypes();
+		});
+
+		expect(said).toHaveLength(1);
+	});
+
+	it('each change after the scales were ready warns, though a rebuild compiles before the new scale is', async () => {
+		// A changed type brings a scale with no domain yet: the rebuild compiles
+		// while the chart is not ready. Once that scale is, a second change warns.
+		const { renderer, chartContext, init } = fakes({ x: 'time', y: 'linear' });
+		const context = chartContext as Record<string, unknown>;
+		context.scalesReady = true;
+		await renderer.initialize(init);
+
+		const said = await warnings(async () => {
+			chartContext.scaleTypes.x = 'band';
+			context.scalesReady = false;
+			await renderer.syncScaleTypes();
+			context.scalesReady = true;
+			renderer.noteScalesReady();
+
+			chartContext.scaleTypes.x = 'linear';
+			context.scalesReady = false;
+			await renderer.syncScaleTypes();
+		});
+
+		expect(said).toHaveLength(2);
+		expect(said[1]).toContain('from (band, linear) to (linear, linear)');
+	});
+
+	it('types that move again before the scales were ever ready stay quiet', async () => {
+		// Startup: marks register at mount and the chart reshuffles before any domain.
+		const { renderer, chartContext, init } = fakes({});
+		await renderer.initialize(init);
+
+		const said = await warnings(async () => {
+			chartContext.scaleTypes.x = 'time';
+			await renderer.syncScaleTypes();
+			chartContext.scaleTypes.y = 'band';
+			await renderer.syncScaleTypes();
+		});
+
+		expect(said).toEqual([]);
 	});
 });

@@ -103,12 +103,21 @@ export class RendererHost {
 		// Reading `scaleTypes` is what subscribes; `syncScaleTypes` compares and
 		// returns immediately when nothing moved, which is every frame but the
 		// one where it did. Untracked inside, so a rebuild cannot re-enter here.
+		//
+		// `scalesReady` too, and after the sync: once the scales are ready, what
+		// was compiled has drawn with a domain, and a later type change warns. A
+		// change in the same flush as readiness is judged by the state before it.
 		$effect(() => {
 			const types = this.#options.chartContext.scaleTypes;
 			void types?.x;
 			void types?.y;
+			const ready = this.#options.chartContext.scalesReady;
 			const renderer = this.renderer;
-			if (renderer) untrack(() => renderer.syncScaleTypes());
+			if (renderer)
+				untrack(() => {
+					void renderer.syncScaleTypes();
+					if (ready) renderer.noteScalesReady();
+				});
 		});
 	}
 
