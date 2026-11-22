@@ -430,7 +430,11 @@ export class GPUCoordinator {
 	// =========================================================================
 	// Maps rendererId → Map<resourceKey, {type, key}>
 	// This is the single source of truth for "who owns what"
-	#rendererRegistry = new Map<string, Map<string, { type: string; key: string }>>();
+	#rendererRegistry = new Map<
+		string,
+		// `types`: the scale types an entry was acquired for (releaseRendererTypes).
+		Map<string, { type: string; key: string; types: string }>
+	>();
 
 	// =========================================================================
 	// SHARED RESOURCES (Reference Counted)
@@ -1759,7 +1763,11 @@ export class GPUCoordinator {
 				markType
 			);
 			shaderModule = await this.#getOrCreateSharedShader(resourceKey, templateResult.shaderCode);
-			localRegistry.set(shaderLookupKey, { type: 'shader', key: resourceKey });
+			localRegistry.set(shaderLookupKey, {
+				type: 'shader',
+				key: resourceKey,
+				types: topologySuffix
+			});
 		}
 
 		// --- Acquire Layouts ---
@@ -1826,7 +1834,11 @@ export class GPUCoordinator {
 				});
 			});
 
-			localRegistry.set(pipelineLookupKey, { type: 'pipeline', key: resourceKey });
+			localRegistry.set(pipelineLookupKey, {
+				type: 'pipeline',
+				key: resourceKey,
+				types: topologySuffix
+			});
 		}
 
 		return { pipeline, frameLayout, dataLayout };
@@ -1898,7 +1910,11 @@ export class GPUCoordinator {
 				this.#sharedResources.computePipelines.set(resourceKey, entry);
 			}
 		}
-		localRegistry.set(lookupKey, { type: 'computePipeline', key: resourceKey });
+		localRegistry.set(lookupKey, {
+			type: 'computePipeline',
+			key: resourceKey,
+			types: `${scaleTypes.x}-${scaleTypes.y}`
+		});
 		return { pipeline: entry.pipeline, dataLayout };
 	}
 
@@ -1910,18 +1926,36 @@ export class GPUCoordinator {
 		const localRegistry = this.#rendererRegistry.get(rendererId);
 		if (!localRegistry) return;
 
-		for (const res of localRegistry.values()) {
-			if (res.type === 'computePipeline') {
-				const entry = this.#sharedResources.computePipelines.get(res.key);
-				if (entry && --entry.refCount <= 0) this.#sharedResources.computePipelines.delete(res.key);
-			} else if (res.type === 'pipeline') {
-				this.#releaseSharedPipeline(res.key);
-			} else if (res.type === 'shader') {
-				this.#releaseSharedShader(res.key);
-			}
-		}
+		for (const res of localRegistry.values()) this.#releaseEntry(res);
 
 		this.#rendererRegistry.delete(rendererId);
+	}
+
+	/**
+	 * Release what a renderer acquired for one pair of scale types, and nothing
+	 * else: a compile superseded by a newer one (other types) gives back its own
+	 * pipeline, shader and kernels, while the newer compile's stay held.
+	 */
+	releaseRendererTypes(rendererId: string, scaleTypes: { x: string; y: string }): void {
+		const localRegistry = this.#rendererRegistry.get(rendererId);
+		if (!localRegistry) return;
+		const types = `${scaleTypes.x}-${scaleTypes.y}`;
+		for (const [lookupKey, res] of localRegistry) {
+			if (res.types !== types) continue;
+			this.#releaseEntry(res);
+			localRegistry.delete(lookupKey);
+		}
+	}
+
+	#releaseEntry(res: { type: string; key: string }): void {
+		if (res.type === 'computePipeline') {
+			const entry = this.#sharedResources.computePipelines.get(res.key);
+			if (entry && --entry.refCount <= 0) this.#sharedResources.computePipelines.delete(res.key);
+		} else if (res.type === 'pipeline') {
+			this.#releaseSharedPipeline(res.key);
+		} else if (res.type === 'shader') {
+			this.#releaseSharedShader(res.key);
+		}
 	}
 
 	// =========================================================================

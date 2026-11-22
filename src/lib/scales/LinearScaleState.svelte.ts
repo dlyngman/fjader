@@ -9,6 +9,11 @@ import { extent as d3Extent } from 'd3-array';
 import { DT, Spring, SpringPair, SPRING_PRESETS } from '$lib/animation';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 
+/** How far past the data a user may pan, in data widths (`xPanLimit` unset). */
+export const DEFAULT_PAN_LIMIT = 10;
+/** How many times a user may zoom into the data extent (`xZoomLimit` unset). */
+export const DEFAULT_ZOOM_LIMIT = 100;
+
 // =============================================================================
 // SPRING STIFFNESS PRESETS FOR SCALE INTERACTIONS
 // =============================================================================
@@ -340,7 +345,7 @@ export class LinearScaleState {
 
 	// --- Constraints ---
 	domainLimits = { min: -Infinity, max: Infinity, minWidth: 1e-10 };
-	zoomLimits = { max: 10, min: 100 }; // max = pan multiplier, min = zoom divisor
+	zoomLimits = { max: DEFAULT_PAN_LIMIT, min: DEFAULT_ZOOM_LIMIT }; // max = pan multiplier, min = zoom divisor
 	disableZoom: boolean = false; // When true, user zoom/pan is ignored (for auto-scaling axes)
 
 	// --- Selection Extent (set by IntervalX brush, consumed by useXSelection) ---
@@ -414,7 +419,7 @@ export class LinearScaleState {
 		name: string,
 		extent: [number, number] = [0, 100],
 		type: string = 'linear',
-		zoomLimits: [number, number] = [10, 100],
+		zoomLimits: [number, number] = [DEFAULT_PAN_LIMIT, DEFAULT_ZOOM_LIMIT],
 		options: LinearScaleOptions = {},
 		gpuCoordinator: GPUCoordinator | null = null
 	) {

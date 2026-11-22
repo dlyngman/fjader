@@ -9,10 +9,10 @@
  * lifecycle was rebuilt once for nothing (its scale registration redone, and a
  * tooltip-table DROP sent to DuckDB). The first resolution is not a change.
  *
- * Owned by the chart, not by ChartScales: the container recreates its
- * ChartScales when a label or the layout changes, and a counter on that
- * instance would restart and miss the swap. A recreated ChartScales is itself
- * a replacement: it starts with no scale requirements (the container replays
+ * Owned by the chart, not by ChartScales. The container builds its
+ * ChartScales once (the props reach it as getters), so a relabelled axis is an
+ * id swap on that instance. A replaced ChartScales still counts, should one
+ * ever be: it would start with no scale requirements (the container replays
  * only those queued before the first one existed), so marks must rebuild to
  * register with it. Its first resolution after that is not counted again.
  */
