@@ -329,27 +329,48 @@
 			);
 	};
 
+	// The chart's scales, built once. The props reach them as getters, which
+	// ChartScales' own effect tracks: a changed label re-keys the axis scale in
+	// place (#resolveScaleInstances). Read here, they would rebuild the scales
+	// from empty, and until every mark registered again the chart would resolve
+	// to (linear, linear): its renderers recompiled for that, and a legend lost
+	// its color use.
 	$effect(() => {
-		const x = xLabel;
-		const y = yLabel;
-		const l = layout;
-		const g = gpuCoordinator;
-
 		const newScales = new ChartScales({
-			xLabel: x,
-			yLabel: y,
-			layout: l,
-			gpuCoordinator: g,
+			get xLabel() {
+				return xLabel;
+			},
+			get yLabel() {
+				return yLabel;
+			},
+			layout,
+			gpuCoordinator,
 			scaleRegistry: scaleRegistry,
 			getFacetChartIds: () => facetChartIds,
-			xZoomLimit,
-			yZoomLimit,
-			xPanLimit,
-			yPanLimit,
-			xDisableZoom,
-			yDisableZoom,
-			useXSelection,
-			useYSelection,
+			get xZoomLimit() {
+				return xZoomLimit;
+			},
+			get yZoomLimit() {
+				return yZoomLimit;
+			},
+			get xPanLimit() {
+				return xPanLimit;
+			},
+			get yPanLimit() {
+				return yPanLimit;
+			},
+			get xDisableZoom() {
+				return xDisableZoom;
+			},
+			get yDisableZoom() {
+				return yDisableZoom;
+			},
+			get useXSelection() {
+				return useXSelection;
+			},
+			get useYSelection() {
+				return useYSelection;
+			},
 			entranceGate: chartConfig.entrance
 		});
 
