@@ -24,7 +24,17 @@ beforeAll(() => {
 	(globalThis as Record<string, unknown>).GPUShaderStage ??= { VERTEX: 1, FRAGMENT: 2 };
 });
 
-function fakes(scaleTypes: { x?: string; y?: string }) {
+function fakes(scaleTypes: { x?: string; y?: string }, held = false) {
+	/** With `held`, each compile waits until `release()` lets the pending ones finish. */
+	let pending: (() => void)[] = [];
+	const release = async () => {
+		const now = pending;
+		pending = [];
+		for (const finish of now) finish();
+		// Let the compiles that were waiting run to their end.
+		for (let i = 0; i < 10; i++) await Promise.resolve();
+	};
+
 	/** Every scale-type pair a pipeline has been acquired for, in order. */
 	const acquired: { x: string; y: string }[] = [];
 	const plansRebuilt: string[] = [];
@@ -32,6 +42,7 @@ function fakes(scaleTypes: { x?: string; y?: string }) {
 	const coordinator = {
 		async acquirePipeline(_rendererId: string, _markType: string, types: { x: string; y: string }) {
 			acquired.push({ ...types });
+			if (held) await new Promise<void>((finish) => pending.push(finish));
 			return { pipeline: { id: `${types.x}-${types.y}` }, dataLayout: {} };
 		},
 		releaseRenderer: () => {},
@@ -63,7 +74,7 @@ function fakes(scaleTypes: { x?: string; y?: string }) {
 		rendererDefinition: {}
 	};
 
-	return { renderer, acquired, plansRebuilt, chartContext, init };
+	return { renderer, acquired, plansRebuilt, chartContext, init, release };
 }
 
 describe('a renderer whose chart resolves its scale type late', () => {
@@ -107,5 +118,53 @@ describe('a renderer whose chart resolves its scale type late', () => {
 		await renderer.syncScaleTypes();
 		expect(acquired).toEqual([]);
 		expect(plansRebuilt).toEqual([]);
+	});
+});
+
+describe('a scale type that changes while a compile runs', () => {
+	it('ends compiled for the chart’s types when they move away and back mid-compile', async () => {
+		// A chart's scales rebuilt from empty: (band, linear) went to (linear,
+		// linear) and back before the recompile finished. Compared against the
+		// finished pipeline (band), the move back looked like no change, and the
+		// recompile then finished for (linear, linear) in a band chart.
+		const { renderer, acquired, chartContext, init, release } = fakes(
+			{ x: 'band', y: 'linear' },
+			true
+		);
+		const mounted = renderer.initialize(init);
+		await release();
+		await mounted;
+
+		chartContext.scaleTypes.x = 'linear';
+		const away = renderer.syncScaleTypes();
+		chartContext.scaleTypes.x = 'band';
+		const back = renderer.syncScaleTypes();
+		await release();
+		await release();
+		await Promise.all([away, back]);
+
+		expect(acquired.at(-1)).toEqual({ x: 'band', y: 'linear' });
+		await renderer.syncScaleTypes();
+		// Settled: one more sync compiles nothing.
+		expect(acquired.at(-1)).toEqual({ x: 'band', y: 'linear' });
+		expect(acquired).toHaveLength(3);
+	});
+
+	it('catches up when the types move during the first compile, before any sync can run', async () => {
+		const { renderer, acquired, plansRebuilt, chartContext, init, release } = fakes({}, true);
+		const mounted = renderer.initialize(init);
+		// The chart resolves band while the mount's compile (linear) runs; the
+		// host's sync finds nothing built yet and returns.
+		chartContext.scaleTypes.x = 'band';
+		await renderer.syncScaleTypes();
+		await release();
+		await mounted;
+		await release();
+
+		expect(acquired).toEqual([
+			{ x: 'linear', y: 'linear' },
+			{ x: 'band', y: 'linear' }
+		]);
+		expect(plansRebuilt).toEqual(['chart-1']);
 	});
 });

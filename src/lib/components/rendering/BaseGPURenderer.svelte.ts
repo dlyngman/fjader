@@ -226,6 +226,15 @@ export class BaseGPURenderer {
 	 * compared and rebuilt rather than assumed to have been right.
 	 */
 	#builtScaleTypes: { x: string; y: string } | null = null;
+	/**
+	 * The types the latest compile started with: what `syncScaleTypes`
+	 * compares against. `#builtScaleTypes` is only set when a compile finishes,
+	 * so while one runs it names the previous pipeline, and a change during the
+	 * compile that returns to those types looked like no change: the compile
+	 * then finished with the types it read at its start, wrong, and nothing
+	 * re-checked.
+	 */
+	#compilingScaleTypes: { x: string; y: string } | null = null;
 
 	/**
 	 * Bindings whose buffer belongs to another renderer (a label reads its
@@ -306,6 +315,7 @@ export class BaseGPURenderer {
 			if (!this.#device) throw new Error('No WebGPU device available');
 
 			const scaleTypes = this.#scaleTypes();
+			this.#compilingScaleTypes = scaleTypes;
 			const result = await this.#gpuCoordinator.acquirePipeline(
 				this.#rendererId,
 				this.#markType,
@@ -361,6 +371,13 @@ export class BaseGPURenderer {
 			// The specialisation is named because it is otherwise invisible: a mark
 			// compiled against the wrong axis logic renders, silently and wrongly.
 			console.log(`${this.#markType} renderer initialized (x=${scaleTypes.x}, y=${scaleTypes.y})`);
+
+			// The types were read when this compile started; if the chart's moved
+			// while it ran, the change that announced them was compared against
+			// this compile's types or found no compile to compare against (the
+			// first, at mount). Catch up once.
+			const now = this.#scaleTypes();
+			if (now.x !== scaleTypes.x || now.y !== scaleTypes.y) void this.syncScaleTypes();
 		} catch (error) {
 			if (!this.#isDestroyed && this.#initGeneration === currentGen) {
 				console.error(`${this.#markType} initialization failed:`, error);
@@ -408,10 +425,11 @@ export class BaseGPURenderer {
 	async syncScaleTypes(): Promise<void> {
 		const config = this.#initConfig;
 		const built = this.#builtScaleTypes;
-		if (!config || !built || this.#isDestroyed) return;
+		const target = this.#compilingScaleTypes ?? built;
+		if (!config || !built || !target || this.#isDestroyed) return;
 
 		const want = this.#scaleTypes();
-		if (want.x === built.x && want.y === built.y) return;
+		if (want.x === target.x && want.y === target.y) return;
 
 		console.warn(
 			`[${this.#markType}] rebuilding pipeline: the chart's scales moved from ` +
