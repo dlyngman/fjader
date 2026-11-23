@@ -32,9 +32,21 @@ export async function loadArrowIPCTable(
 
 	// Replacing a table this engine already read: new rows under the same name.
 	const replacing = _loaded.has(tableName);
+	// DuckDB-WASM transfers `bytes.buffer` to its worker, detaching it here. A
+	// view into a shared buffer (the widget's concatenated blob) would take
+	// every other table's bytes with it, so the insert gets a buffer of its own.
+	const owned =
+		ipcBytes.byteOffset === 0 && ipcBytes.byteLength === ipcBytes.buffer.byteLength
+			? ipcBytes
+			: ipcBytes.slice();
+	// DuckDB-WASM returns silently on empty input, creating no table: fail here
+	// rather than record a table that was never loaded.
+	if (owned.byteLength === 0) {
+		throw new Error(`No Arrow IPC bytes for table "${tableName}" (detached or empty buffer)`);
+	}
 	const loadPromise = (async () => {
 		await queryEngine.exec(`DROP TABLE IF EXISTS "${tableName}"`);
-		await queryEngine.insertArrowFromIPCStream(ipcBytes, {
+		await queryEngine.insertArrowFromIPCStream(owned, {
 			name: tableName,
 			create: true
 		});

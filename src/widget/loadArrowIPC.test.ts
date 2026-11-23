@@ -39,6 +39,35 @@ describe('loadArrowIPCTable', () => {
 		expect(calls).toEqual([]);
 	});
 
+	it('loads every table when their bytes are views into one shared buffer', async () => {
+		// Like DuckDB-WASM, the insert transfers (detaches) the buffer it is given.
+		const sizes: number[] = [];
+		const engine = {
+			exec: async () => {},
+			insertArrowFromIPCStream: async (data: Uint8Array) => {
+				sizes.push(data.byteLength);
+				structuredClone(data.buffer, { transfer: [data.buffer] });
+			},
+			clearQueryCache: async () => {}
+		} as unknown as QueryEngine;
+		const blob = new Uint8Array([1, 2, 3, 4, 5, 6, 7]);
+		await Promise.all([
+			loadArrowIPCTable(engine, 'shared_a', new Uint8Array(blob.buffer, 0, 3), 'h1'),
+			loadArrowIPCTable(engine, 'shared_b', new Uint8Array(blob.buffer, 3, 4), 'h1')
+		]);
+		expect(sizes).toEqual([3, 4]);
+		expect(blob.byteLength).toBe(7);
+	});
+
+	it('refuses empty bytes and does not record the table as loaded', async () => {
+		const { engine, calls } = fakeEngine();
+		await expect(loadArrowIPCTable(engine, 'empty', new Uint8Array(0), 'h1')).rejects.toThrow(
+			/empty/
+		);
+		await loadArrowIPCTable(engine, 'empty', bytes, 'h1');
+		expect(calls).toEqual(['DROP TABLE IF EXISTS "empty"', 'insert empty']);
+	});
+
 	it('clears caches after replacing a table under the same name', async () => {
 		const { engine, calls } = fakeEngine();
 		await loadArrowIPCTable(engine, 'replaced', bytes, 'h1');
