@@ -39,22 +39,15 @@ export class TimeScaleState extends LinearScaleState {
 	// --- Batching ---
 	#suppressUpdate: boolean = false;
 
-	/**
-	 * The actual database column name for SQL queries.
-	 * May differ from `this.name` when xLabel overrides the scale registry key.
-	 */
-	#sourceField: string;
-
 	constructor(
 		name: string,
 		extent: [number, number],
 		type: string,
 		zoomLimits: [number, number],
-		options: LinearScaleOptions & { sourceField?: string },
+		options: LinearScaleOptions,
 		gpuCoordinator: GPUCoordinator | null
 	) {
 		super(name, extent, type ?? 'time', zoomLimits, options, gpuCoordinator);
-		this.#sourceField = options?.sourceField ?? name;
 	}
 
 	// ===========================================================================
@@ -177,15 +170,6 @@ export class TimeScaleState extends LinearScaleState {
 
 		this.resetDomainLimits();
 		this.resetZoom(instant);
-	}
-
-	/**
-	 * The column this scale was registered with (may differ from the registry
-	 * key). It tells two columns' time scales apart; marks draw their own
-	 * columns, each offset from t0.
-	 */
-	get sourceField(): string {
-		return this.#sourceField;
 	}
 
 	// ===========================================================================
@@ -324,6 +308,21 @@ export class TimeScaleState extends LinearScaleState {
 		// The same offsets are other dates now: ticks and labels kept by domain are stale.
 		this.invalidateTicks();
 	}
+}
+
+/**
+ * What to add to an offset on `from` to name the same instant on `to`. A time
+ * scale counts from its own origin t0 (its marks' earliest date), so two time
+ * scales (two date columns, or one column on two tables) disagree by the gap
+ * between their origins: a window copied between them as raw offsets lands
+ * shifted. 0 when either is not a time scale (offsets are values there); null
+ * while either time scale has no origin yet, when an offset names no instant.
+ */
+export function originShift(from: LinearScaleState, to: LinearScaleState): number | null {
+	if (!(from instanceof TimeScaleState) || !(to instanceof TimeScaleState)) return 0;
+	if (from === to) return 0;
+	const origin = from.t0;
+	return origin && to.t0 ? to.dateToOffset(origin) : null;
 }
 
 // =============================================================================

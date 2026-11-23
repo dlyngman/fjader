@@ -18,6 +18,7 @@ import type {
 import { isBinExpression } from '$lib/sql/bin';
 import { isNode, isAggregateExpression, isColumnRef, isColumnParam } from '@uwdata/mosaic-sql';
 import { isContinuousScale } from '$lib/scales/scale-categories';
+import { originShift } from './TimeScaleState.svelte';
 import {
 	LinearScaleState,
 	DEFAULT_PAN_LIMIT,
@@ -285,9 +286,15 @@ export class ChartScales {
 
 			const extent = sourceScale.selectionExtent; // reactive trigger
 			if (extent) {
+				// Into this scale's offsets (time scales count from their own origin).
+				// Tracked: an origin that moves later re-places the window.
+				const shift = originShift(sourceScale, renderInst);
+				if (shift === null) return;
+				const lo = extent[0] + shift;
+				const hi = extent[1] + shift;
 				const [targetMin, targetMax] = untrack(() => renderInst.domain.target);
-				if (extent[0] !== targetMin || extent[1] !== targetMax) {
-					untrack(() => renderInst.setExternalDomain(extent[0], extent[1]));
+				if (!sameOffset(lo, targetMin) || !sameOffset(hi, targetMax)) {
+					untrack(() => renderInst.setExternalDomain(lo, hi));
 				}
 			} else {
 				untrack(() => renderInst.clearExternalDomain());
@@ -313,10 +320,15 @@ export class ChartScales {
 				return;
 			}
 
-			// Propagate detail domain to source selection (creates or updates brush)
+			// Propagate detail domain to source selection (creates or updates brush),
+			// in the source's offsets.
+			const shift = originShift(renderInst, sourceScale);
+			if (shift === null) return;
+			const lo = targetMin + shift;
+			const hi = targetMax + shift;
 			const current = untrack(() => sourceScale.selectionExtent);
-			if (!current || current[0] !== targetMin || current[1] !== targetMax) {
-				untrack(() => sourceScale.setSelectionExtent(targetMin, targetMax, 'external'));
+			if (!current || !sameOffset(current[0], lo) || !sameOffset(current[1], hi)) {
+				untrack(() => sourceScale.setSelectionExtent(lo, hi, 'external'));
 			}
 		});
 	}
@@ -364,12 +376,11 @@ export class ChartScales {
 		const cfg: Record<string, unknown> = { ...(axisConfig.config || {}) };
 		const col = axisConfig.columnName;
 		if (typeof col === 'string') {
-			// Band/point: sourceField for ViewManager index columns.
-			// Time: sourceField keeps two columns' time scales apart, and a brushed
-			// time scale found by its column (selectionSourceScale).
-			// sourceField is NOT added to linear scales to avoid changing their
-			// config hash, which would break scale sharing for use_selection.
-			if (axisConfig.type === 'band' || axisConfig.type === 'point' || axisConfig.type === 'time') {
+			// Band/point: sourceField, since two columns' categories are not one axis.
+			// Not on continuous scales, time included: they share as one measurement
+			// (each mark draws its own column), and the column in the config hash would
+			// break sharing by label, by group and for use_selection.
+			if (axisConfig.type === 'band' || axisConfig.type === 'point') {
 				cfg.sourceField = col;
 			}
 		}
@@ -380,7 +391,7 @@ export class ChartScales {
 	 * Which axis scale this chart uses: charts whose axes get the same key share
 	 * one scale state, its domain and its zoom and pan. Shared by default:
 	 * - `xScale` names a group: shared with the charts naming it, and only those
-	 *   (its key has a prefix, so no label or column falls into it). Numeric
+	 *   (its key has a prefix, so no label or column falls into it). Continuous
 	 *   axes only, see #groupName.
 	 * - `xScale={false}`: this chart's own.
 	 * - Otherwise the label: axes with the same title are the same axis.
@@ -388,8 +399,8 @@ export class ChartScales {
 	 * - An axis showing an aggregate (count(), sum(x)) without a label, or no
 	 *   column: this chart's own, since two counts are rarely one quantity.
 	 *
-	 * Band, point and time scales also key by their column (#buildAxisScaleConfig),
-	 * so a label only joins those that show the same one.
+	 * Band and point scales also key by their column (#buildAxisScaleConfig), so
+	 * a label only joins those that show the same one.
 	 */
 	#scaleKey(axis: 'x' | 'y', config: ResolvedScaleConfiguration): string {
 		const group = this.#groupName(axis, config);
@@ -412,22 +423,21 @@ export class ChartScales {
 	#ySource = $derived.by(() => this.selectionSourceScale('y'));
 
 	/**
-	 * The group this axis is named into, if it can be. Not on band or point (two
-	 * columns' categories are not one axis), and not yet on time: its marks draw
-	 * their own columns from the shared origin, but a time scale is still told
-	 * apart by its column (sourceField), and a follower finds a brushed one by it.
+	 * The group this axis is named into, if it can be. Not on band or point: two
+	 * columns' categories are not one axis. Time axes join, as numeric ones do:
+	 * each mark draws its own date column from the shared origin.
 	 */
 	#groupName(axis: 'x' | 'y', config: ResolvedScaleConfiguration): string | null {
 		const share = axis === 'x' ? this.config.xScale : this.config.yScale;
 		if (!share) return null;
 		const { type } = config;
-		if (type !== 'band' && type !== 'point' && type !== 'time') return share;
+		if (type !== 'band' && type !== 'point') return share;
 		const warning = `${axis}:${type}:${share}`;
 		if (!this.#warnedGroup.has(warning)) {
 			this.#warnedGroup.add(warning);
 			console.warn(
 				`<ChartContainer> ${axis}Scale="${share}" is ignored on a ${type} axis: named ` +
-					`groups are for numeric axes. It shares by label or column instead.`
+					`groups are for continuous axes. It shares by label or column instead.`
 			);
 		}
 		return null;
@@ -453,7 +463,8 @@ export class ChartScales {
 		const config = this.scaleConfigurations?.[axis];
 		if (!(scale instanceof LinearScaleState) || !config) return;
 		const linkKey = this.#linkKey(axis, config);
-		if (linkKey) return this.#scaleRegistry.addBrushTarget(scale, linkKey);
+		if (linkKey)
+			return this.#scaleRegistry.addBrushTarget(scale, linkKey, config.columnName ?? null);
 	}
 
 	/**
@@ -463,7 +474,7 @@ export class ChartScales {
 	 *    shared one when several do), which also finds an overview that keeps
 	 *    its axis to itself;
 	 * 3. the scale shared under the link key, brushed or not.
-	 * A source has the follower's type, and on a time axis its column.
+	 * A source has the follower's type.
 	 */
 	selectionSourceScale(axis: 'x' | 'y'): LinearScaleState | null {
 		const config = this.scaleConfigurations?.[axis];
@@ -483,15 +494,14 @@ export class ChartScales {
 		const linkKey = this.#linkKey(axis, config);
 		if (!linkKey) return null;
 		const shared = byKey(linkKey);
-		const brushed = this.#scaleRegistry
+		// Of the type, those on the follower's own column first: another column
+		// under one label is one axis too (its window shifted into this scale's
+		// offsets), but the follower's own is the overview it most likely means.
+		const ofType = this.#scaleRegistry
 			.brushTargetsOf(linkKey)
-			.filter(
-				(scale) =>
-					scale.type === config.type &&
-					(config.type !== 'time' ||
-						(scale as LinearScaleState & { sourceField?: string }).sourceField ===
-							sourceConfig.sourceField)
-			);
+			.filter((target) => target.scale.type === config.type);
+		const ownColumn = ofType.filter((target) => target.column === config.columnName);
+		const brushed = (ownColumn.length > 0 ? ownColumn : ofType).map((target) => target.scale);
 		if (shared && brushed.includes(shared)) return shared;
 		return brushed[0] ?? shared;
 	}
@@ -1225,4 +1235,14 @@ export function parallelAxisColumns(
 		for (const column of list) if (!axes.includes(column)) axes.push(column);
 	}
 	return axes.length > max ? axes.slice(0, max) : axes;
+}
+
+/**
+ * Two offsets name the same place: equal within a microsecond (offsets on a
+ * time axis are seconds). A window copied between time scales is shifted by
+ * the gap between their origins, and shifted back it may differ in the last
+ * bits; strict equality would let the two link effects answer each other.
+ */
+function sameOffset(a: number, b: number): boolean {
+	return Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(a));
 }

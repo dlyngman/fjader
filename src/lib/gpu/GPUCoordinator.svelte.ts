@@ -2926,7 +2926,10 @@ export class GPUCoordinator {
 			};
 			return {
 				id: scale.id,
-				field: scale.sourceField ?? scale.name,
+				// The registry key (a label, a column, `group:<name>`), and a band's column;
+				// continuous scales are no one column (time scales share across them).
+				key: scale.name,
+				field: scale.sourceField ?? null,
 				type: scale.type,
 				destroyed: scale.isDestroyed ?? false,
 				// A continuous scale's domain as the shaders read it: after this

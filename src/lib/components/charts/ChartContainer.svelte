@@ -35,8 +35,9 @@
 		 * with the same label share, else the same column, across tables; an
 		 * aggregate without a label is this chart's own. A name shares with the
 		 * charts naming it (different columns that are one measurement) on numeric
-		 * axes; band, point and time ignore it with a warning, and share only the
-		 * same column. False keeps the axis to this chart.
+		 * and time axes (start and end dates, say); band and point ignore it with a
+		 * warning, and share only the same column. False keeps the axis to this
+		 * chart.
 		 */
 		xScale?: string | false;
 		/** As `xScale`, for the y axis. */

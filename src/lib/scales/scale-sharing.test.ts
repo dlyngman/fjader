@@ -9,6 +9,8 @@ import { column, count, dateMonthDay, sql, sum } from '@uwdata/mosaic-sql';
 import { bin } from '$lib/sql/bin';
 import { ChartScales } from './ChartScales.svelte';
 import { ScaleRegistry } from './ScaleRegistry.svelte';
+import { TimeScaleState, originShift } from './TimeScaleState.svelte';
+import type { LinearScaleState } from './LinearScaleState.svelte';
 import { SCALE_PRIORITIES, resolveScaleConfiguration } from './ScalePriorities';
 
 const registry = new ScaleRegistry();
@@ -75,7 +77,7 @@ describe('named groups', () => {
 		expect(named).not.toBe(onX(chart({ xLabel: 'capture' }), 'arr_delay'));
 	});
 
-	it.each(['band', 'point', 'time'])('are ignored with one warning on a %s axis', (type) => {
+	it.each(['band', 'point'])('are ignored with one warning on a %s axis', (type) => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const on = (column: string, xScale?: string) => {
 			const scales = chart({ xScale });
@@ -88,6 +90,99 @@ describe('named groups', () => {
 		expect(on(`arr_${type}`, 'schedule')).not.toBe(departure);
 		expect(on(`dep_${type}`)).toBe(departure);
 		warn.mockRestore();
+	});
+});
+
+describe('time axes share as numeric ones do', () => {
+	// Each mark draws its own date column from the shared origin, so two date
+	// columns can be one axis: a timeline's start and end, or order and ship dates.
+	function onTime(scales: ChartScales, column: string) {
+		scales.registerScaleType('x', 'time', SCALE_PRIORITIES.MANDATE, `t${charts}`, {}, column);
+		return scales.xScaleState;
+	}
+
+	it('a named group shares two date columns, without a warning', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const a = onTime(chart({ xScale: 'schedule' }), 'started');
+		const b = onTime(chart({ xScale: 'schedule' }), 'ended');
+		expect(a).toBe(b);
+		expect(warn.mock.calls.filter(([m]) => String(m).includes('is ignored'))).toEqual([]);
+		warn.mockRestore();
+	});
+
+	it('the same label shares two date columns', () => {
+		const a = onTime(chart({ xLabel: 'when' }), 'ordered');
+		const b = onTime(chart({ xLabel: 'when' }), 'shipped');
+		expect(a).toBe(b);
+	});
+
+	it('without a label, only the same column shares', () => {
+		const a = onTime(chart(), 'opened');
+		expect(onTime(chart(), 'closed')).not.toBe(a);
+		expect(onTime(chart(), 'opened')).toBe(a);
+	});
+
+	it('a following chart takes the brushed overview on another date column', () => {
+		const overview = chart({ xLabel: 'period' });
+		const written = onTime(overview, 'from_date');
+		const release = overview.registerBrushTarget('x');
+		const follower = chart({ xLabel: 'period', xScale: false, useXSelection: true });
+		onTime(follower, 'to_date');
+		expect(follower.selectionSourceScale('x')).toBe(written);
+		release?.();
+	});
+
+	it('of several brushed overviews, a follower takes the one on its own column', () => {
+		const from = chart({ xLabel: 'span', xScale: false });
+		onTime(from, 'from_date');
+		const releaseFrom = from.registerBrushTarget('x');
+		const to = chart({ xLabel: 'span', xScale: false });
+		const own = onTime(to, 'to_date');
+		const releaseTo = to.registerBrushTarget('x');
+
+		const follower = chart({ xLabel: 'span', xScale: false, useXSelection: true });
+		onTime(follower, 'to_date');
+		// from_date's brush registered first; the follower's own column wins.
+		expect(follower.selectionSourceScale('x')).toBe(own);
+		releaseFrom?.();
+		releaseTo?.();
+	});
+});
+
+describe('a window copied between two time scales', () => {
+	// What the link effects do with it (they are $effects, which do not run in
+	// this server-side test environment): each time scale counts its offsets
+	// from its own origin, so a window is shifted by the gap between them.
+	const day = (d: string) => new Date(`${d}T00:00:00Z`);
+	function timeScale(earliest: string, latest: string) {
+		const scale = new TimeScaleState('t', [0, 1], 'time', [1e-6, 1e6], {}, null);
+		scale.addDatetimeExtent([day(earliest), day(latest)], 'm', { instant: true });
+		return scale;
+	}
+
+	it('lands on the same dates, not shifted by the gap between origins', () => {
+		const overview = timeScale('2024-01-01', '2024-06-01'); // on from_date
+		const follower = timeScale('2024-02-01', '2024-07-01'); // on to_date
+		const brush = [
+			overview.dateToOffset(day('2024-03-01'))!,
+			overview.dateToOffset(day('2024-03-10'))!
+		];
+
+		const shift = originShift(overview, follower)!;
+		const window = brush.map((offset) => follower.offsetToDate(offset + shift)?.toISOString());
+		expect(window).toEqual(['2024-03-01T00:00:00.000Z', '2024-03-10T00:00:00.000Z']);
+		// And back: the follower's zoom moves the brush to the same dates.
+		const back = originShift(follower, overview)!;
+		expect(overview.offsetToDate(follower.dateToOffset(day('2024-03-10'))! + back)).toEqual(
+			day('2024-03-10')
+		);
+	});
+
+	it('no shift between numeric scales, and none known before an origin', () => {
+		const empty = new TimeScaleState('t', [0, 1], 'time', [1e-6, 1e6], {}, null);
+		expect(originShift(timeScale('2024-01-01', '2024-02-01'), empty)).toBeNull();
+		const linear = onX(chart(), 'shift_linear') as LinearScaleState;
+		expect(originShift(linear, linear)).toBe(0);
 	});
 });
 
