@@ -54,6 +54,13 @@ export interface ColorUse {
 	readonly expression: boolean;
 }
 
+/** A scale a brush writes to: its link key, and the column the brushing chart draws there. */
+export interface BrushTarget {
+	readonly scale: LinearScaleState;
+	readonly linkKey: string;
+	readonly column: string | null;
+}
+
 export class ScaleRegistry {
 	// Public field for reactive tracking
 	scaleUsage = $state(new Map<AnyScaleState, Set<string>>());
@@ -79,7 +86,7 @@ export class ScaleRegistry {
 	 * The scales brushes write their extent to, each under its axis's link key
 	 * (label, else column): what a `useXSelection` chart follows.
 	 */
-	#brushTargets = new Set<{ scale: LinearScaleState; linkKey: string }>();
+	#brushTargets = new Set<BrushTarget>();
 	/** Bumped when `#brushTargets` changes: what `brushTargetsOf` tracks. */
 	#brushTargetsVersion = $state(0);
 
@@ -570,9 +577,12 @@ export class ScaleRegistry {
 		return out;
 	}
 
-	/** A brush writes to `scale`, on an axis linked by `linkKey`. Returns its release. */
-	addBrushTarget(scale: LinearScaleState, linkKey: string): () => void {
-		const target = { scale, linkKey };
+	/**
+	 * A brush writes to `scale`, on an axis linked by `linkKey`, in a chart whose
+	 * marks draw `column` there (null for an expression). Returns its release.
+	 */
+	addBrushTarget(scale: LinearScaleState, linkKey: string, column: string | null): () => void {
+		const target = { scale, linkKey, column };
 		untrack(() => {
 			this.#brushTargets.add(target);
 			this.#brushTargetsVersion++;
@@ -584,12 +594,12 @@ export class ScaleRegistry {
 		};
 	}
 
-	/** The scales brushes write to under `linkKey`, oldest brush first. Reactive. */
-	brushTargetsOf(linkKey: string): LinearScaleState[] {
+	/** What brushes write to under `linkKey`, oldest brush first. Reactive. */
+	brushTargetsOf(linkKey: string): BrushTarget[] {
 		void this.#brushTargetsVersion;
-		const out: LinearScaleState[] = [];
+		const out: BrushTarget[] = [];
 		for (const target of this.#brushTargets) {
-			if (target.linkKey === linkKey) out.push(target.scale);
+			if (target.linkKey === linkKey) out.push(target);
 		}
 		return out;
 	}

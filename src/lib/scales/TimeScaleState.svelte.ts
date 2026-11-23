@@ -310,6 +310,21 @@ export class TimeScaleState extends LinearScaleState {
 	}
 }
 
+/**
+ * What to add to an offset on `from` to name the same instant on `to`. A time
+ * scale counts from its own origin t0 (its marks' earliest date), so two time
+ * scales (two date columns, or one column on two tables) disagree by the gap
+ * between their origins: a window copied between them as raw offsets lands
+ * shifted. 0 when either is not a time scale (offsets are values there); null
+ * while either time scale has no origin yet, when an offset names no instant.
+ */
+export function originShift(from: LinearScaleState, to: LinearScaleState): number | null {
+	if (!(from instanceof TimeScaleState) || !(to instanceof TimeScaleState)) return 0;
+	if (from === to) return 0;
+	const origin = from.t0;
+	return origin && to.t0 ? to.dateToOffset(origin) : null;
+}
+
 // =============================================================================
 // HELPERS
 // =============================================================================

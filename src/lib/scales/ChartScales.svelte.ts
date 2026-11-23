@@ -18,6 +18,7 @@ import type {
 import { isBinExpression } from '$lib/sql/bin';
 import { isNode, isAggregateExpression, isColumnRef, isColumnParam } from '@uwdata/mosaic-sql';
 import { isContinuousScale } from '$lib/scales/scale-categories';
+import { originShift } from './TimeScaleState.svelte';
 import {
 	LinearScaleState,
 	DEFAULT_PAN_LIMIT,
@@ -285,9 +286,15 @@ export class ChartScales {
 
 			const extent = sourceScale.selectionExtent; // reactive trigger
 			if (extent) {
+				// Into this scale's offsets (time scales count from their own origin).
+				// Tracked: an origin that moves later re-places the window.
+				const shift = originShift(sourceScale, renderInst);
+				if (shift === null) return;
+				const lo = extent[0] + shift;
+				const hi = extent[1] + shift;
 				const [targetMin, targetMax] = untrack(() => renderInst.domain.target);
-				if (extent[0] !== targetMin || extent[1] !== targetMax) {
-					untrack(() => renderInst.setExternalDomain(extent[0], extent[1]));
+				if (!sameOffset(lo, targetMin) || !sameOffset(hi, targetMax)) {
+					untrack(() => renderInst.setExternalDomain(lo, hi));
 				}
 			} else {
 				untrack(() => renderInst.clearExternalDomain());
@@ -313,10 +320,15 @@ export class ChartScales {
 				return;
 			}
 
-			// Propagate detail domain to source selection (creates or updates brush)
+			// Propagate detail domain to source selection (creates or updates brush),
+			// in the source's offsets.
+			const shift = originShift(renderInst, sourceScale);
+			if (shift === null) return;
+			const lo = targetMin + shift;
+			const hi = targetMax + shift;
 			const current = untrack(() => sourceScale.selectionExtent);
-			if (!current || current[0] !== targetMin || current[1] !== targetMax) {
-				untrack(() => sourceScale.setSelectionExtent(targetMin, targetMax, 'external'));
+			if (!current || !sameOffset(current[0], lo) || !sameOffset(current[1], hi)) {
+				untrack(() => sourceScale.setSelectionExtent(lo, hi, 'external'));
 			}
 		});
 	}
@@ -451,7 +463,8 @@ export class ChartScales {
 		const config = this.scaleConfigurations?.[axis];
 		if (!(scale instanceof LinearScaleState) || !config) return;
 		const linkKey = this.#linkKey(axis, config);
-		if (linkKey) return this.#scaleRegistry.addBrushTarget(scale, linkKey);
+		if (linkKey)
+			return this.#scaleRegistry.addBrushTarget(scale, linkKey, config.columnName ?? null);
 	}
 
 	/**
@@ -481,9 +494,14 @@ export class ChartScales {
 		const linkKey = this.#linkKey(axis, config);
 		if (!linkKey) return null;
 		const shared = byKey(linkKey);
-		const brushed = this.#scaleRegistry
+		// Of the type, those on the follower's own column first: another column
+		// under one label is one axis too (its window shifted into this scale's
+		// offsets), but the follower's own is the overview it most likely means.
+		const ofType = this.#scaleRegistry
 			.brushTargetsOf(linkKey)
-			.filter((scale) => scale.type === config.type);
+			.filter((target) => target.scale.type === config.type);
+		const ownColumn = ofType.filter((target) => target.column === config.columnName);
+		const brushed = (ownColumn.length > 0 ? ownColumn : ofType).map((target) => target.scale);
 		if (shared && brushed.includes(shared)) return shared;
 		return brushed[0] ?? shared;
 	}
@@ -1217,4 +1235,14 @@ export function parallelAxisColumns(
 		for (const column of list) if (!axes.includes(column)) axes.push(column);
 	}
 	return axes.length > max ? axes.slice(0, max) : axes;
+}
+
+/**
+ * Two offsets name the same place: equal within a microsecond (offsets on a
+ * time axis are seconds). A window copied between time scales is shifted by
+ * the gap between their origins, and shifted back it may differ in the last
+ * bits; strict equality would let the two link effects answer each other.
+ */
+function sameOffset(a: number, b: number): boolean {
+	return Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(a));
 }
