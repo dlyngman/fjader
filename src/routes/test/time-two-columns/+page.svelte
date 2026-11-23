@@ -12,6 +12,7 @@
 		Crosshair,
 		MarginLabel
 	} from '$lib/components';
+	import { IntervalX } from '$lib/interactors';
 
 	// Each task starts and ends on known dates: every bar's ends, and every dot,
 	// can be read off the table below the charts.
@@ -117,6 +118,29 @@
 		</div>
 		<div class="chart small">
 			<ChartContainer xScale="schedule">
+				<AxisBottom />
+				<Grid axis="x" />
+				<DotsMark table="tasks" x="ended" y="task" fill="darkorange" r={5} />
+			</ChartContainer>
+		</div>
+
+		<h3>5. A follower on another date column: brush starts above, ends below follow</h3>
+		<p>
+			Both axes are labelled "period"; the lower chart follows the brush (useXSelection) on an axis
+			of its own. Its origin is the first end (2024-03-08), not the first start (2024-03-01), so a
+			window copied as raw offsets would land a week late. Brush 2024-03-20 to 2024-04-05 above: the
+			lower axis shows the same dates. Zooming below moves the brush to the same dates.
+		</p>
+		<div class="chart small">
+			<ChartContainer xLabel="period" xScale={false}>
+				<AxisBottom />
+				<Grid axis="x" />
+				<DotsMark table="tasks" x="started" y="task" fill="grey" r={5} />
+				<IntervalX />
+			</ChartContainer>
+		</div>
+		<div class="chart small">
+			<ChartContainer xLabel="period" xScale={false} useXSelection>
 				<AxisBottom />
 				<Grid axis="x" />
 				<DotsMark table="tasks" x="ended" y="task" fill="darkorange" r={5} />
