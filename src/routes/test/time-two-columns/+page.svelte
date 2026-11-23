@@ -103,6 +103,26 @@
 			</ChartContainer>
 		</div>
 
+		<h3>4. Two charts, one named time axis: xScale="schedule", starts above, ends below</h3>
+		<p>
+			One axis for both: it spans 2024-03-01 to 2024-04-15 in each, and zoom or pan in one moves the
+			other. No "is ignored" warning in the console. Broken: each axis fits its own column.
+		</p>
+		<div class="chart small">
+			<ChartContainer xScale="schedule">
+				<AxisBottom />
+				<Grid axis="x" />
+				<DotsMark table="tasks" x="started" y="task" fill="grey" r={5} />
+			</ChartContainer>
+		</div>
+		<div class="chart small">
+			<ChartContainer xScale="schedule">
+				<AxisBottom />
+				<Grid axis="x" />
+				<DotsMark table="tasks" x="ended" y="task" fill="darkorange" r={5} />
+			</ChartContainer>
+		</div>
+
 		<table>
 			<thead><tr><th>task</th><th>started</th><th>ended</th><th>days</th></tr></thead>
 			<tbody>
