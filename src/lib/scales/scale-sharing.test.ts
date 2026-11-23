@@ -75,7 +75,7 @@ describe('named groups', () => {
 		expect(named).not.toBe(onX(chart({ xLabel: 'capture' }), 'arr_delay'));
 	});
 
-	it.each(['band', 'point', 'time'])('are ignored with one warning on a %s axis', (type) => {
+	it.each(['band', 'point'])('are ignored with one warning on a %s axis', (type) => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 		const on = (column: string, xScale?: string) => {
 			const scales = chart({ xScale });
@@ -88,6 +88,46 @@ describe('named groups', () => {
 		expect(on(`arr_${type}`, 'schedule')).not.toBe(departure);
 		expect(on(`dep_${type}`)).toBe(departure);
 		warn.mockRestore();
+	});
+});
+
+describe('time axes share as numeric ones do', () => {
+	// Each mark draws its own date column from the shared origin, so two date
+	// columns can be one axis: a timeline's start and end, or order and ship dates.
+	function onTime(scales: ChartScales, column: string) {
+		scales.registerScaleType('x', 'time', SCALE_PRIORITIES.MANDATE, `t${charts}`, {}, column);
+		return scales.xScaleState;
+	}
+
+	it('a named group shares two date columns, without a warning', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		const a = onTime(chart({ xScale: 'schedule' }), 'started');
+		const b = onTime(chart({ xScale: 'schedule' }), 'ended');
+		expect(a).toBe(b);
+		expect(warn.mock.calls.filter(([m]) => String(m).includes('is ignored'))).toEqual([]);
+		warn.mockRestore();
+	});
+
+	it('the same label shares two date columns', () => {
+		const a = onTime(chart({ xLabel: 'when' }), 'ordered');
+		const b = onTime(chart({ xLabel: 'when' }), 'shipped');
+		expect(a).toBe(b);
+	});
+
+	it('without a label, only the same column shares', () => {
+		const a = onTime(chart(), 'opened');
+		expect(onTime(chart(), 'closed')).not.toBe(a);
+		expect(onTime(chart(), 'opened')).toBe(a);
+	});
+
+	it('a following chart takes the brushed overview on another date column', () => {
+		const overview = chart({ xLabel: 'period' });
+		const written = onTime(overview, 'from_date');
+		const release = overview.registerBrushTarget('x');
+		const follower = chart({ xLabel: 'period', xScale: false, useXSelection: true });
+		onTime(follower, 'to_date');
+		expect(follower.selectionSourceScale('x')).toBe(written);
+		release?.();
 	});
 });
 

@@ -195,9 +195,9 @@ def plot(
         x_scale: Which charts share the x axis (domain, zoom and pan). By
             default axes with the same label share, else the same column,
             across tables; an aggregate without a label is this chart's own.
-            A name shares with the charts naming it, on numeric axes only
-            (band, point and time axes ignore it with a warning); ``False``
-            keeps the axis to this chart.
+            A name shares with the charts naming it, on numeric and time axes
+            (band and point axes ignore it with a warning); ``False`` keeps the
+            axis to this chart.
         y_scale: As ``x_scale``, for the y axis.
         fx: Facet column name.
         columns: Number of columns for facet grid.

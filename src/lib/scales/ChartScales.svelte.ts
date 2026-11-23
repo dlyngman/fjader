@@ -364,12 +364,11 @@ export class ChartScales {
 		const cfg: Record<string, unknown> = { ...(axisConfig.config || {}) };
 		const col = axisConfig.columnName;
 		if (typeof col === 'string') {
-			// Band/point: sourceField for ViewManager index columns.
-			// Time: sourceField keeps two columns' time scales apart, and a brushed
-			// time scale found by its column (selectionSourceScale).
-			// sourceField is NOT added to linear scales to avoid changing their
-			// config hash, which would break scale sharing for use_selection.
-			if (axisConfig.type === 'band' || axisConfig.type === 'point' || axisConfig.type === 'time') {
+			// Band/point: sourceField, since two columns' categories are not one axis.
+			// Not on continuous scales, time included: they share as one measurement
+			// (each mark draws its own column), and the column in the config hash would
+			// break sharing by label, by group and for use_selection.
+			if (axisConfig.type === 'band' || axisConfig.type === 'point') {
 				cfg.sourceField = col;
 			}
 		}
@@ -380,7 +379,7 @@ export class ChartScales {
 	 * Which axis scale this chart uses: charts whose axes get the same key share
 	 * one scale state, its domain and its zoom and pan. Shared by default:
 	 * - `xScale` names a group: shared with the charts naming it, and only those
-	 *   (its key has a prefix, so no label or column falls into it). Numeric
+	 *   (its key has a prefix, so no label or column falls into it). Continuous
 	 *   axes only, see #groupName.
 	 * - `xScale={false}`: this chart's own.
 	 * - Otherwise the label: axes with the same title are the same axis.
@@ -388,8 +387,8 @@ export class ChartScales {
 	 * - An axis showing an aggregate (count(), sum(x)) without a label, or no
 	 *   column: this chart's own, since two counts are rarely one quantity.
 	 *
-	 * Band, point and time scales also key by their column (#buildAxisScaleConfig),
-	 * so a label only joins those that show the same one.
+	 * Band and point scales also key by their column (#buildAxisScaleConfig), so
+	 * a label only joins those that show the same one.
 	 */
 	#scaleKey(axis: 'x' | 'y', config: ResolvedScaleConfiguration): string {
 		const group = this.#groupName(axis, config);
@@ -412,22 +411,21 @@ export class ChartScales {
 	#ySource = $derived.by(() => this.selectionSourceScale('y'));
 
 	/**
-	 * The group this axis is named into, if it can be. Not on band or point (two
-	 * columns' categories are not one axis), and not yet on time: its marks draw
-	 * their own columns from the shared origin, but a time scale is still told
-	 * apart by its column (sourceField), and a follower finds a brushed one by it.
+	 * The group this axis is named into, if it can be. Not on band or point: two
+	 * columns' categories are not one axis. Time axes join, as numeric ones do:
+	 * each mark draws its own date column from the shared origin.
 	 */
 	#groupName(axis: 'x' | 'y', config: ResolvedScaleConfiguration): string | null {
 		const share = axis === 'x' ? this.config.xScale : this.config.yScale;
 		if (!share) return null;
 		const { type } = config;
-		if (type !== 'band' && type !== 'point' && type !== 'time') return share;
+		if (type !== 'band' && type !== 'point') return share;
 		const warning = `${axis}:${type}:${share}`;
 		if (!this.#warnedGroup.has(warning)) {
 			this.#warnedGroup.add(warning);
 			console.warn(
 				`<ChartContainer> ${axis}Scale="${share}" is ignored on a ${type} axis: named ` +
-					`groups are for numeric axes. It shares by label or column instead.`
+					`groups are for continuous axes. It shares by label or column instead.`
 			);
 		}
 		return null;
@@ -463,7 +461,7 @@ export class ChartScales {
 	 *    shared one when several do), which also finds an overview that keeps
 	 *    its axis to itself;
 	 * 3. the scale shared under the link key, brushed or not.
-	 * A source has the follower's type, and on a time axis its column.
+	 * A source has the follower's type.
 	 */
 	selectionSourceScale(axis: 'x' | 'y'): LinearScaleState | null {
 		const config = this.scaleConfigurations?.[axis];
@@ -485,13 +483,7 @@ export class ChartScales {
 		const shared = byKey(linkKey);
 		const brushed = this.#scaleRegistry
 			.brushTargetsOf(linkKey)
-			.filter(
-				(scale) =>
-					scale.type === config.type &&
-					(config.type !== 'time' ||
-						(scale as LinearScaleState & { sourceField?: string }).sourceField ===
-							sourceConfig.sourceField)
-			);
+			.filter((scale) => scale.type === config.type);
 		if (shared && brushed.includes(shared)) return shared;
 		return brushed[0] ?? shared;
 	}

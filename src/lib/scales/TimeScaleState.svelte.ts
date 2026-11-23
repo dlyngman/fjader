@@ -39,22 +39,15 @@ export class TimeScaleState extends LinearScaleState {
 	// --- Batching ---
 	#suppressUpdate: boolean = false;
 
-	/**
-	 * The actual database column name for SQL queries.
-	 * May differ from `this.name` when xLabel overrides the scale registry key.
-	 */
-	#sourceField: string;
-
 	constructor(
 		name: string,
 		extent: [number, number],
 		type: string,
 		zoomLimits: [number, number],
-		options: LinearScaleOptions & { sourceField?: string },
+		options: LinearScaleOptions,
 		gpuCoordinator: GPUCoordinator | null
 	) {
 		super(name, extent, type ?? 'time', zoomLimits, options, gpuCoordinator);
-		this.#sourceField = options?.sourceField ?? name;
 	}
 
 	// ===========================================================================
@@ -177,15 +170,6 @@ export class TimeScaleState extends LinearScaleState {
 
 		this.resetDomainLimits();
 		this.resetZoom(instant);
-	}
-
-	/**
-	 * The column this scale was registered with (may differ from the registry
-	 * key). It tells two columns' time scales apart; marks draw their own
-	 * columns, each offset from t0.
-	 */
-	get sourceField(): string {
-		return this.#sourceField;
 	}
 
 	// ===========================================================================
