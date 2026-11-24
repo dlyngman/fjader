@@ -44,6 +44,8 @@
 	const plotRect = () => ({ x: margin.left, y: margin.top, width, height });
 
 	let canvas = $state<HTMLCanvasElement>();
+	/** A hidden element theme colours are resolved through (getCssColor). */
+	let colorProbe = $state<HTMLSpanElement>();
 	let atlasContainer = $state<HTMLElement>();
 	/**
 	 * The chart's text atlas (gpu/text/TextAtlas.svelte.ts): text layers acquire
@@ -287,8 +289,12 @@
 		},
 
 		getCssColor(property: string, fallback: string) {
-			const css = canvas ? getComputedStyle(canvas).getPropertyValue(property).trim() : '';
-			const [r, g, b, a] = parseColorToRGBA(css || fallback);
+			// Resolved by the browser, not read as text: a theme colour is a
+			// light-dark() pair, which only a used colour resolves (to the chart's
+			// color-scheme). The probe is hidden; its computed colour still resolves.
+			if (!colorProbe) return parseColorToRGBA(fallback);
+			colorProbe.style.color = `var(${property}, ${fallback})`;
+			const [r, g, b, a] = parseColorToRGBA(getComputedStyle(colorProbe).color);
 			return [r, g, b, a];
 		},
 
@@ -432,6 +438,8 @@
 			</div>
 		{/if}
 	</canvas>
+	<!-- Resolves theme colours for getCssColor. -->
+	<span class="fjader-color-probe" hidden bind:this={colorProbe}></span>
 	{#if contextConfigured}
 		{#if (declarations?.frames.length ?? 0) > 0}
 			<PlotBorderRenderer />

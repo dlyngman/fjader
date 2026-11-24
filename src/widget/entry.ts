@@ -6,6 +6,7 @@
  */
 
 import { renderFromData, showError, type FjaderHandle, type ManifestEntry } from './core';
+import { followHostScheme } from './hostScheme';
 import { isLoaded, whenLoaded } from './loadArrowIPC';
 import { tablesFromKernel, takeTables, type TableMessaging, type WidgetTableEntry } from './tables';
 import '$lib/theme.css';
@@ -59,6 +60,8 @@ async function doRender(model: AnywidgetModel, el: HTMLElement): Promise<FjaderH
 const WATCHED_TRAITS = ['change:spec', 'change:data_manifest', 'change:data_blob'] as const;
 
 function render({ model, el }: RenderContext): () => void {
+	// Light or dark as the notebook is, not the system (see hostScheme).
+	const stopFollowingScheme = followHostScheme(el);
 	let handle: FjaderHandle | null = null;
 	let renderPromise: Promise<void> = Promise.resolve();
 	let pendingRender = false;
@@ -97,6 +100,7 @@ function render({ model, el }: RenderContext): () => void {
 	for (const trait of WATCHED_TRAITS) model.on(trait, scheduleRender);
 
 	return () => {
+		stopFollowingScheme();
 		for (const trait of WATCHED_TRAITS) model.off(trait, scheduleRender);
 		if (handle) handle.destroy();
 		handle = null;
