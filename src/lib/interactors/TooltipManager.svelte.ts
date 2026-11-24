@@ -50,6 +50,8 @@ interface TooltipMarkRegistration {
 	sizeScaleState?: { getRenderedRadius: (value: number) => number };
 	constantRadius?: number;
 	displayFields?: string[] | null;
+	/** Labels shown in place of display field names (a labeled tip field). */
+	displayLabels?: Record<string, string> | null;
 	/**
 	 * What an Other bar's point holds, for the tooltip to add its rows; read at
 	 * display time, so a selection that changes under the pointer shows at once.
@@ -107,6 +109,7 @@ export class TooltipManager {
 	currentColorField: string | null = $state(null);
 	currentChannelFields: Record<string, string> | null = $state(null);
 	currentDisplayFields: string[] | null = $state(null);
+	currentDisplayLabels: Record<string, string> | null = $state(null);
 	visible: boolean = $state(false);
 	pointerClientX: number = $state(0);
 	pointerClientY: number = $state(0);
@@ -350,6 +353,7 @@ export class TooltipManager {
 				this.currentMarkType = config.markType;
 				this.currentChannelFields = config.channelFields ?? null;
 				this.currentDisplayFields = config.displayFields ?? null;
+				this.currentDisplayLabels = config.displayLabels ?? null;
 				this.matchedRadius = this.#resolveRadius(rows[0], config);
 				this.visible = true;
 
@@ -903,6 +907,7 @@ export class TooltipManager {
 		this.currentColorField = null;
 		this.currentChannelFields = null;
 		this.currentDisplayFields = null;
+		this.currentDisplayLabels = null;
 		this.matchedRadius = null;
 	}
 }

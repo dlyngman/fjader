@@ -36,6 +36,7 @@ interface TooltipConfigParams {
 	constantRadius?: number;
 	sizeScaleState?: SizeScaleState | null;
 	displayFields?: string[] | null;
+	displayLabels?: Record<string, string> | null;
 	otherStats?: TooltipConfig['otherStats'];
 }
 
@@ -62,6 +63,7 @@ interface TooltipConfig {
 	constantRadius?: number;
 	sizeScaleState?: SizeScaleState | null;
 	displayFields?: string[] | null;
+	displayLabels?: Record<string, string> | null;
 	otherStats?: (point: Record<string, unknown>) => OtherRowStats | null;
 	enabled: boolean;
 }
@@ -81,6 +83,7 @@ export function buildTooltipConfig({
 	constantRadius,
 	sizeScaleState,
 	displayFields,
+	displayLabels,
 	otherStats
 }: TooltipConfigParams): TooltipConfig {
 	const colorScaleState = markColor.scaleState;
@@ -117,6 +120,7 @@ export function buildTooltipConfig({
 		...(constantRadius != null && { constantRadius }),
 		...(sizeScaleState && { sizeScaleState }),
 		...(displayFields && { displayFields }),
+		...(displayLabels && { displayLabels }),
 		...(otherStats && { otherStats }),
 		enabled: true
 	};

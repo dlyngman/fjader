@@ -10,7 +10,8 @@
 		DotsMark,
 		BarMarkY,
 		LineMark,
-		AreaMarkY
+		AreaMarkY,
+		RectYMark
 	} from '$lib/components';
 </script>
 
@@ -162,6 +163,54 @@
 						y={avg('body_mass')}
 						fill="species"
 						tip={['x', 'fill', 'y', min('body_mass'), max('body_mass')]}
+					/>
+					<Crosshair />
+				</ChartContainer>
+			</div>
+		</section>
+		<!-- 9. RectYMark with labeled tip expressions (implicit SQL stack, #131) -->
+		<section>
+			<h2>RectYMark — labeled tip expressions on an implicit stack</h2>
+			<p class="desc">
+				Should show: start, end, y, Rate (the average of four regions) and N = 4. No "Failed to
+				merge tip extras" warning in the console.
+			</p>
+			<div class="chart-wrapper">
+				<ChartContainer xLabel="month" yLabel="avg revenue">
+					<MarginLabel />
+					<Grid />
+					<RectYMark
+						table="spans"
+						x1="start"
+						x2="end"
+						y={avg('v')}
+						tip={['*', { value: avg('v'), label: 'Rate' }, { value: count(), label: 'N' }]}
+					/>
+					<Crosshair />
+				</ChartContainer>
+			</div>
+		</section>
+		<!-- 10. DotsMark with labeled plain columns (#133) -->
+		<section>
+			<h2>DotsMark — labeled plain columns</h2>
+			<p class="desc">
+				Should show: Bill length (the x channel), Species (the fill channel) and Island (a column
+				not in any channel), each under its label.
+			</p>
+			<div class="chart-wrapper">
+				<ChartContainer xLabel="bill_length" yLabel="body_mass">
+					<MarginLabel />
+					<Grid />
+					<DotsMark
+						table="penguins"
+						x="bill_length"
+						y="body_mass"
+						fill="species"
+						tip={[
+							{ value: 'x', label: 'Bill length' },
+							{ value: 'species', label: 'Species' },
+							{ value: 'island', label: 'Island' }
+						]}
 					/>
 					<Crosshair />
 				</ChartContainer>

@@ -322,7 +322,8 @@
 					bandAxes: { x: true, y: true },
 					markColor,
 					proximityAxis: tooltipProximity,
-					displayFields: resolvedTip.displayFields
+					displayFields: resolvedTip.displayFields,
+					displayLabels: resolvedTip.displayLabels
 				})
 			);
 		});

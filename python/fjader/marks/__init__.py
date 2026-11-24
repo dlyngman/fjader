@@ -16,7 +16,7 @@ from .rect import RectMark, RectXMark, RectYMark
 from .text import TextMark
 
 if TYPE_CHECKING:
-    from ..fields import ColorChannel, FieldSpec
+    from ..fields import ColorChannel, FieldSpec, TipEntry
     from .._types import (
         ColorScheme,
         CurveType,
@@ -52,7 +52,7 @@ def dot(
     domain: DomainConfig | None = None,
     tooltip: bool | dict[str, bool] | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
-    tip: list[str] | Literal[False] | None = None,
+    tip: list[TipEntry] | Literal[False] | None = None,
     fit_domain: Literal["x", "y"] | bool | None = None,
 ) -> DotMark:
     """Scatter/dot mark.
@@ -92,6 +92,8 @@ def dot(
             tooltip table sorted by x (off by default).
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
+            Entries may also be aggregates (``fj.count()``), and any entry may carry a label:
+            ``("Month", "month_start")`` or ``("N", fj.count())``.
         fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
     """
     return DotMark(
@@ -135,7 +137,7 @@ def bar_x(
     domain: DomainConfig | None = None,
     tooltip: bool | dict[str, bool] | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
-    tip: list[str] | Literal[False] | None = None,
+    tip: list[TipEntry] | Literal[False] | None = None,
     fit_domain: Literal["x", "y"] | bool | None = None,
 ) -> BarXMark:
     """Horizontal bar mark (bars extend along x-axis).
@@ -189,6 +191,8 @@ def bar_x(
             tooltip table sorted by x (off by default).
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
+            Entries may also be aggregates (``fj.count()``), and any entry may carry a label:
+            ``("Month", "month_start")`` or ``("N", fj.count())``.
         fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
     """
     return BarXMark(
@@ -231,7 +235,7 @@ def bar_y(
     domain: DomainConfig | None = None,
     tooltip: bool | dict[str, bool] | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
-    tip: list[str] | Literal[False] | None = None,
+    tip: list[TipEntry] | Literal[False] | None = None,
     fit_domain: Literal["x", "y"] | bool | None = None,
 ) -> BarYMark:
     """Vertical bar mark (bars extend along y-axis).
@@ -285,6 +289,8 @@ def bar_y(
             tooltip table sorted by x (off by default).
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
+            Entries may also be aggregates (``fj.count()``), and any entry may carry a label:
+            ``("Month", "month_start")`` or ``("N", fj.count())``.
         fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
     """
     return BarYMark(
@@ -325,7 +331,7 @@ def line(
     domain: DomainConfig | None = None,
     tooltip: bool | dict[str, bool] | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
-    tip: list[str] | Literal[False] | None = None,
+    tip: list[TipEntry] | Literal[False] | None = None,
     fit_domain: Literal["x", "y"] | bool | None = None,
 ) -> LineMark:
     """Line mark for connected data points.
@@ -368,6 +374,8 @@ def line(
             tooltip table sorted by x (off by default).
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
+            Entries may also be aggregates (``fj.count()``), and any entry may carry a label:
+            ``("Month", "month_start")`` or ``("N", fj.count())``.
         fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
     """
     return LineMark(
@@ -413,7 +421,7 @@ def area_y(
     domain: DomainConfig | None = None,
     tooltip: bool | dict[str, bool] | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
-    tip: list[str] | Literal[False] | None = None,
+    tip: list[TipEntry] | Literal[False] | None = None,
     fit_domain: Literal["x", "y"] | bool | None = None,
 ) -> AreaYMark:
     """Vertical area mark (x dimension, y1/y2 boundaries).
@@ -459,6 +467,8 @@ def area_y(
             tooltip table sorted by x (off by default).
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
+            Entries may also be aggregates (``fj.count()``), and any entry may carry a label:
+            ``("Month", "month_start")`` or ``("N", fj.count())``.
         fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
     """
     return AreaYMark(
@@ -504,7 +514,7 @@ def area_x(
     domain: DomainConfig | None = None,
     tooltip: bool | dict[str, bool] | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
-    tip: list[str] | Literal[False] | None = None,
+    tip: list[TipEntry] | Literal[False] | None = None,
     fit_domain: Literal["x", "y"] | bool | None = None,
 ) -> AreaXMark:
     """Horizontal area mark (y dimension, x1/x2 boundaries).
@@ -550,6 +560,8 @@ def area_x(
             tooltip table sorted by x (off by default).
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
+            Entries may also be aggregates (``fj.count()``), and any entry may carry a label:
+            ``("Month", "month_start")`` or ``("N", fj.count())``.
         fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
     """
     return AreaXMark(
@@ -597,7 +609,7 @@ def rect(
     domain: DomainConfig | None = None,
     tooltip: bool | dict[str, bool] | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
-    tip: list[str] | Literal[False] | None = None,
+    tip: list[TipEntry] | Literal[False] | None = None,
     fit_domain: Literal["x", "y"] | bool | None = None,
 ) -> RectMark:
     """Rectangle mark for 2D binning or heatmaps.
@@ -645,6 +657,8 @@ def rect(
             tooltip table sorted by x (off by default).
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
+            Entries may also be aggregates (``fj.count()``), and any entry may carry a label:
+            ``("Month", "month_start")`` or ``("N", fj.count())``.
         fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
     """
     return RectMark(
@@ -689,7 +703,7 @@ def rect_x(
     domain: DomainConfig | None = None,
     tooltip: bool | dict[str, bool] | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
-    tip: list[str] | Literal[False] | None = None,
+    tip: list[TipEntry] | Literal[False] | None = None,
     fit_domain: Literal["x", "y"] | bool | None = None,
 ) -> RectXMark:
     """Horizontal rect mark (e.g. histograms along x-axis).
@@ -733,6 +747,8 @@ def rect_x(
             tooltip table sorted by x (off by default).
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
+            Entries may also be aggregates (``fj.count()``), and any entry may carry a label:
+            ``("Month", "month_start")`` or ``("N", fj.count())``.
         fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
     """
     return RectXMark(
@@ -774,7 +790,7 @@ def rect_y(
     domain: DomainConfig | None = None,
     tooltip: bool | dict[str, bool] | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
-    tip: list[str] | Literal[False] | None = None,
+    tip: list[TipEntry] | Literal[False] | None = None,
     fit_domain: Literal["x", "y"] | bool | None = None,
 ) -> RectYMark:
     """Vertical rect mark (e.g. histograms along y-axis).
@@ -818,6 +834,8 @@ def rect_y(
             tooltip table sorted by x (off by default).
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
+            Entries may also be aggregates (``fj.count()``), and any entry may carry a label:
+            ``("Month", "month_start")`` or ``("N", fj.count())``.
         fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
     """
     return RectYMark(
@@ -861,7 +879,7 @@ def text(
     domain: DomainConfig | None = None,
     tooltip: bool | dict[str, bool] | None = None,
     tooltip_proximity: Literal["x", "y", "xy"] | None = None,
-    tip: list[str] | Literal[False] | None = None,
+    tip: list[TipEntry] | Literal[False] | None = None,
     fit_domain: Literal["x", "y"] | bool | None = None,
 ) -> TextMark:
     """Text mark for labels and annotations.
@@ -907,6 +925,8 @@ def text(
             tooltip table sorted by x (off by default).
         tooltip_proximity: Tooltip proximity mode: ``'x'``, ``'y'``, or ``'xy'``.
         tip: Tooltip field control — list of channel/field names, ``['*']`` for all, or ``False`` to disable.
+            Entries may also be aggregates (``fj.count()``), and any entry may carry a label:
+            ``("Month", "month_start")`` or ``("N", fj.count())``.
         fit_domain: Auto-fit axis domain to visible data — ``'x'``, ``'y'``, or ``True`` for both.
     """
     return TextMark(

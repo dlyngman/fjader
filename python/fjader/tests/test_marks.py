@@ -174,6 +174,18 @@ class TestTipProp:
         d = m.to_mark_dict()
         assert d["tip"] == ["*", "island"]
 
+    def test_tip_labeled_entries(self):
+        m = fj.dot(
+            table="t", x="a", y="b",
+            tip=[("Month", "month_start"), {"Site": "site"}, ("N", fj.count())],
+        )
+        d = m.to_mark_dict()
+        assert d["tip"] == [
+            {"value": "month_start", "label": "Month"},
+            {"value": "site", "label": "Site"},
+            {"value": {"aggregate": "count"}, "label": "N"},
+        ]
+
     def test_tip_false_disables(self):
         m = fj.dot(table="t", x="a", y="b", tip=False)
         d = m.to_mark_dict()

@@ -288,7 +288,8 @@
 					proximityAxis: entry.tooltipProximity,
 					constantRadius: typeof entry.r === 'number' ? entry.r : undefined,
 					sizeScaleState: markSize.scaleState,
-					displayFields: resolvedTip.displayFields
+					displayFields: resolvedTip.displayFields,
+					displayLabels: resolvedTip.displayLabels
 				})
 			);
 		});
