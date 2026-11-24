@@ -14,34 +14,28 @@
  * Set --fjader-tooltip-bg and --fjader-tooltip-text to override both modes.
  */
 
+/*
+ * Each colour is a light-dark() pair: it follows the color-scheme where it is
+ * used. A page follows the system (color-scheme: light dark on :root) unless it
+ * sets its own. A notebook widget's root ([data-fjader-root]) gets the scheme of
+ * the notebook behind it (widget/hostScheme.ts), and defines the colours itself:
+ * marimo renders widgets in a shadow root, where :root rules never apply.
+ */
 :where(:root) {
-	--fjader-font: system-ui, sans-serif;
-	--fjader-text-secondary: #6b7280;
-	--fjader-text-muted: #d1d5db;
-	--fjader-bg: #ffffff;
-	--fjader-primary: #3b82f6;
-	--fjader-accent: #93c5fd;
-	--fjader-palette-bg: rgba(0, 0, 0, 0.92);
-	--fjader-palette-text: #ffffff;
-	--fjader-palette-text-secondary: rgba(255, 255, 255, 0.5);
-	--fjader-palette-text-muted: rgba(255, 255, 255, 0.3);
-	--fjader-palette-border: rgba(255, 255, 255, 0.1);
-	--fjader-palette-highlight: rgba(255, 255, 255, 0.08);
 	color-scheme: light dark;
 }
 
-@media (prefers-color-scheme: dark) {
-	:where(:root) {
-		--fjader-text-secondary: #9ca3af;
-		--fjader-text-muted: #4b5563;
-		--fjader-bg: #111827;
-		--fjader-primary: #60a5fa;
-		--fjader-accent: #3b82f6;
-		--fjader-palette-bg: rgba(255, 255, 255, 0.95);
-		--fjader-palette-text: #111827;
-		--fjader-palette-text-secondary: rgba(17, 24, 39, 0.5);
-		--fjader-palette-text-muted: rgba(17, 24, 39, 0.35);
-		--fjader-palette-border: rgba(17, 24, 39, 0.1);
-		--fjader-palette-highlight: rgba(17, 24, 39, 0.08);
-	}
+:where(:root, [data-fjader-root]) {
+	--fjader-font: system-ui, sans-serif;
+	--fjader-text-secondary: light-dark(#6b7280, #9ca3af);
+	--fjader-text-muted: light-dark(#d1d5db, #4b5563);
+	--fjader-bg: light-dark(#ffffff, #111827);
+	--fjader-primary: light-dark(#3b82f6, #60a5fa);
+	--fjader-accent: light-dark(#93c5fd, #3b82f6);
+	--fjader-palette-bg: light-dark(rgba(0, 0, 0, 0.92), rgba(255, 255, 255, 0.95));
+	--fjader-palette-text: light-dark(#ffffff, #111827);
+	--fjader-palette-text-secondary: light-dark(rgba(255, 255, 255, 0.5), rgba(17, 24, 39, 0.5));
+	--fjader-palette-text-muted: light-dark(rgba(255, 255, 255, 0.3), rgba(17, 24, 39, 0.35));
+	--fjader-palette-border: light-dark(rgba(255, 255, 255, 0.1), rgba(17, 24, 39, 0.1));
+	--fjader-palette-highlight: light-dark(rgba(255, 255, 255, 0.08), rgba(17, 24, 39, 0.08));
 }
