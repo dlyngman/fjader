@@ -79,6 +79,29 @@ class TestFullSpec:
 
         assert spec["plot"]["margin"] == {"top": 30, "right": 50, "bottom": 35, "left": 75}
 
+    def test_axis_title_and_frame_options(self):
+        spec = fj.plot(
+            fj.bar_x(table="t", x="importance", y="feature"),
+            y_title_placement="top", y_title_offset="auto", x_title_anchor="end",
+            frame=False, x_label="",
+        ).to_dict()
+
+        plot = spec["plot"]
+        assert plot["yTitlePlacement"] == "top"
+        assert plot["yTitleOffset"] == "auto"
+        assert plot["xTitleAnchor"] == "end"
+        assert plot["frame"] is False
+        assert plot["xLabel"] == ""
+
+    def test_axis_title_and_frame_options_unset(self):
+        plot = fj.plot(fj.dot(table="t", x="a", y="b")).to_dict()["plot"]
+        for key in ("yTitlePlacement", "yTitleOffset", "xTitleAnchor", "frame"):
+            assert key not in plot
+
+    def test_opts_sets_frame(self):
+        plot = fj.plot(fj.dot(table="t", x="a", y="b")).opts(frame=False).to_dict()["plot"]
+        assert plot["frame"] is False
+
 
 class TestJsonRoundTrip:
     def test_to_json(self):

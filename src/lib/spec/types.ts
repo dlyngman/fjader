@@ -68,8 +68,18 @@ export interface PlotSpec {
 	width?: number;
 	height?: number;
 	margin?: { top?: number; right?: number; bottom?: number; left?: number };
+	/** The x axis title; an empty string draws none. */
 	xLabel?: string;
+	/** The y axis title; an empty string draws none. */
 	yLabel?: string;
+	/** Where the y axis title goes: rotated beside the tick labels (default) or above the axis (AxisLeft.titlePlacement). */
+	yTitlePlacement?: 'side' | 'top';
+	/** How far left of the y axis its side title sits, in px (default 32), or 'auto' to clear the tick labels (AxisLeft.titleOffset). */
+	yTitleOffset?: number | 'auto';
+	/** Where along the x axis its title sits (AxisBottom.titleAnchor). */
+	xTitleAnchor?: 'start' | 'center' | 'end';
+	/** Draw the border around the plot area (default true). */
+	frame?: boolean;
 	/** Which charts share the axis: a name (numeric and time axes), or false for this chart's own (ChartContainer.xScale). */
 	xScale?: string | false;
 	yScale?: string | false;

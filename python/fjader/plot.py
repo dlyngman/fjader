@@ -14,7 +14,9 @@ if TYPE_CHECKING:
     from ._types import SortConfig
 
 _PLOT_FIELDS = (
-    "width", "height", "margin", "x_label", "y_label", "x_scale", "y_scale", "fx",
+    "width", "height", "margin", "x_label", "y_label",
+    "y_title_placement", "y_title_offset", "x_title_anchor", "frame",
+    "x_scale", "y_scale", "fx",
     "columns", "legend",
     "interactors", "use_selection", "zoom_limit", "pan_limit", "disable_zoom",
     "entrance",
@@ -31,6 +33,10 @@ class Plot:
     margin: dict[str, int] | None = None
     x_label: str | None = None
     y_label: str | None = None
+    y_title_placement: Literal["side", "top"] | None = None
+    y_title_offset: int | float | Literal["auto"] | None = None
+    x_title_anchor: Literal["start", "center", "end"] | None = None
+    frame: bool | None = None
     x_scale: str | Literal[False] | None = None
     y_scale: str | Literal[False] | None = None
     fx: str | None = None
@@ -171,6 +177,10 @@ def plot(
     margin: dict[str, int] | None = None,
     x_label: str | None = None,
     y_label: str | None = None,
+    y_title_placement: Literal["side", "top"] | None = None,
+    y_title_offset: int | float | Literal["auto"] | None = None,
+    x_title_anchor: Literal["start", "center", "end"] | None = None,
+    frame: bool | None = None,
     x_scale: str | Literal[False] | None = None,
     y_scale: str | Literal[False] | None = None,
     fx: str | None = None,
@@ -190,8 +200,18 @@ def plot(
         width: Chart width in CSS pixels.
         height: Chart height in CSS pixels.
         margin: Dict with ``top``/``right``/``bottom``/``left`` pixel values.
-        x_label: X-axis label.
-        y_label: Y-axis label.
+        x_label: X-axis title. Defaults to the column the axis shows; ``""``
+            draws no title.
+        y_label: Y-axis title, as ``x_label``.
+        y_title_placement: Where the y-axis title goes: ``"side"`` (default),
+            rotated beside the tick labels, or ``"top"``, horizontal above the
+            plot, clear of long tick labels.
+        y_title_offset: How far left of the y axis a ``"side"`` title sits, in
+            pixels (default 32), or ``"auto"`` to clear the widest tick label
+            as far as the left margin allows.
+        x_title_anchor: Where along the x axis its title sits: ``"start"``,
+            ``"center"`` (default) or ``"end"``.
+        frame: Draw the border around the plot area (default ``True``).
         x_scale: Which charts share the x axis (domain, zoom and pan). By
             default axes with the same label share, else the same column,
             across tables; an aggregate without a label is this chart's own.
@@ -225,7 +245,10 @@ def plot(
     return Plot(
         *marks,
         width=width, height=height, margin=margin,
-        x_label=x_label, y_label=y_label, x_scale=x_scale, y_scale=y_scale,
+        x_label=x_label, y_label=y_label,
+        y_title_placement=y_title_placement, y_title_offset=y_title_offset,
+        x_title_anchor=x_title_anchor, frame=frame,
+        x_scale=x_scale, y_scale=y_scale,
         fx=fx, columns=columns,
         legend=legend, interactors=interactors,
         use_selection=use_selection,
