@@ -511,12 +511,18 @@ export class MarkLifecycleV2 {
 		if (this.#reactiveConfig.domain?.[given.axis]?.length) return null;
 		// A column name becomes the channel that reads it: the rank transform
 		// reads the query's channel aliases.
-		const { sort, unresolved } = resolveSortChannel(given, this.channelFieldMap);
-		if (unresolved && this.#unresolvedSortWarned !== given.channel) {
+		const fieldMap = this.channelFieldMap;
+		const categorical = new Set(this.#categoricalChannels(this.#config.select).map(([ch]) => ch));
+		const { sort, problem } = resolveSortChannel(given, fieldMap, categorical);
+		if (problem && this.#unresolvedSortWarned !== given.channel) {
 			this.#unresolvedSortWarned = given.channel;
+			const why =
+				problem === 'categorical'
+					? 'is read only by a categorical channel, which has no values to sort by'
+					: 'is neither a channel nor a column of this mark';
 			console.warn(
-				`sort: "${given.channel}" is neither a channel nor a column of this mark ` +
-					`(channels: ${Object.keys(this.#config.select).join(', ')}), so the ${given.axis} axis is not sorted.`
+				`sort: "${given.channel}" ${why} (channels: ${Object.keys(fieldMap).join(', ')}), ` +
+					`so the ${given.axis} axis is not sorted.`
 			);
 		}
 		return sort;

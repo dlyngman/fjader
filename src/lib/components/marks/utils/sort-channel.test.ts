@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { column, count, sum } from '@uwdata/mosaic-sql';
+import { avg, column, count, sum } from '@uwdata/mosaic-sql';
 import { resolveSortChannel } from './index';
 import { buildChannelFieldMap } from './channel-field-map';
 
@@ -12,14 +12,14 @@ describe('resolveSortChannel', () => {
 	it('keeps a channel name', () => {
 		expect(resolveSortChannel(desc('y', 'x'), barX)).toEqual({
 			sort: desc('y', 'x'),
-			unresolved: false
+			problem: null
 		});
 	});
 
 	it('resolves a column name to the channel that reads it', () => {
 		expect(resolveSortChannel(desc('y', 'importance'), barX)).toEqual({
 			sort: desc('y', 'x'),
-			unresolved: false
+			problem: null
 		});
 	});
 
@@ -48,18 +48,38 @@ describe('resolveSortChannel', () => {
 		const rect = buildChannelFieldMap({ x1: 'start', x2: 'end', y: 'feature' });
 		expect(resolveSortChannel(desc('y', 'x'), rect)).toEqual({
 			sort: desc('y', 'x'),
-			unresolved: false
+			problem: null
 		});
 	});
 
 	it('flags a name that is neither a channel nor a column, unchanged', () => {
 		expect(resolveSortChannel(desc('y', 'nope'), barX)).toEqual({
 			sort: desc('y', 'nope'),
-			unresolved: true
+			problem: 'unknown'
 		});
 	});
 
+	it('never resolves a column to a categorical channel', () => {
+		// bar_y(x="feature", y=count(), fill="group", sort={"x": "group"}): fill
+		// carries category ids, so summing it per band would rank nothing
+		const fields = buildChannelFieldMap({ x: 'feature', y: count(), fill: 'group' });
+		expect(resolveSortChannel(desc('x', 'group'), fields, new Set(['x', 'fill']))).toEqual({
+			sort: desc('x', 'group'),
+			problem: 'categorical'
+		});
+		// a value channel reading the same column is chosen over it
+		const both = buildChannelFieldMap({ x: 'feature', y: sum('v'), fill: 'v' });
+		expect(resolveSortChannel(desc('x', 'v'), both, new Set(['x', 'fill'])).sort).toEqual(
+			desc('x', 'y')
+		);
+	});
+
+	it('takes the first value channel in select order when several read the column', () => {
+		const fields = buildChannelFieldMap({ x: 'feature', y: sum('v'), r: avg('v') });
+		expect(resolveSortChannel(desc('x', 'v'), fields).sort).toEqual(desc('x', 'y'));
+	});
+
 	it('passes no sort through', () => {
-		expect(resolveSortChannel(null, barX)).toEqual({ sort: null, unresolved: false });
+		expect(resolveSortChannel(null, barX)).toEqual({ sort: null, problem: null });
 	});
 });

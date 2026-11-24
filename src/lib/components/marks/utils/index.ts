@@ -43,28 +43,35 @@ export function normalizeSortConfig(sort: SortConfig | null | undefined): Normal
  * aliases, so a column name becomes the channel that reads that column.
  *
  * `fieldMap` is the mark's channel → field map (buildChannelFieldMap): its keys
- * are the channels, its values the columns they read.
+ * are the channels, its values the columns they read. `categorical` names the
+ * mark's categorical channels (band axes, an ordinal colour, a series).
  *
- * A channel name wins over a column of the same name. Among channels reading
- * the column, one other than the sorted axis's own is preferred: sorting the
- * y axis by `importance` means by the value drawn from it, not by y itself.
+ * A channel name wins over a column of the same name. A column name resolves
+ * to a value channel reading it, the first in select order, other than the
+ * sorted axis's own: sorting the y axis by `importance` means by the value
+ * drawn from it. A categorical channel is never chosen: the query carries its
+ * category ids (or, before they arrive, raw values), which rank nothing
+ * meaningful when summed. The sorted axis's own channel is the last resort.
  *
- * Returns `unresolved` when the name is neither a channel nor a column any
- * channel reads; the sort is returned unchanged, and ranks nothing.
+ * `problem` says why a name did not resolve: `'unknown'` when no channel reads
+ * it, `'categorical'` when only categorical channels do. The sort is then
+ * returned unchanged, and ranks nothing.
  */
 export function resolveSortChannel(
 	sort: NormalizedSortConfig,
-	fieldMap: Record<string, string>
-): { sort: NormalizedSortConfig; unresolved: boolean } {
-	if (!sort) return { sort, unresolved: false };
+	fieldMap: Record<string, string>,
+	categorical: ReadonlySet<string> = new Set()
+): { sort: NormalizedSortConfig; problem: 'unknown' | 'categorical' | null } {
+	if (!sort) return { sort, problem: null };
 	const { channel, axis } = sort;
 	if ([channel, `${channel}2`, `${channel}1`].some((c) => c in fieldMap)) {
-		return { sort, unresolved: false };
+		return { sort, problem: null };
 	}
 	const readers = Object.keys(fieldMap).filter((ch) => fieldMap[ch] === channel);
+	if (readers.length === 0) return { sort, problem: 'unknown' };
 	const ownAxis = (ch: string) => ch === axis || ch === `${axis}1` || ch === `${axis}2`;
-	const match = readers.find((ch) => !ownAxis(ch)) ?? readers[0];
+	const match = readers.find((ch) => !ownAxis(ch) && !categorical.has(ch)) ?? readers.find(ownAxis);
 	return match
-		? { sort: { ...sort, channel: match }, unresolved: false }
-		: { sort, unresolved: true };
+		? { sort: { ...sort, channel: match }, problem: null }
+		: { sort, problem: 'categorical' };
 }
