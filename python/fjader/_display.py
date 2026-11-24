@@ -5,39 +5,45 @@ from __future__ import annotations
 import json
 from typing import Any, Protocol, runtime_checkable
 
-from ._data import df_to_ipc_cached
+from ._data import TableSnapshot
 
 
 @runtime_checkable
 class Displayable(Protocol):
     """Protocol for objects that can be rendered as Fjader widgets."""
 
-    def _to_full_spec(self) -> tuple[dict[str, Any], dict[str, Any]]: ...
+    def _to_full_spec(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        """(spec dict, {table name: TableSnapshot})."""
+        ...
 
 
-def _serialize_dataframes(
-    dataframes: dict[str, Any],
+# Hashes of the tables a browser has confirmed it loaded, in this kernel (see
+# FjaderWidget). A table is left out of a widget's blob only once confirmed: a
+# widget made but never shown, a headless export (no browser) or a new kernel
+# send everything, and a page that lost its tables asks for them back.
+_confirmed: set[str] = set()
+
+
+def _serialize_tables(
+    tables: dict[str, TableSnapshot],
 ) -> tuple[list[dict[str, Any]], bytes]:
-    """Serialize DataFrames to a manifest + concatenated Arrow IPC blob.
+    """The manifest for a widget's tables and the blob carrying their bytes.
 
-    Returns (manifest, blob) where manifest is a list of
-    {name, hash, offset, length} dicts and blob is the concatenated IPC bytes.
+    Every table is in the manifest as {name, hash}; one a browser has not
+    confirmed also has {offset, length} into the blob, which holds its bytes.
     """
     manifest: list[dict[str, Any]] = []
     chunks: list[bytes] = []
     offset = 0
 
-    for table_name, df in dataframes.items():
-        h, ipc_bytes = df_to_ipc_cached(df)
-        length = len(ipc_bytes)
-        manifest.append({
-            "name": table_name,
-            "hash": h,
-            "offset": offset,
-            "length": length,
-        })
-        chunks.append(ipc_bytes)
-        offset += length
+    for table_name, table in tables.items():
+        entry: dict[str, Any] = {"name": table_name, "hash": table.hash}
+        if table.hash not in _confirmed:
+            entry["offset"] = offset
+            entry["length"] = len(table.ipc)
+            chunks.append(table.ipc)
+            offset += len(table.ipc)
+        manifest.append(entry)
 
     return manifest, b"".join(chunks)
 
@@ -75,15 +81,16 @@ def make_widget(obj: Displayable) -> Any:
     """Convert Mark/Plot/Overlay/Layout to a renderable FjaderWidget."""
     from ._widget import FjaderWidget
 
-    spec_dict, dataframes = obj._to_full_spec()
+    spec_dict, tables = obj._to_full_spec()
     _inject_default_height(spec_dict, _DEFAULT_WIDGET_HEIGHT)
-    manifest, blob = _serialize_dataframes(dataframes)
+    manifest, blob = _serialize_tables(tables)
 
     return FjaderWidget(
         spec=json.dumps(spec_dict),
         data_manifest=json.dumps(manifest),
         data_blob=blob,
         _source=obj,
+        _tables=tables,
     )
 
 

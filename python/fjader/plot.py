@@ -131,14 +131,14 @@ class Plot:
         return result
 
     def _collect_data(self) -> dict[str, Any]:
-        """Return {table_name: df} for all marks with data attached."""
+        """Return {table_name: snapshot} for all marks with data attached."""
         result: dict[str, Any] = {}
         for m in self._marks:
             result.update(m._collect_data())
         return result
 
     def _to_full_spec(self) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Return (spec_dict, dataframes_dict) for widget rendering."""
+        """Return (spec_dict, {table name: TableSnapshot}) for widget rendering."""
         return self.to_dict(), self._collect_data()
 
     def _repr_mimebundle_(self, **kwargs: Any) -> Any:

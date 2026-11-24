@@ -20,6 +20,7 @@ class SpecPlot:
         data: dict[str, Any] | None = None,
     ) -> None:
         self._spec = spec
+        # {table name: TableSnapshot}, as from_spec builds it.
         self._dataframes = data or {}
 
     def _to_full_spec(self) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -96,21 +97,19 @@ def from_spec(
 
     spec = _normalize_spec(spec)
 
-    # Wire up DataFrames: assign hash-based table names matching what the
-    # marks reference, so the serialization pipeline can ship them as Arrow IPC.
-    dataframes: dict[str, Any] = {}
+    # Wire up DataFrames: snapshot each one and name it by its content, the name
+    # the widget data-loading pipeline expects (see TableSnapshot).
+    tables: dict[str, Any] = {}
     if data:
-        from ._data import df_to_ipc_cached
+        from ._data import snapshot
 
         for table_name, df in data.items():
-            h, _ = df_to_ipc_cached(df)
-            hashed_name = f"_df_{h}"
-            # Rewrite table references in the spec so marks point to the
-            # hashed name that the widget data-loading pipeline expects.
-            _rewrite_table_refs(spec, table_name, hashed_name)
-            dataframes[hashed_name] = df
+            taken = snapshot(df)
+            # Rewrite table references in the spec so marks point to it.
+            _rewrite_table_refs(spec, table_name, taken.name)
+            tables[taken.name] = taken
 
-    return SpecPlot(spec, dataframes)
+    return SpecPlot(spec, tables)
 
 
 def _rewrite_table_refs(spec: dict[str, Any], old: str, new: str) -> None:

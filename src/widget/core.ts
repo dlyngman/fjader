@@ -7,7 +7,7 @@
 
 import { render as fjaderRender } from '$lib/spec';
 import { getOrCreateQueryEngine } from '$lib/spec/LazyQueryEngine';
-import { loadArrowIPCTable } from './loadArrowIPC';
+import { isLoaded, loadArrowIPCTable } from './loadArrowIPC';
 
 export interface ManifestEntry {
 	name: string;
@@ -22,15 +22,17 @@ export interface FjaderHandle {
 /**
  * Render a Fjader spec, loading Arrow IPC tables via the provided callback.
  *
- * The `getTableIPC` callback abstracts the data source:
- * - anywidget: slices from a concatenated blob
+ * A table this page already holds with the same content (name and hash) is not
+ * asked for. The `getTableIPC` callback abstracts the data source:
+ * - anywidget: a copy out of the widget's blob, or the bytes Python sends back
+ *   when asked (widget/tables.ts); null when another widget loaded it meanwhile
  * - Streamlit: serializes ArrowTable instances
  */
 export async function renderFromData(
 	el: HTMLElement,
 	specJson: string,
 	manifestJson: string,
-	getTableIPC: (entry: ManifestEntry) => Uint8Array
+	getTableIPC: (entry: ManifestEntry) => Uint8Array | null | Promise<Uint8Array | null>
 ): Promise<FjaderHandle> {
 	const spec = JSON.parse(specJson);
 	const manifest: ManifestEntry[] = JSON.parse(manifestJson);
@@ -39,9 +41,11 @@ export async function renderFromData(
 
 	if (manifest.length > 0) {
 		await Promise.all(
-			manifest.map((entry) => {
-				const ipcBytes = getTableIPC(entry);
-				return loadArrowIPCTable(queryEngine, entry.name, ipcBytes, entry.hash);
+			manifest.map(async (entry) => {
+				if (isLoaded(entry.name, entry.hash)) return;
+				const ipcBytes = await getTableIPC(entry);
+				if (ipcBytes === null) return;
+				await loadArrowIPCTable(queryEngine, entry.name, ipcBytes, entry.hash);
 			})
 		);
 	}
