@@ -98,4 +98,31 @@ describe('tipExtrasStatements', () => {
 			{ x1: 10, Rate: 6, N: 3 }
 		]);
 	});
+
+	it('writes extras to a row whose key is NULL', async () => {
+		await db.run(`
+			CREATE OR REPLACE TABLE cats AS
+			SELECT * FROM (VALUES ('a', 1.0), ('a', 3.0), (NULL, 5.0), (NULL, 7.0)) AS t(k, v)
+		`);
+		const compiler = new TransformCompiler([], { markType: 'bary', table: 'cats', x: 'x', y: 'y' });
+		const parts = buildQueryParts({ x: column('k'), y: castReal(avg('v')) }, undefined, false);
+		const markQuery = assembleQuery({ table: 'cats', parts, transformCompiler: compiler });
+		await db.run(`CREATE OR REPLACE TABLE tip AS ${markQuery.toString()}`);
+
+		const statements = tipExtrasStatements({
+			tooltipTable: 'tip',
+			table: 'cats',
+			parts,
+			tipExtras: { N: count() },
+			filter: [],
+			transformCompiler: compiler
+		});
+		for (const statement of statements!) await db.run(statement);
+
+		const rows = await db.all(`SELECT x, "N" FROM tip ORDER BY x NULLS LAST`);
+		expect(rows).toEqual([
+			{ x: 'a', N: 2 },
+			{ x: null, N: 2 }
+		]);
+	});
 });

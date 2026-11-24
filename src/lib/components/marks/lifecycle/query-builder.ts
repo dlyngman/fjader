@@ -593,7 +593,10 @@ export function tipExtrasStatements(opts: TipExtrasOptions): string[] | null {
 	const target = ident(tooltipTable);
 	const cols = Object.keys(tipExtras);
 	const set = cols.map((col) => `${ident(col)} = _s.${ident(col)}`).join(', ');
-	const on = joinCols.map((ch) => `${target}.${ident(ch)} = _s.${ident(ch)}`).join(' AND ');
+	// NULL-safe: a row the mark keeps with a NULL key (a NULL category) gets its values too.
+	const on = joinCols
+		.map((ch) => `${target}.${ident(ch)} IS NOT DISTINCT FROM _s.${ident(ch)}`)
+		.join(' AND ');
 	return [
 		...cols.map((col) => `ALTER TABLE ${target} ADD COLUMN ${ident(col)} DOUBLE`),
 		`UPDATE ${target} SET ${set} FROM (${sidecar.toString()}) _s WHERE ${on}`
