@@ -23,11 +23,12 @@ describe('backgroundBehind', () => {
 	type Node = { name: string; up: Node | null; bg: [number, number, number, number] };
 	const clear: [number, number, number, number] = [0, 0, 0, 0];
 	const node = (name: string, up: Node | null, bg = clear): Node => ({ name, up, bg });
-	const walk = (el: Node) =>
+	const walk = (el: Node, base: [number, number, number] = [255, 255, 255]) =>
 		backgroundBehind<Node>(
 			el,
 			(n) => n.bg,
-			(n) => n.up
+			(n) => n.up,
+			base
 		);
 
 	it('takes the first ancestor with a background, not the element itself', () => {
@@ -42,6 +43,26 @@ describe('backgroundBehind', () => {
 		const host = node('marimo-anywidget', page);
 		const shadowChild = node('div', host);
 		expect(walk(node('widget', shadowChild))).toEqual([255, 255, 255]);
+	});
+
+	it('blends a translucent tint over what is under it, not taking it alone', () => {
+		// A 5% black hover tint on a white page is still a light page.
+		const light = node('body', null, [255, 255, 255, 255]);
+		const tinted = node('cell', light, [0, 0, 0, 13]);
+		const onLight = walk(node('widget', tinted))!;
+		expect(schemeOfColor(...onLight)).toBe('light');
+		expect(onLight[0]).toBeCloseTo(242, 0);
+
+		// An 8% white highlight on a dark page is still a dark page.
+		const dark = node('body', null, [24, 24, 27, 255]);
+		const highlighted = node('cell', dark, [255, 255, 255, 20]);
+		expect(schemeOfColor(...walk(node('widget', highlighted))!)).toBe('dark');
+	});
+
+	it('blends translucent layers over the page colour when none is opaque', () => {
+		const top = node('cell', node('body', null), [0, 0, 0, 13]);
+		expect(schemeOfColor(...walk(node('widget', top), [255, 255, 255])!)).toBe('light');
+		expect(schemeOfColor(...walk(node('widget', top), [18, 18, 18])!)).toBe('dark');
 	});
 
 	it('is null when nothing behind has a background', () => {

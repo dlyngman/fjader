@@ -33,21 +33,37 @@ function parentOf(node: Element): Element | null {
 }
 
 /**
- * The colour the widget sits on: the first ancestor of `el` (not `el` itself)
- * whose background is not transparent, as sRGB, or null when all are (the page
- * has no background of its own). `colorOf` reads a node's background as
- * [r, g, b, a] (0–255); `parent` steps up, across shadow roots.
+ * The colour the widget sits on, as seen: its ancestors' backgrounds (not its
+ * own), from the nearest down to the first opaque one, blended over each other.
+ * A translucent tint (a hover or selection highlight) shades what is under it
+ * rather than deciding alone. With no opaque ancestor, the layers are blended
+ * over `base` (the page's colour where it has none); null when no ancestor has
+ * a background at all. `colorOf` reads a node's background as [r, g, b, a]
+ * (0–255); `parent` steps up, across shadow roots.
  */
 export function backgroundBehind<N>(
 	el: N,
 	colorOf: (node: N) => [number, number, number, number],
-	parent: (node: N) => N | null
+	parent: (node: N) => N | null,
+	base: [number, number, number]
 ): [number, number, number] | null {
+	const layers: [number, number, number, number][] = [];
 	for (let node = parent(el); node; node = parent(node)) {
-		const [r, g, b, a] = colorOf(node);
-		if (a > 0) return [r, g, b];
+		const color = colorOf(node);
+		if (color[3] === 0) continue;
+		layers.push(color);
+		if (color[3] >= 255) break;
 	}
-	return null;
+	if (layers.length === 0) return null;
+	let [r, g, b] = layers[layers.length - 1][3] >= 255 ? layers.pop()! : base;
+	for (let i = layers.length - 1; i >= 0; i--) {
+		const [lr, lg, lb, la] = layers[i];
+		const a = la / 255;
+		r = lr * a + r * (1 - a);
+		g = lg * a + g * (1 - a);
+		b = lb * a + b * (1 - a);
+	}
+	return [r, g, b];
 }
 
 let pixel: OffscreenCanvasRenderingContext2D | null = null;
@@ -68,13 +84,17 @@ const systemDark = () => matchMedia('(prefers-color-scheme: dark)');
 
 /** The scheme behind `el`: its background's, or the system's where it has none. */
 export function hostScheme(el: Element): Scheme {
+	const dark = systemDark().matches;
 	const behind = backgroundBehind<Element>(
 		el,
 		(node) => rgbOf(getComputedStyle(node).backgroundColor),
-		parentOf
+		parentOf,
+		// A page without a background of its own shows the browser's: white, or
+		// near black in dark mode.
+		dark ? [18, 18, 18] : [255, 255, 255]
 	);
 	if (behind) return schemeOfColor(...behind);
-	return systemDark().matches ? 'dark' : 'light';
+	return dark ? 'dark' : 'light';
 }
 
 /**
@@ -107,11 +127,19 @@ export function followHostScheme(el: HTMLElement): () => void {
 	}
 	const media = systemDark();
 	media.addEventListener('change', schedule);
-	// Once more after this task: an element not yet in the page when the widget
-	// first renders has no background behind it to read.
-	schedule();
+	// Once more when the element is first laid out: one not yet in the page when
+	// the widget renders has no background behind it to read, however late its
+	// host attaches it.
+	const placed = new ResizeObserver((entries) => {
+		if (entries.some((e) => e.contentRect.width > 0 || e.contentRect.height > 0)) {
+			placed.disconnect();
+			schedule();
+		}
+	});
+	placed.observe(el);
 	return () => {
 		observer.disconnect();
+		placed.disconnect();
 		media.removeEventListener('change', schedule);
 	};
 }
