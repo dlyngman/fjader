@@ -16,6 +16,7 @@
 	import type { DimValue } from '$lib/query-engine/categorical-identity';
 	import { identityKeyFor } from '$lib/query-engine/identity-key';
 	import { checkFacetCells } from './facet-limits';
+	import { FACET_LABEL_HEIGHT, hasTopYTitle } from './facet-margin';
 	import ChartCell from './ChartCell.svelte';
 	import {
 		DECLARATION_CHART,
@@ -194,6 +195,25 @@
 
 	const defaultMargin = { top: 30, right: 50, bottom: 35, left: 75 };
 	const cellMargin = { ...defaultMargin, ...marginOverride };
+
+	// The chart's declarations (axes, parallel axes, the plot border), read by
+	// every cell (charts/declarations).
+	const declarationRegistry = new DeclarationRegistry();
+	setContext(DECLARATION_REGISTRY, declarationRegistry);
+
+	/**
+	 * Room a facet cell adds above its plot. A y title on top needs two rows
+	 * there: the cell's facet label, at the top of the cell, and the title, just
+	 * above the plot; the top margin holds one, so a cell grows it by the label's
+	 * height, unless `margin.top` was given. The cell's own layout, not the chart's
+	 * margins: export and the palette see only the margins that were set. A legend
+	 * at the right starts where the plots do, so it moves down with them.
+	 */
+	const facetTitleRoom = $derived(
+		fx && marginOverride.top === undefined && hasTopYTitle(declarationRegistry.axes)
+			? FACET_LABEL_HEIGHT
+			: 0
+	);
 
 	// Layout — used for chartId (stable UUID) and legend positioning
 	const layout = new ChartLayout({
@@ -650,10 +670,6 @@
 	};
 
 	setContext('chart', marksContext);
-	// The chart's declarations (axes, parallel axes, the plot border), read by
-	// every cell (charts/declarations).
-	const declarationRegistry = new DeclarationRegistry();
-	setContext(DECLARATION_REGISTRY, declarationRegistry);
 	// The legends declared in the chart, by where it places them.
 	const topLegends = $derived(declarationRegistry.legends('top'));
 	const rightLegends = $derived(declarationRegistry.legends('right'));
@@ -735,6 +751,7 @@
 						cellChartId={facetChartIds[i]}
 						facetIndex={i}
 						facetLabel={String(categoryLabel(cat))}
+						extraTop={facetTitleRoom}
 						margin={{ top: 20, right: 10, bottom: 35, left: 55 }}
 						{scales}
 						{registerScaleType}
@@ -788,7 +805,7 @@
 	{#if rightLegends.length > 0}
 		<div
 			class="legend-container legend-right"
-			style:top="{cellMargin.top}px"
+			style:top="{cellMargin.top + facetTitleRoom}px"
 			style:left="{cellMargin.left + layout.innerWidth + 8}px"
 		>
 			{#each rightLegends as declared (declared)}
