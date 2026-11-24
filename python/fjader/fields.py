@@ -122,6 +122,15 @@ class ColorField:
 
 ColorChannel = FieldSpec | ColorField
 
+# A tooltip entry: a channel or column name, an aggregate, or either with a
+# display label, as ("Label", value) or {"Label": value}.
+TipEntry = (
+    str
+    | AggregateField
+    | tuple[str, str | AggregateField]
+    | dict[str, str | AggregateField]
+)
+
 
 def colors(
     field: str,

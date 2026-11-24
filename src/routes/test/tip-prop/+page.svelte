@@ -44,6 +44,12 @@
 				CROSS JOIN regions r
 			`);
 
+			// Month intervals for a RectYMark (x1/x2): four rows per interval
+			await queryEngine.exec(`
+				CREATE TABLE spans AS
+				SELECT month AS "start", month + 1 AS "end", region, revenue AS v FROM sales
+			`);
+
 			isLoaded = true;
 		} catch (error) {
 			console.error('Initialization error:', error);

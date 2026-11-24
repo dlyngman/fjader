@@ -282,7 +282,8 @@
 					channelFields: setup!.channelFieldMap,
 					colorColumn: 'stroke',
 					markColor,
-					displayFields: resolvedTip.displayFields
+					displayFields: resolvedTip.displayFields,
+					displayLabels: resolvedTip.displayLabels
 				})
 			);
 		});

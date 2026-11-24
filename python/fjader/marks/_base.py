@@ -10,17 +10,18 @@ from .._convert import clean_dict, serialize_value, to_camel_case
 
 if TYPE_CHECKING:
     from .._types import ColorScheme, DomainConfig, SortConfig
-    from ..fields import AggregateField
+    from ..fields import AggregateField, TipEntry
     from ..transforms._base import TransformSpec
 
 
 def _serialize_tip_entry(entry: Any) -> Any:
     """Serialize a single tip array entry.
 
-    Handles: strings, AggregateField, and labeled entries via either:
-    - tuple: ``("Min", fj.min_("value"))``
+    Handles: strings, AggregateField, and labeled entries (an aggregate or a
+    channel/column name) via either:
+    - tuple: ``("Min", fj.min_("value"))`` or ``("Month", "month_start")``
     - dict:  ``{"Min": fj.min_("value")}``
-    Both serialize to ``{"value": {...}, "label": "Min"}``.
+    Both serialize to ``{"value": ..., "label": "Min"}``.
     """
     if isinstance(entry, str):
         return entry
@@ -73,7 +74,7 @@ class Mark:
     # sorted by x (zone-map skipping in hover lookups); off by default.
     tooltip: bool | dict[str, bool] | None = None
     tooltip_proximity: Literal["x", "y", "xy"] | None = None
-    tip: list[str | AggregateField | dict[str, AggregateField]] | Literal[False] | None = None
+    tip: list[TipEntry] | Literal[False] | None = None
     fit_domain: Literal["x", "y"] | bool | None = None
 
     # DataFrame attachment (not serialized — data travels via binary traitlets)

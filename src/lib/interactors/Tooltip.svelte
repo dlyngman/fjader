@@ -41,6 +41,7 @@
 	let colorField = $derived(tm?.currentColorField ?? null);
 	let channelFields = $derived(tm?.currentChannelFields ?? null);
 	let displayFields = $derived(tm?.currentDisplayFields ?? null);
+	let displayLabels = $derived(tm?.currentDisplayLabels ?? null);
 	let px = $derived(tm?.pointerClientX ?? 0);
 	let py = $derived(tm?.pointerClientY ?? 0);
 
@@ -198,7 +199,7 @@
 		<div class="row">
 			<span class="key">
 				<span class="channel-icon">{channelIcons[getChannel(key)] ?? ''}</span>
-				{key}
+				{displayLabels?.[key] ?? key}
 			</span>
 			<span class="value">
 				{#if key === colorField && match?.color}

@@ -545,7 +545,8 @@
 					markColor,
 					proximityAxis: entry.tooltipProximity,
 					constantRadius: entry.dotRadius ? Number(entry.dotRadius) : undefined,
-					displayFields: resolvedTip.displayFields
+					displayFields: resolvedTip.displayFields,
+					displayLabels: resolvedTip.displayLabels
 				})
 			);
 		});

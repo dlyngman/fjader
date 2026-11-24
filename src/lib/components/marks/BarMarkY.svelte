@@ -327,6 +327,7 @@
 					bandAxes: { x: true },
 					markColor,
 					displayFields: resolvedTip.displayFields,
+					displayLabels: resolvedTip.displayLabels,
 					otherStats: (point) => {
 						const id = point.__bandIdX;
 						const facet = point.__facetId;

@@ -341,7 +341,8 @@
 					colorColumn: 'fill',
 					bandAxes: { x: true, y: true },
 					markColor,
-					displayFields: resolvedTip.displayFields
+					displayFields: resolvedTip.displayFields,
+					displayLabels: resolvedTip.displayLabels
 				})
 			);
 		});

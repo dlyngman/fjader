@@ -82,11 +82,6 @@ import {
 
 import { AdaptiveBinRung } from '$lib/lod/AdaptiveBinRung.svelte';
 import type { MarkLODSurface } from '$lib/lod/rung-types';
-
-/** A SQL identifier, quoted, with any double quote in it doubled. */
-function ident(name: string): string {
-	return `"${name.replace(/"/g, '""')}"`;
-}
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import { generateMarkId, buildChannelFieldMap } from '../utils';
 import { buildExpressionLabel, isLabeledTipEntry } from '../utils/channel-field-map';
@@ -123,6 +118,8 @@ import { binRowsMoved, binSpecKey, heldCoversView, isRebin, rebinTweens } from '
 import {
 	buildQueryParts,
 	assembleQuery,
+	tipExtrasStatements,
+	ident,
 	castReal,
 	type NullDrop,
 	type QueryParts
@@ -2637,52 +2634,17 @@ export class MarkLifecycleV2 {
 	): Promise<void> {
 		if (!this.#resolvedQueryParts) return;
 
-		// Identify non-aggregate channel columns — these are the join keys
-		const joinCols: string[] = [];
-		for (const [ch, expr] of Object.entries(this.#resolvedQueryParts.selectDef)) {
-			if (!isAggregateExpression(expr as ExprNode) && !isWindowExpression(expr)) {
-				joinCols.push(ch);
-			}
-		}
-
-		// Build sidecar select: group-by columns + tip extras
-		const sidecarSelect: Record<string, unknown> = {};
-		for (const ch of joinCols) {
-			sidecarSelect[ch] = this.#resolvedQueryParts.selectDef[ch];
-		}
-		Object.assign(sidecarSelect, tipExtras);
-
-		const sidecarParts = buildQueryParts(
-			sidecarSelect,
-			undefined,
-			this.#transformCompiler.hasSQLTransforms()
-		);
-		// The same rows as the mark: it leaves out what the mark leaves out. Its
-		// select holds every non-aggregate channel, so each dropped one is there.
-		sidecarParts.nullDrops = this.#resolvedQueryParts.nullDrops;
-
-		const filter = this.#filterGroup.selection.predicate(this.#route) ?? [];
-		const sidecarQuery = assembleQuery({
+		const statements = tipExtrasStatements({
+			tooltipTable: tableName,
 			table: this.#sourceTable,
-			parts: sidecarParts,
-			filter: filter as unknown[],
+			parts: this.#resolvedQueryParts,
+			tipExtras,
+			filter: this.#filterGroup.selection.predicate(this.#route) ?? [],
 			transformCompiler: this.#transformCompiler
 		});
-		if (!sidecarQuery) return;
+		if (!statements) return;
 
-		// ALTER TABLE to add columns, then UPDATE from sidecar query
-		const alterStmts = Object.keys(tipExtras).map(
-			(col) => `ALTER TABLE ${ident(tableName)} ADD COLUMN ${ident(col)} DOUBLE`
-		);
-		const setClauses = Object.keys(tipExtras)
-			.map((col) => `${ident(col)} = _s.${ident(col)}`)
-			.join(', ');
-		const joinCondition = joinCols
-			.map((ch) => `${ident(tableName)}.${ident(ch)} = _s.${ident(ch)}`)
-			.join(' AND ');
-		const updateStmt = `UPDATE ${ident(tableName)} SET ${setClauses} FROM (${sidecarQuery.toString()}) _s WHERE ${joinCondition}`;
-
-		await this.#queryEngine.exec([...alterStmts, updateStmt], {
+		await this.#queryEngine.exec(statements, {
 			class: cls,
 			connectionLocal: true
 		});

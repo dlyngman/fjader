@@ -165,9 +165,9 @@ export interface AggregateFieldSpec {
 	field?: string;
 }
 
-/** Labeled tip field: pairs an aggregate expression with a custom display label. */
+/** Labeled tip field: an aggregate expression or a column name, with a custom display label. */
 export interface LabeledTipFieldSpec {
-	value: AggregateFieldSpec;
+	value: AggregateFieldSpec | string;
 	label: string;
 }
 

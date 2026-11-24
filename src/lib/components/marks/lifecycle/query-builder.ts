@@ -530,3 +530,75 @@ export function assembleQuery(opts: AssembleOptions): Query {
 
 	return result;
 }
+
+export interface TipExtrasOptions {
+	/** The tooltip table the extras are written into. */
+	tooltipTable: string;
+	/** The table the mark's query reads (not a preagg table). */
+	table: string;
+	/** The mark's resolved query parts. */
+	parts: QueryParts;
+	/** The tip expressions, by the column they are written to. */
+	tipExtras: Record<string, unknown>;
+	/** The mark's selection predicate. */
+	filter: unknown[];
+	transformCompiler: TransformCompiler;
+}
+
+/** A SQL identifier, quoted, with any double quote in it doubled. */
+export function ident(name: string): string {
+	return `"${name.replace(/"/g, '""')}"`;
+}
+
+/**
+ * The statements that write a mark's tip expressions (aggregates, windows) into
+ * its tooltip table: a column per expression, then an UPDATE from a sidecar
+ * query keyed by the mark's non-aggregate channels. Null when the sidecar
+ * cannot be assembled.
+ *
+ * Of the SQL transforms only the row filters apply to the sidecar: they decide
+ * which source rows the aggregates see. The rest (stack, normalize, topN, rank,
+ * dense, …) read the mark's value channels, which the sidecar leaves out, and
+ * only reshape or reorder the mark's rows. The UPDATE joins onto the rows the
+ * mark kept, so a row they add (an Other bucket, padding) gets NULL.
+ */
+export function tipExtrasStatements(opts: TipExtrasOptions): string[] | null {
+	const { tooltipTable, table, parts, tipExtras, filter, transformCompiler } = opts;
+
+	// Non-aggregate channel columns — the join keys
+	const joinCols: string[] = [];
+	for (const [ch, expr] of Object.entries(parts.selectDef)) {
+		if (!isAggregateExpression(expr as ExprNode) && !isWindowExpression(expr)) {
+			joinCols.push(ch);
+		}
+	}
+
+	const select: Record<string, unknown> = {};
+	for (const ch of joinCols) select[ch] = parts.selectDef[ch];
+	Object.assign(select, tipExtras);
+
+	const sidecarParts = buildQueryParts(select, undefined, false);
+	// The same rows as the mark: it leaves out what the mark leaves out. Its
+	// select holds every non-aggregate channel, so each dropped one is there.
+	sidecarParts.nullDrops = parts.nullDrops;
+
+	const sidecar = assembleQuery({
+		table,
+		parts: sidecarParts,
+		filter: [...filter, ...transformCompiler.rowFilters()],
+		transformCompiler
+	});
+	if (!sidecar) return null;
+
+	const target = ident(tooltipTable);
+	const cols = Object.keys(tipExtras);
+	const set = cols.map((col) => `${ident(col)} = _s.${ident(col)}`).join(', ');
+	// NULL-safe: a row the mark keeps with a NULL key (a NULL category) gets its values too.
+	const on = joinCols
+		.map((ch) => `${target}.${ident(ch)} IS NOT DISTINCT FROM _s.${ident(ch)}`)
+		.join(' AND ');
+	return [
+		...cols.map((col) => `ALTER TABLE ${target} ADD COLUMN ${ident(col)} DOUBLE`),
+		`UPDATE ${target} SET ${set} FROM (${sidecar.toString()}) _s WHERE ${on}`
+	];
+}

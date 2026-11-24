@@ -110,6 +110,8 @@ export function buildExpressionLabel(value: unknown): string | null {
 export interface ResolvedTip {
 	extraSelect: Record<string, unknown>;
 	displayFields: string[] | null;
+	/** Display labels for display fields given a label (`{ value: 'col', label }`). */
+	displayLabels: Record<string, string> | null;
 }
 
 /**
@@ -122,6 +124,9 @@ export interface ResolvedTip {
  * - Unknown string → extra DB column to fetch (added to extraSelect)
  * - Expression node (aggregate/window) → tooltip-only, NOT added to extraSelect.
  *   These are injected lazily into the tooltip temp table query by MarkLifecycle.
+ * - Labeled expression node `{ value: expr, label }` → tooltip-only, shown as `label`.
+ * - Labeled field name `{ value: 'col', label }` → resolved as the unlabeled name
+ *   would be (channel, known field or extra column), shown as `label` (displayLabels).
  *
  * Returns `displayFields: null` when tip is unset (show-all default).
  */
@@ -129,23 +134,20 @@ export function resolveTip(
 	tip: (FieldRef | '*')[] | false | undefined,
 	channelSelect: Record<string, unknown>
 ): ResolvedTip {
-	if (!tip) return { extraSelect: {}, displayFields: null };
+	if (!tip) return { extraSelect: {}, displayFields: null, displayLabels: null };
 
 	const fieldMap = buildChannelFieldMap(channelSelect);
 	const knownFields = new Set(Object.values(fieldMap));
 	const extraSelect: Record<string, unknown> = {};
 	const displayFields: string[] = [];
+	const displayLabels: Record<string, string> = {};
 
-	for (let i = 0; i < tip.length; i++) {
-		const entry = tip[i];
+	const show = (key: string) => {
+		if (!displayFields.includes(key)) displayFields.push(key);
+	};
 
-		if (entry === '*') {
-			for (const field of Object.values(fieldMap)) {
-				if (!displayFields.includes(field)) displayFields.push(field);
-			}
-			continue;
-		}
-
+	/** The display key of a non-expression entry, adding it to the select if new. */
+	const resolveField = (entry: unknown, i: number): string => {
 		// Channel name shorthand (e.g., 'x' → 'bill_length')
 		// For range marks: 'x' falls back to 'x2', 'y' falls back to 'y2'
 		if (typeof entry === 'string') {
@@ -155,25 +157,37 @@ export function resolveTip(
 			} else if ((entry === 'x' || entry === 'y') && `${entry}2` in channelSelect) {
 				channel = `${entry}2`;
 			}
-			if (channel) {
-				const field = fieldMap[channel] ?? channel;
-				if (!displayFields.includes(field)) displayFields.push(field);
-				continue;
-			}
+			if (channel) return fieldMap[channel] ?? channel;
+			// Field name already in a channel (e.g., 'species' when fill='species')
+			if (knownFields.has(entry)) return entry;
 		}
+		// Extra field — added to the select
+		const key = typeof entry === 'string' ? entry : (extractFieldName(entry) ?? `_tip_${i}`);
+		if (!(key in channelSelect)) extraSelect[key] = entry;
+		return key;
+	};
 
-		// Field name already in a channel (e.g., 'species' when fill='species')
-		if (typeof entry === 'string' && knownFields.has(entry)) {
-			if (!displayFields.includes(entry)) displayFields.push(entry);
+	for (let i = 0; i < tip.length; i++) {
+		const entry = tip[i];
+
+		if (entry === '*') {
+			for (const field of Object.values(fieldMap)) show(field);
 			continue;
 		}
 
-		// Labeled tip entry: { value: expr, label: "Min" }
 		if (isLabeledTipEntry(entry)) {
-			const innerExpr = entry.value;
-			if (isNode(innerExpr)) {
-				if (!displayFields.includes(entry.label)) displayFields.push(entry.label);
+			// Labeled expression: { value: min('v'), label: "Min" } — tooltip-only,
+			// merged into the tooltip table under its label by MarkLifecycle
+			// (#getTipExtras, which takes every labeled node).
+			if (isNode(entry.value)) {
+				show(entry.label);
+				continue;
 			}
+			// Labeled field: { value: 'month_start', label: "Month" } — fetched as
+			// the unlabeled field would be, shown under the label.
+			const key = resolveField(entry.value, i);
+			show(key);
+			displayLabels[key] = entry.label;
 			continue;
 		}
 
@@ -181,15 +195,16 @@ export function resolveTip(
 		// Add its label to displayFields but NOT to extraSelect (avoids polluting main query).
 		const exprLabel = buildExpressionLabel(entry);
 		if (exprLabel) {
-			if (!displayFields.includes(exprLabel)) displayFields.push(exprLabel);
+			show(exprLabel);
 			continue;
 		}
 
-		// Extra string field — add to select and display list
-		const key = typeof entry === 'string' ? entry : (extractFieldName(entry) ?? `_tip_${i}`);
-		if (!(key in channelSelect)) extraSelect[key] = entry;
-		if (!displayFields.includes(key)) displayFields.push(key);
+		show(resolveField(entry, i));
 	}
 
-	return { extraSelect, displayFields };
+	return {
+		extraSelect,
+		displayFields,
+		displayLabels: Object.keys(displayLabels).length > 0 ? displayLabels : null
+	};
 }
