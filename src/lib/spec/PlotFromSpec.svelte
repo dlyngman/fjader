@@ -80,9 +80,11 @@
 		<!-- The chart's components as its children: each draws where it belongs,
 		     in every cell of a facet grid. The interactors register once for the
 		     chart, so a facet grid has one brush and one toggle, drawn in every cell. -->
-		<Frame />
-		<AxisLeft />
-		<AxisBottom />
+		{#if spec.frame !== false}
+			<Frame />
+		{/if}
+		<AxisLeft titlePlacement={spec.yTitlePlacement} titleOffset={spec.yTitleOffset} />
+		<AxisBottom titleAnchor={spec.xTitleAnchor} />
 		<MarginLabel />
 		<Grid />
 		{#each resolvedMarks as { component: MarkComponent, props }, i (i)}

@@ -18,7 +18,13 @@
 	onMount(async () => {
 		try {
 			await queryEngine.exec([
-				loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString()
+				loadParquet('penguins', `${window.location.origin}/data/penguins.parquet`).toString(),
+				// Feature importances with long names, as a bar_x of them has (cases 4–7)
+				`CREATE TABLE features AS SELECT * FROM (VALUES
+					('mean_transaction_amount_30d', 0.31), ('days_since_last_login', 0.22),
+					('number_of_support_tickets', 0.17), ('account_age_in_months', 0.12),
+					('region', 0.08)
+				) AS t(feature, importance)`
 			]);
 			isLoaded = true;
 		} catch (error) {
@@ -115,6 +121,64 @@
 						selection: 'specfacet'
 					}
 				]
+			}
+		},
+		{
+			title: '4. y title on top (yTitlePlacement)',
+			desc: 'Long category labels: the y title "feature" sits horizontally above the plot at the axis, not rotated into the labels.',
+			spec: {
+				height: 240,
+				xLabel: 'importance',
+				yLabel: 'feature',
+				yTitlePlacement: 'top',
+				marks: [{ mark: 'barX', table: 'features', x: 'importance', y: 'feature' }]
+			}
+		},
+		{
+			title: '5. y title clear of the labels (yTitleOffset: auto)',
+			desc: 'The rotated y title sits left of the widest label, as far as the left margin allows, instead of 32 px from the axis.',
+			spec: {
+				height: 240,
+				xLabel: 'importance',
+				yLabel: 'feature',
+				yTitleOffset: 'auto',
+				margin: { left: 230 },
+				marks: [{ mark: 'barX', table: 'features', x: 'importance', y: 'feature' }]
+			}
+		},
+		{
+			title: '6. x title at the end, no frame (xTitleAnchor, frame: false)',
+			desc: 'The x title "importance" sits at the right end of the axis, and there is no border around the plot area.',
+			spec: {
+				height: 240,
+				xLabel: 'importance',
+				yLabel: 'feature',
+				xTitleAnchor: 'end',
+				frame: false,
+				marks: [{ mark: 'barX', table: 'features', x: 'importance', y: 'feature' }]
+			}
+		},
+		{
+			title: '7. No titles (xLabel and yLabel empty)',
+			desc: 'Neither axis has a title: an empty label draws none, rather than falling back to the column name.',
+			spec: {
+				height: 240,
+				xLabel: '',
+				yLabel: '',
+				marks: [{ mark: 'barX', table: 'features', x: 'importance', y: 'feature' }]
+			}
+		},
+		{
+			title: '8. Facet grid: y title on top, no frame',
+			desc: 'One cell per island, no frames, each cell with its y title "species" above its plot. Known issue #143: in narrow cells the title collides with the facet label, since the top margin does not grow for both.',
+			spec: {
+				height: 260,
+				fx: 'island',
+				xLabel: 'count',
+				yLabel: 'species',
+				yTitlePlacement: 'top',
+				frame: false,
+				marks: [{ mark: 'barX', table: 'penguins', x: 'count()', y: 'species' }]
 			}
 		}
 	];
