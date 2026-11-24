@@ -6,6 +6,11 @@
  * concurrent loads of the same table from racing. Replacing a table's rows
  * (same name, new hash) clears the engine's caches, which would otherwise
  * keep serving results read from the old rows.
+ *
+ * The insert takes ownership of `ipcBytes`: DuckDB-WASM transfers its buffer to
+ * the worker, detaching it for the caller. Callers pass fresh bytes per load
+ * (the widget copies each table out of its blob; Streamlit's `serialize()`
+ * writes a new buffer per call). A view into a larger buffer is copied first.
  */
 
 import type { QueryEngine } from '$lib/query-engine/QueryEngine';

@@ -41,11 +41,11 @@ describe('loadArrowIPCTable', () => {
 
 	it('loads every table when their bytes are views into one shared buffer', async () => {
 		// Like DuckDB-WASM, the insert transfers (detaches) the buffer it is given.
-		const sizes: number[] = [];
+		const received = new Map<string, number[]>();
 		const engine = {
 			exec: async () => {},
-			insertArrowFromIPCStream: async (data: Uint8Array) => {
-				sizes.push(data.byteLength);
+			insertArrowFromIPCStream: async (data: Uint8Array, opts: { name: string }) => {
+				received.set(opts.name, Array.from(data));
 				structuredClone(data.buffer, { transfer: [data.buffer] });
 			},
 			clearQueryCache: async () => {}
@@ -55,7 +55,8 @@ describe('loadArrowIPCTable', () => {
 			loadArrowIPCTable(engine, 'shared_a', new Uint8Array(blob.buffer, 0, 3), 'h1'),
 			loadArrowIPCTable(engine, 'shared_b', new Uint8Array(blob.buffer, 3, 4), 'h1')
 		]);
-		expect(sizes).toEqual([3, 4]);
+		expect(received.get('shared_a')).toEqual([1, 2, 3]);
+		expect(received.get('shared_b')).toEqual([4, 5, 6, 7]);
 		expect(blob.byteLength).toBe(7);
 	});
 
