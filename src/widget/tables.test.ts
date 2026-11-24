@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
+	NoAnswerError,
 	requestTables,
 	tablesFromKernel,
 	takeTables,
@@ -110,7 +111,7 @@ describe('requestTables', () => {
 		vi.useFakeTimers();
 		const { model, listeners } = fakeModel();
 		const pending = requestTables(model, [A], 1000);
-		const check = expect(pending).rejects.toThrow(/the kernel did not send it/);
+		const check = expect(pending).rejects.toBeInstanceOf(NoAnswerError);
 		await vi.advanceTimersByTimeAsync(1000);
 		await check;
 		expect(listeners.size).toBe(0);
@@ -164,6 +165,16 @@ describe('tablesFromKernel', () => {
 		await expect(first(t)).rejects.toThrow('first widget gone');
 		expect(await second(t)).toBe(bytes);
 		expect(request).toHaveBeenCalledTimes(2);
+	});
+
+	it('a waiter does not ask again when the shared request got no answer', async () => {
+		const t = table();
+		const request = vi.fn(() => Promise.reject(new NoAnswerError('no kernel')));
+		const first = tablesFromKernel(model, [t], never, request);
+		const second = tablesFromKernel(model, [t], never, request);
+		await expect(first(t)).rejects.toThrow('no kernel');
+		await expect(second(t)).rejects.toBeInstanceOf(NoAnswerError);
+		expect(request).toHaveBeenCalledTimes(1);
 	});
 
 	it('asks again once a request has settled', async () => {

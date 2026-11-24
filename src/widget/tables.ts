@@ -73,6 +73,11 @@ export const REQUEST_TIMEOUT_MS = 20_000;
 
 let requestCount = 0;
 
+/** No answer came within REQUEST_TIMEOUT_MS: no kernel, or one too busy to answer. */
+export class NoAnswerError extends Error {
+	override name = 'NoAnswerError';
+}
+
 /**
  * Ask Python for tables the blob left out. Resolves with each table's bytes, by
  * name, once the reply arrives; rejects if the reply lacks one, carries other
@@ -122,7 +127,7 @@ export function requestTables(
 			() =>
 				done(() =>
 					reject(
-						new Error(
+						new NoAnswerError(
 							`This chart's data is not in the page, and the kernel did not send it ` +
 								`(table${wanted.length > 1 ? 's' : ''} ${wanted.map((t) => `"${t.name}"`).join(', ')}). ` +
 								'With a kernel running, re-run the cell. In a saved notebook, the chart was ' +
@@ -150,7 +155,9 @@ const keyOf = (entry: { name: string; hash: string }) => `${entry.name}\u0000${e
  * One request per table per page. On a reload every widget renders at once, and
  * every widget over the same DataFrame lacks the same table: the first asks, the
  * rest wait on its request (or on the table loading). A waiter whose request
- * fails asks for itself rather than fail with it. Every request is settled here,
+ * fails asks for itself rather than fail with it, unless it failed for want of an
+ * answer: asking the same silence again would only double the wait. Every
+ * request is settled here,
  * so one nobody else waits on (its tables loaded meanwhile) cannot go unhandled.
  *
  * A waiter may get the very bytes the asker loads. Only one insert uses them:
@@ -186,7 +193,10 @@ export function tablesFromKernel(
 		const loaded = whenLoaded(entry.name, entry.hash).then(() => null);
 		const shared = theirs.get(keyOf(entry));
 		const fetched = shared
-			? shared.then(pick, () => request(model, [entry]).then(pick))
+			? shared.then(pick, (error: unknown) => {
+					if (error instanceof NoAnswerError) throw error;
+					return request(model, [entry]).then(pick);
+				})
 			: own
 				? own.then(pick)
 				: Promise.reject(new Error(`No data for table "${entry.name}" in the widget`));
