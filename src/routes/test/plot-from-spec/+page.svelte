@@ -169,8 +169,8 @@
 			}
 		},
 		{
-			title: '8. Facet grid: y title on top, no frame',
-			desc: 'One cell per island, no frames. Each cell has the island name at the top and its y title "species" below it, just above the plot, without overlapping, however narrow the cells (#143).',
+			title: '8. Facet grid: y title on top, no frame, legend at the right',
+			desc: 'One cell per island, no frames. Each cell has the island name at the top and its y title "species" below it, just above the plot, without overlapping, however narrow the cells. The legend at the right starts level with the first row of plots (#143).',
 			spec: {
 				height: 260,
 				fx: 'island',
@@ -178,7 +178,8 @@
 				yLabel: 'species',
 				yTitlePlacement: 'top',
 				frame: false,
-				marks: [{ mark: 'barX', table: 'penguins', x: 'count()', y: 'species' }]
+				legend: { color: 'species', position: 'right' },
+				marks: [{ mark: 'barX', table: 'penguins', x: 'count()', y: 'species', fill: 'species' }]
 			}
 		}
 	];

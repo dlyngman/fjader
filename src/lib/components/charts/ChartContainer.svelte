@@ -206,10 +206,11 @@
 	 * there: the cell's facet label, at the top of the cell, and the title, just
 	 * above the plot; the top margin holds one, so a cell grows it by the label's
 	 * height, unless `margin.top` was given. The cell's own layout, not the chart's
-	 * margins: export and the palette see only the margins that were set.
+	 * margins: export and the palette see only the margins that were set. A legend
+	 * at the right starts where the plots do, so it moves down with them.
 	 */
 	const facetTitleRoom = $derived(
-		marginOverride.top === undefined && hasTopYTitle(declarationRegistry.axes)
+		fx && marginOverride.top === undefined && hasTopYTitle(declarationRegistry.axes)
 			? FACET_LABEL_HEIGHT
 			: 0
 	);
@@ -804,7 +805,7 @@
 	{#if rightLegends.length > 0}
 		<div
 			class="legend-container legend-right"
-			style:top="{cellMargin.top}px"
+			style:top="{cellMargin.top + facetTitleRoom}px"
 			style:left="{cellMargin.left + layout.innerWidth + 8}px"
 		>
 			{#each rightLegends as declared (declared)}
