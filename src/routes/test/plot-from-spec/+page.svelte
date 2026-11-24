@@ -170,7 +170,7 @@
 		},
 		{
 			title: '8. Facet grid: y title on top, no frame',
-			desc: 'One cell per island, no frames, each cell with its y title "species" above its plot. Known issue #143: in narrow cells the title collides with the facet label, since the top margin does not grow for both.',
+			desc: 'One cell per island, no frames. Each cell has the island name at the top and its y title "species" below it, just above the plot, without overlapping, however narrow the cells (#143).',
 			spec: {
 				height: 260,
 				fx: 'island',

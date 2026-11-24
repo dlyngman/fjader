@@ -1251,10 +1251,13 @@
 		overflow: visible;
 	}
 
+	/* 22px tall (FACET_LABEL_HEIGHT): the chart's top margin grows by it when a
+	   y title sits above the plot too (facet-margin.ts). */
 	.facet-label {
 		text-align: center;
 		font-family: var(--fjader-font, system-ui, sans-serif);
 		font-size: 12px;
+		line-height: 14px;
 		font-weight: 500;
 		color: var(--fjader-text-secondary, #6b7280);
 		padding: 4px 0;

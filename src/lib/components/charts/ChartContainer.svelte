@@ -16,6 +16,7 @@
 	import type { DimValue } from '$lib/query-engine/categorical-identity';
 	import { identityKeyFor } from '$lib/query-engine/identity-key';
 	import { checkFacetCells } from './facet-limits';
+	import { FACET_LABEL_HEIGHT, hasTopYTitle } from './facet-margin';
 	import ChartCell from './ChartCell.svelte';
 	import {
 		DECLARATION_CHART,
@@ -193,11 +194,28 @@
 	}
 
 	const defaultMargin = { top: 30, right: 50, bottom: 35, left: 75 };
-	const cellMargin = { ...defaultMargin, ...marginOverride };
+	const baseMargin = { ...defaultMargin, ...marginOverride };
+
+	// The chart's declarations (axes, parallel axes, the plot border), read by
+	// every cell (charts/declarations).
+	const declarationRegistry = new DeclarationRegistry();
+	setContext(DECLARATION_REGISTRY, declarationRegistry);
+
+	/**
+	 * The cells' margins. A facet grid whose y axis puts its title on top needs
+	 * two rows above each plot: the cell's facet label, at the top of the cell,
+	 * and the title, just above the plot. Both sit in the top margin, so it
+	 * grows by the label's height, unless `margin.top` was given.
+	 */
+	const cellMargin = $derived(
+		fx && marginOverride.top === undefined && hasTopYTitle(declarationRegistry.axes)
+			? { ...baseMargin, top: baseMargin.top + FACET_LABEL_HEIGHT }
+			: baseMargin
+	);
 
 	// Layout — used for chartId (stable UUID) and legend positioning
 	const layout = new ChartLayout({
-		margin: cellMargin,
+		margin: baseMargin,
 		height: 250,
 		clipPadding
 	});
@@ -650,10 +668,6 @@
 	};
 
 	setContext('chart', marksContext);
-	// The chart's declarations (axes, parallel axes, the plot border), read by
-	// every cell (charts/declarations).
-	const declarationRegistry = new DeclarationRegistry();
-	setContext(DECLARATION_REGISTRY, declarationRegistry);
 	// The legends declared in the chart, by where it places them.
 	const topLegends = $derived(declarationRegistry.legends('top'));
 	const rightLegends = $derived(declarationRegistry.legends('right'));
