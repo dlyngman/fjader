@@ -194,7 +194,7 @@
 	}
 
 	const defaultMargin = { top: 30, right: 50, bottom: 35, left: 75 };
-	const baseMargin = { ...defaultMargin, ...marginOverride };
+	const cellMargin = { ...defaultMargin, ...marginOverride };
 
 	// The chart's declarations (axes, parallel axes, the plot border), read by
 	// every cell (charts/declarations).
@@ -202,20 +202,21 @@
 	setContext(DECLARATION_REGISTRY, declarationRegistry);
 
 	/**
-	 * The cells' margins. A facet grid whose y axis puts its title on top needs
-	 * two rows above each plot: the cell's facet label, at the top of the cell,
-	 * and the title, just above the plot. Both sit in the top margin, so it
-	 * grows by the label's height, unless `margin.top` was given.
+	 * Room a facet cell adds above its plot. A y title on top needs two rows
+	 * there: the cell's facet label, at the top of the cell, and the title, just
+	 * above the plot; the top margin holds one, so a cell grows it by the label's
+	 * height, unless `margin.top` was given. The cell's own layout, not the chart's
+	 * margins: export and the palette see only the margins that were set.
 	 */
-	const cellMargin = $derived(
-		fx && marginOverride.top === undefined && hasTopYTitle(declarationRegistry.axes)
-			? { ...baseMargin, top: baseMargin.top + FACET_LABEL_HEIGHT }
-			: baseMargin
+	const facetTitleRoom = $derived(
+		marginOverride.top === undefined && hasTopYTitle(declarationRegistry.axes)
+			? FACET_LABEL_HEIGHT
+			: 0
 	);
 
 	// Layout — used for chartId (stable UUID) and legend positioning
 	const layout = new ChartLayout({
-		margin: baseMargin,
+		margin: cellMargin,
 		height: 250,
 		clipPadding
 	});
@@ -749,6 +750,7 @@
 						cellChartId={facetChartIds[i]}
 						facetIndex={i}
 						facetLabel={String(categoryLabel(cat))}
+						extraTop={facetTitleRoom}
 						margin={{ top: 20, right: 10, bottom: 35, left: 55 }}
 						{scales}
 						{registerScaleType}

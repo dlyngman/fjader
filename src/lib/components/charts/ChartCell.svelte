@@ -46,6 +46,8 @@
 		cellChartId: string;
 		facetIndex?: number | null;
 		facetLabel?: string | null;
+		/** Px added to the top margin, for a facet label and a y title on top (ChartContainer). */
+		extraTop?: number;
 		margin?: Margin;
 		height?: number;
 		clipPadding?: number;
@@ -79,6 +81,7 @@
 		cellChartId,
 		facetIndex = null,
 		facetLabel = null,
+		extraTop = 0,
 		margin = { top: 30, right: 50, bottom: 35, left: 75 },
 		height = 250,
 		clipPadding = 0,
@@ -133,7 +136,7 @@
 	$effect(() => {
 		const cp = chartConfig.chartProps;
 		layout.updateMargin({
-			top: cp?.marginTop ?? margin.top,
+			top: (cp?.marginTop ?? margin.top) + extraTop,
 			right: cp?.marginRight ?? margin.right,
 			bottom: cp?.marginBottom ?? margin.bottom,
 			left: cp?.marginLeft ?? margin.left
@@ -1251,7 +1254,7 @@
 		overflow: visible;
 	}
 
-	/* 22px tall (FACET_LABEL_HEIGHT): the chart's top margin grows by it when a
+	/* 22px tall (FACET_LABEL_HEIGHT): a facet cell's top margin grows by it when a
 	   y title sits above the plot too (facet-margin.ts). */
 	.facet-label {
 		text-align: center;
