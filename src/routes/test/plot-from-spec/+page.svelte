@@ -167,6 +167,19 @@
 				yLabel: '',
 				marks: [{ mark: 'barX', table: 'features', x: 'importance', y: 'feature' }]
 			}
+		},
+		{
+			title: '8. Facet grid: y title on top, no frame',
+			desc: 'One cell per island, no frames, each cell with its y title "species" above its plot. Known issue #143: in narrow cells the title collides with the facet label, since the top margin does not grow for both.',
+			spec: {
+				height: 260,
+				fx: 'island',
+				xLabel: 'count',
+				yLabel: 'species',
+				yTitlePlacement: 'top',
+				frame: false,
+				marks: [{ mark: 'barX', table: 'penguins', x: 'count()', y: 'species' }]
+			}
 		}
 	];
 </script>
