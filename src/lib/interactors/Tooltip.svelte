@@ -43,6 +43,7 @@
 	let channelFields = $derived(tm?.currentChannelFields ?? null);
 	let displayFields = $derived(tm?.currentDisplayFields ?? null);
 	let displayLabels = $derived(tm?.currentDisplayLabels ?? null);
+	let dateFields = $derived(tm?.currentDateFields ?? []);
 	let px = $derived(tm?.pointerClientX ?? 0);
 	let py = $derived(tm?.pointerClientY ?? 0);
 
@@ -164,9 +165,9 @@
 
 	function formatValue(key: string, value: unknown) {
 		if (formatters[key]) return formatters[key](value);
-		// A date or timestamp column (TooltipManager reads them as Dates).
-		if (value instanceof Date) return formatDate(value);
 		if (typeof value === 'number') {
+			// A date or timestamp column, read as epoch milliseconds.
+			if (dateFields.includes(key)) return formatDate(new Date(value));
 			const channel = getChannel(key);
 			const fmt = channel === 'x' ? xFormat : channel === 'y' ? yFormat : null;
 			if (fmt) return fmt(value);
