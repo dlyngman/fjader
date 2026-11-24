@@ -34,10 +34,18 @@ describe('resolveSortChannel', () => {
 		expect(resolveSortChannel(desc('x', 'count'), counted).sort).toEqual(desc('x', 'y'));
 	});
 
-	it('prefers a channel other than the sorted axis', () => {
-		// fill and y both read 'feature'; sorting y by it means by fill
+	it('prefers a value channel over the sorted axis', () => {
+		// bar_x(x=sum("v"), y="v"): sorting y by v means by the summed x
+		const fields = buildChannelFieldMap({ x: sum('v'), y: 'v' });
+		expect(resolveSortChannel(desc('y', 'v'), fields, new Set(['y'])).sort).toEqual(desc('y', 'x'));
+	});
+
+	it('skips an ordinal colour reading the same column, for the axis itself', () => {
+		// fill="feature" is an ordinal colour: categorical, so y itself is used
 		const fields = buildChannelFieldMap({ x: 'importance', y: 'feature', fill: 'feature' });
-		expect(resolveSortChannel(desc('y', 'feature'), fields).sort).toEqual(desc('y', 'fill'));
+		expect(resolveSortChannel(desc('y', 'feature'), fields, new Set(['y', 'fill'])).sort).toEqual(
+			desc('y', 'y')
+		);
 	});
 
 	it("falls back to the axis's own channel (sorting categories by themselves)", () => {
