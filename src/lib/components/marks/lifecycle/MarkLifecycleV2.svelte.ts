@@ -83,7 +83,7 @@ import {
 import { AdaptiveBinRung } from '$lib/lod/AdaptiveBinRung.svelte';
 import type { MarkLODSurface } from '$lib/lod/rung-types';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
-import { generateMarkId, buildChannelFieldMap } from '../utils';
+import { generateMarkId, buildChannelFieldMap, resolveSortChannel } from '../utils';
 import { buildExpressionLabel, isLabeledTipEntry } from '../utils/channel-field-map';
 import { detectChannelsNeedingDataDomain } from './domain-computation';
 import {
@@ -506,10 +506,24 @@ export class MarkLifecycleV2 {
 	 * the data, so the listed categories are shown in the listed order.
 	 */
 	get #rankingSort(): NormalizedSortConfig {
-		const sort = this.#reactiveConfig.sort ?? null;
-		if (!sort) return null;
-		return this.#reactiveConfig.domain?.[sort.axis]?.length ? null : sort;
+		const given = this.#reactiveConfig.sort ?? null;
+		if (!given) return null;
+		if (this.#reactiveConfig.domain?.[given.axis]?.length) return null;
+		// A column name becomes the channel that reads it: the rank transform
+		// reads the query's channel aliases.
+		const { sort, unresolved } = resolveSortChannel(given, this.channelFieldMap);
+		if (unresolved && this.#unresolvedSortWarned !== given.channel) {
+			this.#unresolvedSortWarned = given.channel;
+			console.warn(
+				`sort: "${given.channel}" is neither a channel nor a column of this mark ` +
+					`(channels: ${Object.keys(this.#config.select).join(', ')}), so the ${given.axis} axis is not sorted.`
+			);
+		}
+		return sort;
 	}
+
+	/** The unresolved sort name last warned about, so a getter read often warns once. */
+	#unresolvedSortWarned: string | null = null;
 
 	// --- Tooltip ---
 	#tooltipTableName: string;

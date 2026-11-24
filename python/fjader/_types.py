@@ -42,8 +42,10 @@ LineAnchor = Literal["top", "middle", "bottom"]
 class SortConfig(TypedDict, total=False):
     """Sort configuration for a mark's axis.
 
-    Specify either ``x`` or ``y`` (not both) with the column name to sort by,
-    and optionally ``order`` for direction (defaults to ``'asc'``).
+    Specify either ``x`` or ``y`` (not both) with what to sort that axis by,
+    and optionally ``order`` for direction (defaults to ``'asc'``). The value
+    is a column the mark reads (``'importance'``) or one of its channels
+    (``'x'``); either way the axis is ordered by that channel's values.
 
     Examples::
 
@@ -53,10 +55,10 @@ class SortConfig(TypedDict, total=False):
     """
 
     x: str
-    """Column name to sort the x-axis by."""
+    """Column or channel to sort the x-axis by."""
 
     y: str
-    """Column name to sort the y-axis by."""
+    """Column or channel to sort the y-axis by."""
 
     order: SortOrder
     """Sort direction: ``'asc'`` (default) or ``'desc'``."""

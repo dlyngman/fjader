@@ -360,6 +360,11 @@ export type CurveType =
 // Sort configuration for marks
 // ---------------------------------------------------------------------------
 
+/**
+ * A `sort` prop: order the `x` or `y` band axis by a column the mark reads
+ * (`{ y: 'importance' }`) or by one of its channels (`{ y: 'x' }`), `order`
+ * `'asc'` (the default) or `'desc'`.
+ */
 export interface SortConfig {
 	x?: string;
 	y?: string;
