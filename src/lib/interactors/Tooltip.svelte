@@ -50,7 +50,9 @@
 	// The tooltip's size, from a ResizeObserver: read after the browser's own
 	// layout, so measuring forces none. Its width is a high-water mark (grows,
 	// never shrinks) so it does not jitter between points: content wider than
-	// min-width makes the observed width exceed it, and min-width follows.
+	// min-width makes the observed width exceed it, and min-width follows. The
+	// observed size is the border box, so min-width applies to the border box
+	// too (box-sizing below), whatever the host page's CSS.
 	let minWidth = $state(0);
 	let tooltipW = $state(0);
 	let tooltipH = $state(0);
@@ -239,6 +241,10 @@
 		margin: 0;
 		border: 0;
 		overflow: visible;
+		/* min-width is the high-water mark of the observed border box (measure):
+		   set in that same box, or each round adds the padding and the tooltip
+		   grows without end where the page leaves the default content-box (Jupyter). */
+		box-sizing: border-box;
 		/* Colours, highest first: the app's --fjader-tooltip-bg/-text; the mode a
 		   data-fjader-tooltip ancestor picks; contrast. light-dark() resolves against
 		   the color-scheme the tooltip inherits from the chart's DOM ancestors. */

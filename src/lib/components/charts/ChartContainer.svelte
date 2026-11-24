@@ -718,7 +718,12 @@
 	<WebGPUCanvas components={children} />
 {/snippet}
 
-<div class="figure-container" bind:clientWidth={layout.width} data-fjader-tooltip={tooltipScheme}>
+<div
+	class="figure-container"
+	data-fjader-chart
+	bind:clientWidth={layout.width}
+	data-fjader-tooltip={tooltipScheme}
+>
 	{#if topLegends.length > 0}
 		<div
 			class="legend-container legend-top"
@@ -816,6 +821,22 @@
 </div>
 
 <style>
+	/* A chart lays itself out in border-box, the way it is developed and tested:
+	   its pages (open-props' normalize) and marimo (Tailwind's reset) set it on
+	   every element, Jupyter leaves the default content-box. Scoped to the chart,
+	   so the host page keeps its own; :where() gives it no specificity, so a
+	   component's own box-sizing still wins. */
+	:global {
+		:where(
+			[data-fjader-chart],
+			[data-fjader-chart] *,
+			[data-fjader-chart] ::before,
+			[data-fjader-chart] ::after
+		) {
+			box-sizing: border-box;
+		}
+	}
+
 	.figure-container {
 		display: flex;
 		flex-direction: column;
