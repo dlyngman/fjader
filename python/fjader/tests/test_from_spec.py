@@ -105,8 +105,8 @@ class TestFromSpecWithData:
         assert table_name.startswith("_df_")
         assert table_name != "mydata"
 
-    def test_to_full_spec_returns_dataframes(self):
-        """_to_full_spec returns the dataframes dict for widget serialization."""
+    def test_to_full_spec_returns_snapshots(self):
+        """_to_full_spec returns each table's snapshot, keyed by its hashed name."""
         pytest.importorskip("pyarrow")
 
         df = _frame({"a": [1]})
@@ -115,11 +115,12 @@ class TestFromSpecWithData:
             {"marks": [{"mark": "dot", "table": "t", "x": "a", "y": "a"}]},
             data={"t": df},
         )
-        spec_dict, dataframes = chart._to_full_spec()
-        assert len(dataframes) == 1
-        # The key should be the hashed name
-        key = next(iter(dataframes))
+        _spec_dict, tables = chart._to_full_spec()
+        assert len(tables) == 1
+        key, table = next(iter(tables.items()))
         assert key.startswith("_df_")
+        assert key == table.name
+        assert table.ipc
 
     def test_no_data_empty_dataframes(self):
         """Without data kwarg, dataframes dict is empty."""

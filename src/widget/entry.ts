@@ -6,14 +6,16 @@
  */
 
 import { renderFromData, showError, type FjaderHandle, type ManifestEntry } from './core';
+import { isLoaded, whenLoaded } from './loadArrowIPC';
+import { tablesFromKernel, takeTables, type TableMessaging, type WidgetTableEntry } from './tables';
 import '$lib/theme.css';
 
-interface AnywidgetModel {
+interface AnywidgetModel extends TableMessaging {
 	get(key: 'spec'): string;
 	get(key: 'data_manifest'): string;
 	get(key: 'data_blob'): DataView;
-	on(event: string, callback: () => void): void;
-	off(event: string, callback: () => void): void;
+	on(event: string, callback: (...args: never[]) => void): void;
+	off(event: string, callback: (...args: never[]) => void): void;
 }
 
 interface RenderContext {
@@ -22,28 +24,13 @@ interface RenderContext {
 }
 
 async function doRender(model: AnywidgetModel, el: HTMLElement): Promise<FjaderHandle> {
-	const blobView: DataView = model.get('data_blob');
 	const manifestJson = model.get('data_manifest');
+	const manifest = JSON.parse(manifestJson) as WidgetTableEntry[];
 
-	// Copy each table out of the blob now, before any await: anywidget may
-	// detach the blob's ArrayBuffer later. Each copy owns its buffer, which
-	// DuckDB-WASM's insert transfers to its worker without a further copy.
-	//
-	// Memory: the blob belongs to the model and stays for the widget's lifetime
-	// (a re-render reads it again), so a load holds the data twice on the main
-	// thread until the inserts transfer the copies. Copying each table just
-	// before its insert would lower the peak to blob + largest table, but only
-	// if anywidget doesn't detach the blob meanwhile (unverified). After loading,
-	// the blob and DuckDB's table still hold the data twice; freeing the blob
-	// would need the Python side to clear `data_blob`.
-	const tables = new Map<string, Uint8Array>();
-	for (const entry of JSON.parse(manifestJson) as (ManifestEntry & {
-		offset: number;
-		length: number;
-	})[]) {
-		const start = blobView.byteOffset + entry.offset;
-		tables.set(entry.name, new Uint8Array(blobView.buffer.slice(start, start + entry.length)));
-	}
+	// Before any await: the tables in the blob are copied out now (see takeTables).
+	const { copies, missing } = takeTables(manifest, model.get('data_blob'), isLoaded);
+	// The tables the blob left out: asked of the kernel, once per page.
+	const fromKernel = missing.length > 0 ? tablesFromKernel(model, missing, whenLoaded) : null;
 
 	// Size the container to the exact height computed by the Python wrapper.
 	// Marimo / Jupyter constrain el's height; setting an explicit pixel value
@@ -56,10 +43,15 @@ async function doRender(model: AnywidgetModel, el: HTMLElement): Promise<FjaderH
 	}
 
 	const handle = await renderFromData(el, specJson, manifestJson, (entry: ManifestEntry) => {
-		const bytes = tables.get(entry.name);
-		if (!bytes) throw new Error(`No data for table "${entry.name}" in the widget blob`);
-		return bytes;
+		const copy = copies.get(entry.name);
+		if (copy) return copy;
+		if (!fromKernel) throw new Error(`No data for table "${entry.name}" in the widget`);
+		return fromKernel(entry);
 	});
+
+	// Tell Python which tables this page holds: later widgets leave them out.
+	const loaded = manifest.filter((e) => isLoaded(e.name, e.hash)).map((e) => e.hash);
+	if (loaded.length > 0) model.send({ type: 'fjader:loaded', hashes: loaded });
 
 	return handle;
 }

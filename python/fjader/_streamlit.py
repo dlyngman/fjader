@@ -16,9 +16,7 @@ import json
 import os
 from typing import Any
 
-import narwhals as nw
-
-from ._data import df_to_ipc_cached
+from ._data import TableSnapshot
 from ._display import Displayable
 
 try:
@@ -38,9 +36,15 @@ if not os.path.isfile(os.path.join(_FRONTEND_DIR, "index.html")):
 _component = components.declare_component("fjader", path=_FRONTEND_DIR)
 
 
-def _to_pandas(df: Any) -> Any:
-    """Convert any DataFrame to pandas for Streamlit's native Arrow serialization."""
-    return nw.from_native(df, eager_only=True).to_pandas()
+def _to_pandas(table: TableSnapshot) -> Any:
+    """A snapshot's rows as pandas, for Streamlit's native Arrow serialization.
+
+    Read from the snapshot's bytes, not from the DataFrame: the rows sent are the
+    ones the table's name stands for, even if the DataFrame changed since.
+    """
+    from pyarrow import ipc
+
+    return ipc.open_stream(table.ipc).read_all().to_pandas()
 
 
 def render(
@@ -58,7 +62,7 @@ def render(
     Returns:
         The component value (None unless selections are implemented).
     """
-    spec_dict, dataframes = obj._to_full_spec()
+    spec_dict, tables = obj._to_full_spec()
 
     # Inject heights into the spec and compute the actual iframe height.
     iframe_height = _inject_height(spec_dict, height)
@@ -66,11 +70,10 @@ def render(
     manifest: list[dict[str, str]] = []
     table_args: dict[str, Any] = {}
 
-    for i, (table_name, df) in enumerate(dataframes.items()):
-        h, _ = df_to_ipc_cached(df)
+    for i, (table_name, table) in enumerate(tables.items()):
         arg_key = f"_df_{i}"
-        table_args[arg_key] = _to_pandas(df)
-        manifest.append({"name": table_name, "hash": h, "arg": arg_key})
+        table_args[arg_key] = _to_pandas(table)
+        manifest.append({"name": table_name, "hash": table.hash, "arg": arg_key})
 
     return _component(
         spec=json.dumps(spec_dict),

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal
 from .._convert import clean_dict, serialize_value, to_camel_case
 
 if TYPE_CHECKING:
+    from .._data import TableSnapshot
     from .._types import ColorScheme, DomainConfig, SortConfig
     from ..fields import AggregateField, TipEntry
     from ..transforms._base import TransformSpec
@@ -82,6 +83,9 @@ class Mark:
 
     # Internal state (not serialized)
     _opts: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
+    # The data's rows as taken when the mark was made (see TableSnapshot): what
+    # its table name means, and what is shipped for it.
+    _snapshot: TableSnapshot | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.data is not None and self.table is not None:
@@ -90,10 +94,10 @@ class Mark:
                 "Use 'data' for inline DataFrames or 'table' for pre-loaded DuckDB tables."
             )
         if self.data is not None:
-            from .._data import df_to_ipc_cached
+            from .._data import snapshot
 
-            h, _ = df_to_ipc_cached(self.data)
-            self.table = f"_df_{h}"
+            self._snapshot = snapshot(self.data)
+            self.table = self._snapshot.name
 
     def to_mark_dict(self) -> dict[str, Any]:
         """Serialize to a MarkSpec dict (without FjaderSpec wrapper)."""
@@ -128,14 +132,14 @@ class Mark:
     def to_json(self, **kwargs: Any) -> str:
         return json.dumps(self.to_dict(), **kwargs)
 
-    def _collect_data(self) -> dict[str, Any]:
-        """Return {table_name: df} for marks with data attached."""
-        if self.data is not None and self.table is not None:
-            return {self.table: self.data}
+    def _collect_data(self) -> dict[str, TableSnapshot]:
+        """Return {table_name: snapshot} for marks with data attached."""
+        if self._snapshot is not None:
+            return {self._snapshot.name: self._snapshot}
         return {}
 
     def _to_full_spec(self) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Return (spec_dict, dataframes_dict) for widget rendering."""
+        """Return (spec_dict, {table name: TableSnapshot}) for widget rendering."""
         from ..plot import Plot
 
         p = Plot(self, **self._opts)

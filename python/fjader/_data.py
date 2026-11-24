@@ -1,4 +1,4 @@
-"""DataFrame → Arrow IPC serialization + content-hash deduplication.
+"""DataFrame → Arrow IPC snapshot, named by its content.
 
 Uses narwhals for DataFrame-library-agnostic handling. Accepts pandas,
 polars, cudf, modin, etc.
@@ -9,18 +9,8 @@ from __future__ import annotations
 import hashlib
 import io
 import weakref
+from dataclasses import dataclass
 from typing import Any
-
-
-# Module-level cache: weakref to df object → (hash, ipc_bytes).
-# Uses weak references so cache entries are evicted when the DataFrame
-# is garbage-collected, preventing unbounded memory growth in long sessions.
-_hash_cache: dict[int, tuple[weakref.ref, str, bytes]] = {}
-
-
-def _cleanup_ref(obj_id: int) -> None:
-    """Remove cache entry when the DataFrame is garbage-collected."""
-    _hash_cache.pop(obj_id, None)
 
 
 def df_to_arrow_ipc(df: Any) -> bytes:
@@ -63,24 +53,43 @@ def content_hash(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()[:16]
 
 
-def df_to_ipc_cached(df: Any) -> tuple[str, bytes]:
-    """Serialize DataFrame to Arrow IPC with caching by object identity.
+@dataclass(frozen=True, eq=False)
+class TableSnapshot:
+    """A DataFrame's rows as Arrow IPC, taken once, with the hash that names them.
 
-    The same DataFrame object serialized multiple times reuses cached bytes.
-    Cache entries are automatically evicted when the DataFrame is garbage-collected.
-
-    Returns (content_hash, ipc_bytes).
+    The table a chart reads is named by this hash (``_df_<hash>``), so a name always
+    means these bytes. Everything that ships the table (the widget's blob, a reply
+    to the browser asking for it, Streamlit) ships these bytes, never the DataFrame
+    again: a DataFrame changed in place after the snapshot cannot put new rows under
+    the old name, or old rows under a new one.
     """
-    obj_id = id(df)
-    cached = _hash_cache.get(obj_id)
-    if cached is not None:
-        ref, h, ipc_bytes = cached
-        # Verify the weakref is still alive (same object, not reused id)
-        if ref() is df:
-            return h, ipc_bytes
 
-    ipc_bytes = df_to_arrow_ipc(df)
-    h = content_hash(ipc_bytes)
-    ref = weakref.ref(df, lambda _: _cleanup_ref(obj_id))
-    _hash_cache[obj_id] = (ref, h, ipc_bytes)
-    return h, ipc_bytes
+    hash: str
+    ipc: bytes
+
+    @property
+    def name(self) -> str:
+        return f"_df_{self.hash}"
+
+
+# Live snapshots by hash: marks over the same rows share one copy of the bytes,
+# released with the last mark (or widget) holding it.
+_snapshots: weakref.WeakValueDictionary[str, TableSnapshot] = weakref.WeakValueDictionary()
+
+
+def snapshot(df: Any) -> TableSnapshot:
+    """Serialize a DataFrame now, and share the snapshot of the same content.
+
+    Serialized on every call, never cached by the DataFrame: one can change in
+    place (pandas ``df.loc[...] = ...``, polars ``df[0, "y"] = ...``) and keep its
+    identity. What is shared is keyed by the content's hash, so it is always the
+    same rows.
+    """
+    ipc = df_to_arrow_ipc(df)
+    h = content_hash(ipc)
+    existing = _snapshots.get(h)
+    if existing is not None:
+        return existing
+    taken = TableSnapshot(h, ipc)
+    _snapshots[h] = taken
+    return taken

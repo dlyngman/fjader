@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { loadArrowIPCTable } from './loadArrowIPC';
+import { isLoaded, loadArrowIPCTable, whenLoaded } from './loadArrowIPC';
 import type { QueryEngine } from '$lib/query-engine/QueryEngine';
 
 /**
@@ -79,5 +79,24 @@ describe('loadArrowIPCTable', () => {
 			'insert replaced',
 			'clearQueryCache'
 		]);
+	});
+});
+
+describe('isLoaded and whenLoaded', () => {
+	it('match a table by name and content hash', async () => {
+		const { engine } = fakeEngine();
+		expect(isLoaded('content_table', 'h1')).toBe(false);
+		const waiting = whenLoaded('content_table', 'h1');
+		const other = whenLoaded('content_table', 'h2');
+		let otherDone = false;
+		other.then(() => (otherDone = true));
+
+		await loadArrowIPCTable(engine, 'content_table', bytes, 'h1');
+		await waiting;
+		expect(isLoaded('content_table', 'h1')).toBe(true);
+		expect(isLoaded('content_table', 'h2')).toBe(false);
+		await Promise.resolve();
+		expect(otherDone).toBe(false);
+		await whenLoaded('content_table', 'h1');
 	});
 });
