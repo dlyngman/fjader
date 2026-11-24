@@ -9,8 +9,26 @@ import type { DimValue } from '$lib/query-engine/categorical-identity';
 import { isTemporalScale } from '$lib/scales/scale-categories';
 import type { MarkLODSurface } from '$lib/lod/rung-types';
 import type { ChartConfig } from '$lib/config/ChartConfig.svelte';
+import { Type, type Table } from '@uwdata/flechette';
 
 type DataRow = Record<string, unknown>;
+
+/**
+ * Turn a result's DATE and TIMESTAMP values, which flechette reads as epoch
+ * milliseconds, into `Date`s in the rows read from it, so the tooltip shows them
+ * as dates (a `max` of a date in `tip`, a date column). Only the hovered rows,
+ * and only when the result has such a column.
+ */
+function datesAsDates(result: Table, rows: DataRow[]): void {
+	for (const field of result.schema.fields) {
+		const id = field.type.typeId;
+		if (id !== Type.Date && id !== Type.Timestamp) continue;
+		for (const row of rows) {
+			const v = row[field.name];
+			if (typeof v === 'number') row[field.name] = new Date(v);
+		}
+	}
+}
 
 export interface MatchedPoint {
 	screenX: number | null;
@@ -294,6 +312,7 @@ export class TooltipManager {
 						})
 						.then((result) => {
 							const rows = Array.from(result) as DataRow[];
+							datesAsDates(result, rows);
 							return rows.length > 0 ? { markId, config, rows } : null;
 						})
 						.catch(() => null) // Skip marks whose temp table doesn't exist yet

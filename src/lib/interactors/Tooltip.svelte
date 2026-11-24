@@ -17,6 +17,7 @@
 	import { getContext } from 'svelte';
 	import { format as d3format } from 'd3-format';
 	import { categoryLabel } from '$lib/query-engine/categorical-identity';
+	import { formatDate } from '$lib/scales/format-date';
 	import type { ChartContext, ContinuousScaleState } from '$lib/types';
 	import { otherTooltipRows } from './other-tooltip';
 
@@ -163,6 +164,8 @@
 
 	function formatValue(key: string, value: unknown) {
 		if (formatters[key]) return formatters[key](value);
+		// A date or timestamp column (TooltipManager reads them as Dates).
+		if (value instanceof Date) return formatDate(value);
 		if (typeof value === 'number') {
 			const channel = getChannel(key);
 			const fmt = channel === 'x' ? xFormat : channel === 'y' ? yFormat : null;

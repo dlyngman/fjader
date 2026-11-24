@@ -551,18 +551,24 @@ export function ident(name: string): string {
 }
 
 /**
- * The statements that write a mark's tip expressions (aggregates, windows) into
- * its tooltip table: a column per expression, then an UPDATE from a sidecar
- * query keyed by the mark's non-aggregate channels. Null when the sidecar
- * cannot be assembled.
+ * The statement that writes a mark's tip expressions (aggregates, windows) into
+ * its tooltip table: the table rebuilt with a column per expression, joined from
+ * a sidecar query keyed by the mark's non-aggregate channels. Null when the
+ * sidecar cannot be assembled.
+ *
+ * One statement, so a hover never finds the table half written, and each column
+ * takes its expression's own type: a `max` of a date is a DATE, of text a
+ * VARCHAR. `ORDER BY rowid` keeps the rows in the order they were written (a
+ * table sorted for zone maps stays sorted). The join is NULL-safe, so a row the
+ * mark keeps with a NULL key (a NULL category) gets its values too.
  *
  * Of the SQL transforms only the row filters apply to the sidecar: they decide
  * which source rows the aggregates see. The rest (stack, normalize, topN, rank,
  * dense, …) read the mark's value channels, which the sidecar leaves out, and
- * only reshape or reorder the mark's rows. The UPDATE joins onto the rows the
- * mark kept, so a row they add (an Other bucket, padding) gets NULL.
+ * only reshape or reorder the mark's rows. The join keeps the rows the mark
+ * kept, so a row they add (an Other bucket, padding) gets NULL.
  */
-export function tipExtrasStatements(opts: TipExtrasOptions): string[] | null {
+export function tipExtrasStatement(opts: TipExtrasOptions): string | null {
 	const { tooltipTable, table, parts, tipExtras, filter, transformCompiler } = opts;
 
 	// Non-aggregate channel columns — the join keys
@@ -591,14 +597,14 @@ export function tipExtrasStatements(opts: TipExtrasOptions): string[] | null {
 	if (!sidecar) return null;
 
 	const target = ident(tooltipTable);
-	const cols = Object.keys(tipExtras);
-	const set = cols.map((col) => `${ident(col)} = _s.${ident(col)}`).join(', ');
-	// NULL-safe: a row the mark keeps with a NULL key (a NULL category) gets its values too.
+	const extras = Object.keys(tipExtras)
+		.map((col) => `_s.${ident(col)}`)
+		.join(', ');
 	const on = joinCols
 		.map((ch) => `${target}.${ident(ch)} IS NOT DISTINCT FROM _s.${ident(ch)}`)
 		.join(' AND ');
-	return [
-		...cols.map((col) => `ALTER TABLE ${target} ADD COLUMN ${ident(col)} DOUBLE`),
-		`UPDATE ${target} SET ${set} FROM (${sidecar.toString()}) _s WHERE ${on}`
-	];
+	return (
+		`CREATE OR REPLACE TEMP TABLE ${target} AS SELECT ${target}.*, ${extras} ` +
+		`FROM ${target} LEFT JOIN (${sidecar.toString()}) _s ON ${on} ORDER BY ${target}.rowid`
+	);
 }

@@ -216,6 +216,49 @@
 				</ChartContainer>
 			</div>
 		</section>
+		<!-- 11. Non-numeric tip expressions (#140) -->
+		<section>
+			<h2>BarMarkY — date, timestamp and text tip expressions</h2>
+			<p class="desc">
+				Bar a should show: Latest Mar 1, 2024; Last seen Mar 1, 2024, 08:00; First alpha; N 2. Bar
+				b: Last seen with seconds (12:00:15). No "Failed to merge tip extras" warning.
+			</p>
+			<div class="chart-wrapper">
+				<ChartContainer xLabel="k" yLabel="count">
+					<MarginLabel />
+					<Grid />
+					<BarMarkY
+						table="events"
+						x="k"
+						y={count()}
+						tip={[
+							'x',
+							{ value: max('d'), label: 'Latest' },
+							{ value: max('ts'), label: 'Last seen' },
+							{ value: min('name'), label: 'First' },
+							{ value: count(), label: 'N' }
+						]}
+					/>
+					<Crosshair />
+				</ChartContainer>
+			</div>
+		</section>
+		<!-- 12. A plain date column in tip -->
+		<section>
+			<h2>DotsMark — a date column in tip</h2>
+			<p class="desc">
+				Each dot shows d as a date (e.g. Jan 5, 2024) and ts as a date and time, not as epoch
+				milliseconds.
+			</p>
+			<div class="chart-wrapper">
+				<ChartContainer xLabel="v" yLabel="w">
+					<MarginLabel />
+					<Grid />
+					<DotsMark table="events" x="v" y="w" r={6} tip={['x', 'y', 'd', 'ts', 'name']} />
+					<Crosshair />
+				</ChartContainer>
+			</div>
+		</section>
 	</div>
 </div>
 

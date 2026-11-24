@@ -6,6 +6,7 @@ import { scaleUtc } from 'd3-scale';
 import { LinearScaleState } from './LinearScaleState.svelte';
 import type { LinearScaleOptions } from './LinearScaleState.svelte';
 import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
+import { formatDate } from './format-date';
 
 /**
  * TimeScaleState extends LinearScaleState with datetime awareness.
@@ -244,46 +245,13 @@ export class TimeScaleState extends LinearScaleState {
 		return this.formatTooltipValue(offset);
 	}
 
-	// Cached Intl formatters for tooltip (created once, reused)
-	static #tooltipFmtDate = new Intl.DateTimeFormat(undefined, {
-		year: 'numeric',
-		month: 'short',
-		day: 'numeric',
-		timeZone: 'UTC'
-	});
-	static #tooltipFmtDateTime = new Intl.DateTimeFormat(undefined, {
-		year: 'numeric',
-		month: 'short',
-		day: 'numeric',
-		hour: '2-digit',
-		minute: '2-digit',
-		timeZone: 'UTC'
-	});
-	static #tooltipFmtDateTimeSec = new Intl.DateTimeFormat(undefined, {
-		year: 'numeric',
-		month: 'short',
-		day: 'numeric',
-		hour: '2-digit',
-		minute: '2-digit',
-		second: '2-digit',
-		timeZone: 'UTC'
-	});
-
 	/**
 	 * Format an offset for tooltip display.
 	 * Shows all precision present in the data — never drops detail.
 	 */
 	formatTooltipValue(offset: number): string {
 		const date = this.offsetToDate(offset);
-		if (!date) return String(offset);
-
-		const s = date.getUTCSeconds();
-		const m = date.getUTCMinutes();
-		const h = date.getUTCHours();
-
-		if (s !== 0) return TimeScaleState.#tooltipFmtDateTimeSec.format(date);
-		if (h !== 0 || m !== 0) return TimeScaleState.#tooltipFmtDateTime.format(date);
-		return TimeScaleState.#tooltipFmtDate.format(date);
+		return date ? formatDate(date) : String(offset);
 	}
 
 	// ===========================================================================

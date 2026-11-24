@@ -118,7 +118,7 @@ import { binRowsMoved, binSpecKey, heldCoversView, isRebin, rebinTweens } from '
 import {
 	buildQueryParts,
 	assembleQuery,
-	tipExtrasStatements,
+	tipExtrasStatement,
 	ident,
 	castReal,
 	type NullDrop,
@@ -2645,7 +2645,8 @@ export class MarkLifecycleV2 {
 	/**
 	 * Merge tip expression extras into the tooltip temp table via a sidecar
 	 * DB query. Computes aggregates against the source table using the same
-	 * GROUP BY as the main query, then ALTER+UPDATE the temp table.
+	 * GROUP BY as the main query, then rebuilds the temp table with them
+	 * (tipExtrasStatement).
 	 */
 	async #mergeTipExtras(
 		tableName: string,
@@ -2654,7 +2655,7 @@ export class MarkLifecycleV2 {
 	): Promise<void> {
 		if (!this.#resolvedQueryParts) return;
 
-		const statements = tipExtrasStatements({
+		const statement = tipExtrasStatement({
 			tooltipTable: tableName,
 			table: this.#sourceTable,
 			parts: this.#resolvedQueryParts,
@@ -2662,9 +2663,9 @@ export class MarkLifecycleV2 {
 			filter: this.#filterGroup.selection.predicate(this.#route) ?? [],
 			transformCompiler: this.#transformCompiler
 		});
-		if (!statements) return;
+		if (!statement) return;
 
-		await this.#queryEngine.exec(statements, {
+		await this.#queryEngine.exec(statement, {
 			class: cls,
 			connectionLocal: true
 		});
