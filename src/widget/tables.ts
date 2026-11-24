@@ -157,8 +157,8 @@ const keyOf = (entry: { name: string; hash: string }) => `${entry.name}\u0000${e
  * rest wait on its request (or on the table loading). A waiter whose request
  * fails asks for itself rather than fail with it, unless it failed for want of an
  * answer: asking the same silence again would only double the wait. Every
- * request is settled here,
- * so one nobody else waits on (its tables loaded meanwhile) cannot go unhandled.
+ * request is settled here, so one nobody else waits on (its tables loaded
+ * meanwhile) cannot go unhandled.
  *
  * A waiter may get the very bytes the asker loads. Only one insert uses them:
  * loadArrowIPCTable holds a per-table lock and re-checks after it, so the second
