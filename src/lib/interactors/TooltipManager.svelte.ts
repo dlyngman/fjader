@@ -9,8 +9,24 @@ import type { DimValue } from '$lib/query-engine/categorical-identity';
 import { isTemporalScale } from '$lib/scales/scale-categories';
 import type { MarkLODSurface } from '$lib/lod/rung-types';
 import type { ChartConfig } from '$lib/config/ChartConfig.svelte';
+import { Type, type Table } from '@uwdata/flechette';
 
 type DataRow = Record<string, unknown>;
+
+/**
+ * A result's DATE and TIMESTAMP columns, which flechette reads as epoch
+ * milliseconds. The values stay numbers in the rows (a toggle and the sticky
+ * focus compare them by value); the tooltip formats these columns as dates.
+ */
+function dateColumns(result: Table): readonly string[] {
+	let names: string[] | null = null;
+	for (const field of result.schema.fields) {
+		const id = field.type.typeId;
+		if (id === Type.Date || id === Type.Timestamp) (names ??= []).push(field.name);
+	}
+	return names ?? NO_DATES;
+}
+const NO_DATES: readonly string[] = [];
 
 export interface MatchedPoint {
 	screenX: number | null;
@@ -72,6 +88,8 @@ interface QueryResult {
 	markId: string;
 	config: TooltipMarkRegistration;
 	rows: DataRow[];
+	/** The rows' date and timestamp columns (dateColumns). */
+	dates: readonly string[];
 }
 
 /**
@@ -110,6 +128,8 @@ export class TooltipManager {
 	currentChannelFields: Record<string, string> | null = $state(null);
 	currentDisplayFields: string[] | null = $state(null);
 	currentDisplayLabels: Record<string, string> | null = $state(null);
+	/** The shown point's date and timestamp fields, by the names the point uses. */
+	currentDateFields: readonly string[] = $state(NO_DATES);
 	visible: boolean = $state(false);
 	pointerClientX: number = $state(0);
 	pointerClientY: number = $state(0);
@@ -294,7 +314,7 @@ export class TooltipManager {
 						})
 						.then((result) => {
 							const rows = Array.from(result) as DataRow[];
-							return rows.length > 0 ? { markId, config, rows } : null;
+							return rows.length > 0 ? { markId, config, rows, dates: dateColumns(result) } : null;
 						})
 						.catch(() => null) // Skip marks whose temp table doesn't exist yet
 				);
@@ -320,7 +340,7 @@ export class TooltipManager {
 			}
 
 			if (bestResult && this.#marks.has(bestResult.markId)) {
-				const { config, markId, rows } = bestResult;
+				const { config, markId, rows, dates } = bestResult;
 				const xScale = this.#scaleProvider.xScale;
 				const yScale = this.#scaleProvider.yScale;
 				const cols = config.columns;
@@ -354,6 +374,9 @@ export class TooltipManager {
 				this.currentChannelFields = config.channelFields ?? null;
 				this.currentDisplayFields = config.displayFields ?? null;
 				this.currentDisplayLabels = config.displayLabels ?? null;
+				// Named as #resolveLabels names the point's keys: a channel by its field.
+				this.currentDateFields =
+					dates.length > 0 ? dates.map((c) => config.channelFields?.[c] || c) : NO_DATES;
 				this.matchedRadius = this.#resolveRadius(rows[0], config);
 				this.visible = true;
 
@@ -908,6 +931,7 @@ export class TooltipManager {
 		this.currentChannelFields = null;
 		this.currentDisplayFields = null;
 		this.currentDisplayLabels = null;
+		this.currentDateFields = NO_DATES;
 		this.matchedRadius = null;
 	}
 }

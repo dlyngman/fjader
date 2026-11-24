@@ -50,6 +50,16 @@
 				SELECT month AS "start", month + 1 AS "end", region, revenue AS v FROM sales
 			`);
 
+			// Dates, timestamps and text per category, for non-numeric tip extras
+			await queryEngine.exec(`
+				CREATE TABLE events AS SELECT * FROM (VALUES
+					('a', 1.0, 4.0, DATE '2024-01-05', TIMESTAMP '2024-01-05 10:30:00', 'zeta'),
+					('a', 2.0, 3.0, DATE '2024-03-01', TIMESTAMP '2024-03-01 08:00:00', 'alpha'),
+					('b', 3.0, 5.0, DATE '2024-02-10', TIMESTAMP '2024-02-10 12:00:15', 'mid'),
+					('c', 4.0, 2.0, DATE '2024-04-20', TIMESTAMP '2024-04-20 00:00:00', 'kilo')
+				) AS t(k, v, w, d, ts, name)
+			`);
+
 			isLoaded = true;
 		} catch (error) {
 			console.error('Initialization error:', error);
