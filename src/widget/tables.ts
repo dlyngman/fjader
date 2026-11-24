@@ -62,8 +62,14 @@ export function takeTables(
 	return { copies, missing };
 }
 
-/** How long a request waits for Python's answer: a large table takes seconds to arrive. */
-export const REQUEST_TIMEOUT_MS = 120_000;
+/**
+ * How long a request waits for the kernel's answer. A large table takes a few
+ * seconds to arrive (60 MB: about 3 s in marimo); without a kernel (a notebook
+ * saved from a live session) no answer comes, and marimo cannot say so, so the
+ * wait is what ends it. A kernel busy running a long cell can answer later than
+ * this: the error says to re-run the cell.
+ */
+export const REQUEST_TIMEOUT_MS = 20_000;
 
 let requestCount = 0;
 
@@ -117,9 +123,11 @@ export function requestTables(
 				done(() =>
 					reject(
 						new Error(
-							`No answer from the kernel for table${wanted.length > 1 ? 's' : ''} ` +
-								`${wanted.map((t) => `"${t.name}"`).join(', ')}. Is the kernel running? ` +
-								'Re-run the cell to send the data again.'
+							`This chart's data is not in the page, and the kernel did not send it ` +
+								`(table${wanted.length > 1 ? 's' : ''} ${wanted.map((t) => `"${t.name}"`).join(', ')}). ` +
+								'With a kernel running, re-run the cell. In a saved notebook, the chart was ' +
+								'shown again over data the page already had: export the notebook with ' +
+								'`marimo export html` or `jupyter nbconvert --execute` to keep every chart’s data.'
 						)
 					)
 				),
@@ -128,4 +136,60 @@ export function requestTables(
 		model.on('msg:custom', onMessage);
 		model.send({ type: 'fjader:need', id, tables: wanted });
 	});
+}
+
+/** The tables being asked for on this page, by `name\u0000hash`: the request asking. */
+const asking = new Map<string, Promise<Map<string, Uint8Array>>>();
+
+const keyOf = (entry: { name: string; hash: string }) => `${entry.name}\u0000${entry.hash}`;
+
+/**
+ * A widget's source for the tables its blob left out: each one's bytes, or null
+ * when another widget on the page loads it first.
+ *
+ * One request per table per page. On a reload every widget renders at once, and
+ * every widget over the same DataFrame lacks the same table: the first asks, the
+ * rest wait on its request (or on the table loading). A waiter whose request
+ * fails asks for itself rather than fail with it. Every request is settled here,
+ * so one nobody else waits on (its tables loaded meanwhile) cannot go unhandled.
+ *
+ * A waiter may get the very bytes the asker loads. Only one insert uses them:
+ * loadArrowIPCTable holds a per-table lock and re-checks after it, so the second
+ * load of a table returns before touching its bytes (which the first insert's
+ * transfer to DuckDB's worker detaches).
+ */
+export function tablesFromKernel(
+	model: TableMessaging,
+	missing: WidgetTableEntry[],
+	whenLoaded: (name: string, hash: string) => Promise<void>,
+	request: typeof requestTables = requestTables
+): (entry: ManifestEntry) => Promise<Uint8Array | null> {
+	const theirs = new Map<string, Promise<Map<string, Uint8Array>>>();
+	const mine: WidgetTableEntry[] = [];
+	for (const entry of missing) {
+		const inFlight = asking.get(keyOf(entry));
+		if (inFlight) theirs.set(keyOf(entry), inFlight);
+		else mine.push(entry);
+	}
+	const own = mine.length > 0 ? request(model, mine) : null;
+	if (own) {
+		for (const entry of mine) asking.set(keyOf(entry), own);
+		// Settled: no longer in flight, so a widget that still lacks it asks again.
+		const settle = () => {
+			for (const entry of mine) if (asking.get(keyOf(entry)) === own) asking.delete(keyOf(entry));
+		};
+		own.then(settle, settle);
+	}
+
+	return (entry) => {
+		const pick = (bytes: Map<string, Uint8Array>) => bytes.get(entry.name) ?? null;
+		const loaded = whenLoaded(entry.name, entry.hash).then(() => null);
+		const shared = theirs.get(keyOf(entry));
+		const fetched = shared
+			? shared.then(pick, () => request(model, [entry]).then(pick))
+			: own
+				? own.then(pick)
+				: Promise.reject(new Error(`No data for table "${entry.name}" in the widget`));
+		return Promise.race([fetched, loaded]);
+	};
 }

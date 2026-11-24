@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import weakref
 from dataclasses import dataclass
 from typing import Any
 
@@ -71,8 +72,24 @@ class TableSnapshot:
         return f"_df_{self.hash}"
 
 
+# Live snapshots by hash: marks over the same rows share one copy of the bytes,
+# released with the last mark (or widget) holding it.
+_snapshots: weakref.WeakValueDictionary[str, TableSnapshot] = weakref.WeakValueDictionary()
+
+
 def snapshot(df: Any) -> TableSnapshot:
-    """Serialize a DataFrame now. Not cached: a DataFrame can change in place
-    (pandas ``df.loc[...] = ...``, polars ``insert_column``) and keep its identity."""
+    """Serialize a DataFrame now, and share the snapshot of the same content.
+
+    Serialized on every call, never cached by the DataFrame: one can change in
+    place (pandas ``df.loc[...] = ...``, polars ``df[0, "y"] = ...``) and keep its
+    identity. What is shared is keyed by the content's hash, so it is always the
+    same rows.
+    """
     ipc = df_to_arrow_ipc(df)
-    return TableSnapshot(content_hash(ipc), ipc)
+    h = content_hash(ipc)
+    existing = _snapshots.get(h)
+    if existing is not None:
+        return existing
+    taken = TableSnapshot(h, ipc)
+    _snapshots[h] = taken
+    return taken

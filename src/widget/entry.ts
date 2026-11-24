@@ -7,7 +7,7 @@
 
 import { renderFromData, showError, type FjaderHandle, type ManifestEntry } from './core';
 import { isLoaded, whenLoaded } from './loadArrowIPC';
-import { requestTables, takeTables, type TableMessaging, type WidgetTableEntry } from './tables';
+import { tablesFromKernel, takeTables, type TableMessaging, type WidgetTableEntry } from './tables';
 import '$lib/theme.css';
 
 interface AnywidgetModel extends TableMessaging {
@@ -29,8 +29,8 @@ async function doRender(model: AnywidgetModel, el: HTMLElement): Promise<FjaderH
 
 	// Before any await: the tables in the blob are copied out now (see takeTables).
 	const { copies, missing } = takeTables(manifest, model.get('data_blob'), isLoaded);
-	// The tables the blob left out, asked for once for all of them.
-	const requested = missing.length > 0 ? requestTables(model, missing) : null;
+	// The tables the blob left out: asked of the kernel, once per page.
+	const fromKernel = missing.length > 0 ? tablesFromKernel(model, missing, whenLoaded) : null;
 
 	// Size the container to the exact height computed by the Python wrapper.
 	// Marimo / Jupyter constrain el's height; setting an explicit pixel value
@@ -45,13 +45,8 @@ async function doRender(model: AnywidgetModel, el: HTMLElement): Promise<FjaderH
 	const handle = await renderFromData(el, specJson, manifestJson, (entry: ManifestEntry) => {
 		const copy = copies.get(entry.name);
 		if (copy) return copy;
-		if (!requested) throw new Error(`No data for table "${entry.name}" in the widget`);
-		// Python's answer, or another widget on this page loading the same table
-		// first (one that carried it in its blob: a saved notebook has no kernel).
-		return Promise.race([
-			requested.then((bytes) => bytes.get(entry.name) ?? null),
-			whenLoaded(entry.name, entry.hash).then(() => null)
-		]);
+		if (!fromKernel) throw new Error(`No data for table "${entry.name}" in the widget`);
+		return fromKernel(entry);
 	});
 
 	// Tell Python which tables this page holds: later widgets leave them out.

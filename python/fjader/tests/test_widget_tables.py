@@ -69,6 +69,30 @@ class TestSnapshots:
         assert _rows(table.ipc)["y"] == [1.0, 2.0]
 
 
+    def test_marks_over_the_same_rows_share_one_snapshot(self):
+        pl = pytest.importorskip("polars")
+        df = pl.DataFrame({"x": [1.0, 2.0], "y": [1.0, 2.0]})
+        a = fj.dot(data=df, x="x", y="y")
+        b = fj.line(data=df, x="x", y="y")
+        assert a._snapshot is b._snapshot
+        df[0, "y"] = 5.0
+        c = fj.dot(data=df, x="x", y="y")
+        assert c._snapshot is not a._snapshot
+
+    def test_a_snapshot_is_released_with_its_last_mark(self):
+        import gc
+
+        from fjader import _data
+
+        pl = pytest.importorskip("polars")
+        mark = fj.dot(data=pl.DataFrame({"x": [3.0], "y": [4.0]}), x="x", y="y")
+        h = mark._snapshot.hash
+        assert h in _data._snapshots
+        del mark
+        gc.collect()
+        assert h not in _data._snapshots
+
+
 class TestBlob:
     def test_an_unconfirmed_table_travels_in_the_blob(self):
         pl = pytest.importorskip("polars")

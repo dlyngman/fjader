@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { requestTables, takeTables, type TableMessaging, type WidgetTableEntry } from './tables';
+import {
+	requestTables,
+	tablesFromKernel,
+	takeTables,
+	type TableMessaging,
+	type WidgetTableEntry
+} from './tables';
 
 /** A model whose kernel answers each request with `reply(request)`, or not at all. */
 function fakeModel(
@@ -104,9 +110,77 @@ describe('requestTables', () => {
 		vi.useFakeTimers();
 		const { model, listeners } = fakeModel();
 		const pending = requestTables(model, [A], 1000);
-		const check = expect(pending).rejects.toThrow(/No answer from the kernel/);
+		const check = expect(pending).rejects.toThrow(/the kernel did not send it/);
 		await vi.advanceTimersByTimeAsync(1000);
 		await check;
 		expect(listeners.size).toBe(0);
+	});
+});
+
+describe('tablesFromKernel', () => {
+	const never = () => new Promise<void>(() => {});
+	const model = fakeModel().model;
+	let n = 0;
+	// Each test its own table, so the page-level bookkeeping of one cannot reach another.
+	const table = (): WidgetTableEntry => {
+		const hash = `t${n++}`;
+		return { name: `_df_${hash}`, hash };
+	};
+
+	it('asks once per page: a second widget waits on the first one’s request', async () => {
+		const t = table();
+		let release!: (bytes: Map<string, Uint8Array>) => void;
+		const request = vi.fn(() => new Promise<Map<string, Uint8Array>>((r) => (release = r)));
+
+		const first = tablesFromKernel(model, [t], never, request);
+		const second = tablesFromKernel(model, [t], never, request);
+		expect(request).toHaveBeenCalledTimes(1);
+
+		const bytes = new Uint8Array([4, 2]);
+		const got = Promise.all([first(t), second(t)]);
+		release(new Map([[t.name, bytes]]));
+		expect(await got).toEqual([bytes, bytes]);
+	});
+
+	it('a waiter gives up its wait when the table loads', async () => {
+		const t = table();
+		const request = vi.fn(() => new Promise<Map<string, Uint8Array>>(() => {}));
+		tablesFromKernel(model, [t], never, request);
+		const second = tablesFromKernel(model, [t], () => Promise.resolve(), request);
+		expect(await second(t)).toBeNull();
+		expect(request).toHaveBeenCalledTimes(1);
+	});
+
+	it('a waiter asks for itself when the shared request fails', async () => {
+		const t = table();
+		const bytes = new Uint8Array([7]);
+		const request = vi
+			.fn()
+			.mockImplementationOnce(() => Promise.reject(new Error('first widget gone')))
+			.mockImplementationOnce(() => Promise.resolve(new Map([[t.name, bytes]])));
+
+		const first = tablesFromKernel(model, [t], never, request);
+		const second = tablesFromKernel(model, [t], never, request);
+		await expect(first(t)).rejects.toThrow('first widget gone');
+		expect(await second(t)).toBe(bytes);
+		expect(request).toHaveBeenCalledTimes(2);
+	});
+
+	it('asks again once a request has settled', async () => {
+		const t = table();
+		const request = vi.fn(() => Promise.resolve(new Map([[t.name, new Uint8Array([1])]])));
+		await tablesFromKernel(model, [t], never, request)(t);
+		await tablesFromKernel(model, [t], never, request)(t);
+		expect(request).toHaveBeenCalledTimes(2);
+	});
+
+	it('a failed request nobody waits on is handled', async () => {
+		const t = table();
+		const request = vi.fn(() => Promise.reject(new Error('no kernel')));
+		// Its table loaded meanwhile: nothing asks for the bytes.
+		tablesFromKernel(model, [t], never, request);
+		await new Promise((r) => setTimeout(r, 0));
+		// An unhandled rejection would fail this test file.
+		expect(request).toHaveBeenCalledTimes(1);
 	});
 });

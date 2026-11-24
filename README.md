@@ -84,6 +84,8 @@ fj.plot(
 
 Charts display on their own in marimo and Jupyter; in Streamlit, call `fj.streamlit.render(chart)`. polars DataFrames need nothing more; pandas ones need pyarrow (`pip install "fjader[pyarrow]"`). Marks compose: `*` overlays two marks in one chart, `+` places charts side by side, and `df.fj.dot(x=..., y=...)` works straight from a pandas or polars DataFrame.
 
+A DataFrame goes to the browser once per page: a chart shown again over the same rows (a re-run cell, another chart) uses the copy the page already has. So a notebook saved from a live session, with marimo's _Download as HTML_ or Jupyter's _Save Widget State_, can lack the data of charts shown again; without a kernel they show an error. To share a notebook with its charts, export it with `marimo export html notebook.py` or `jupyter nbconvert --to html --execute notebook.ipynb`: they run it afresh, and each chart carries its data.
+
 ## How it works
 
 **Queries.** Aggregation, binning, filtering, top-N, stacking and normalization compile to SQL and run in DuckDB-WASM in the browser. What reaches JavaScript is sized by the chart, not by the data.
