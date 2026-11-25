@@ -107,6 +107,8 @@
 
 	const chartId = c.chartId;
 
+	let destroyed = false;
+
 	// Enhanced initialization with comprehensive error handling
 	async function initWebGPU() {
 		try {
@@ -126,6 +128,9 @@
 			);
 
 			await Promise.race([gpuCoordinator.ready, timeout]);
+			// Unmounted while the device was on its way (a page left early): there
+			// is no canvas to configure, and nothing left to tell.
+			if (destroyed) return;
 
 			// Configure context with proper error handling
 			await configureContext();
@@ -326,6 +331,7 @@
 	});
 
 	onDestroy(() => {
+		destroyed = true;
 		if (isFaceted) return; // Pass-through mode: nothing to clean up
 
 		try {
