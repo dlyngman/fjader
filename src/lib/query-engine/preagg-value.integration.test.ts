@@ -163,6 +163,7 @@ async function mark(
 		response?: 'auto' | 'filter';
 		nullDrops?: NullDrop[];
 		bins?: Record<string, BinPadding>;
+		schema?: QueryDescriptor['schema'];
 	} = {}
 ): Promise<MarkHandle> {
 	const baseTable = opts.baseTable ?? 't';
@@ -174,7 +175,7 @@ async function mark(
 			...(opts.nullDrops ? { nullDrops: opts.nullDrops } : {}),
 			...(opts.bins ? { bins: opts.bins } : {})
 		},
-		schema: new Map(),
+		schema: opts.schema ?? new Map(),
 		transformCompiler: new TransformCompiler(
 			opts.transforms?.transforms ?? [],
 			opts.transforms?.config
@@ -517,6 +518,49 @@ describe('a histogram padded to every bin', () => {
 		expect(rows.map((r) => r[0])).toEqual(Array.from({ length: 14 }, (_, m) => monthStart(m)));
 		expect(rows.map((r) => r[1])).toEqual(Array.from({ length: 14 }, (_, m) => monthStart(m + 1)));
 		expect(rows.map((r) => r[2])).toEqual([31, 29, 31, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+	});
+
+	it('a time bin WITH TIME ZONE keeps its padding at read time, and reads as the base does', async () => {
+		// Stored padding enumerates buckets as TIMESTAMPs, which beside a zoned key
+		// are read in the session's zone: outside UTC they would not fold.
+		await conn.exec!(
+			`CREATE TABLE zoned AS SELECT (TIMESTAMP '2024-01-01' + INTERVAL (i) HOUR) AT TIME ZONE 'UTC' AS z, i // 100 AS g FROM range(400) r(i)`
+		);
+		await engine.ensureColumns('zoned', { categorical: ['g'] });
+		const minMs = Date.UTC(2024, 0, 1);
+		const t0 = minMs / 1000;
+		const stats = { z: { min: minMs, max: minMs + 399 * 3_600_000, type: 'date' } };
+		const day = bin('z', { interval: 'day' });
+		const next = day.withOffset(1);
+		const seconds = (node: ExprNode) => castReal(sql`CAST((epoch(${node}) - ${t0}) AS REAL)`);
+		const zonedSelect = {
+			x1: seconds(day.resolve(stats, 'time')),
+			x2: seconds(next.resolve(stats, 'time')),
+			y: count()
+		};
+		const zonedBins = {
+			x1: day.padding(stats, 'time', null, 1, t0)!,
+			x2: next.padding(stats, 'time', null, 1, t0)!
+		};
+		const schema = new Map([
+			['z', { sqlType: 'TIMESTAMP WITH TIME ZONE', jsType: 'date' }]
+		]) as never;
+		const opts = { baseTable: 'zoned', transforms, bins: zonedBins, schema };
+		const viaPreagg = await mark('zoned', zonedSelect, opts);
+		const reference = new FilterGroup();
+		reference.setEngine(engine);
+		const viaBase = await mark('zoned-ref', zonedSelect, { ...opts, into: reference });
+
+		await activateToggle(['g']);
+		const toggle = group.registerToggle('g');
+		const referenceToggle = reference.registerToggle('g');
+		await settle([viaPreagg], () => toggle.set([[0]]));
+		const read = nonDDL().at(-1)!;
+		expect(read).toContain('__dplot_preagg_');
+		expect(read).toContain('LEFT JOIN');
+		expect(creates().at(-1)).not.toContain('UNION ALL BY NAME');
+		await settle([viaBase], () => referenceToggle.set([[0]]));
+		expect(ordered(viaPreagg)).toEqual(ordered(viaBase));
 	});
 
 	it('stores the padding of bars with a series: every (category, series) pair', async () => {

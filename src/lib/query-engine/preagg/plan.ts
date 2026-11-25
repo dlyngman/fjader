@@ -348,6 +348,11 @@ function padPlan(
 	// Padding enumerates one binned axis, so it can carry one key.
 	if (binKeys.length > 1) return null;
 	const key = binKeys[0] ?? null;
+	// Padding enumerates time buckets as TIMESTAMPs. Beside a key WITH TIME ZONE
+	// they are read in the session's zone, and outside UTC a padding row then
+	// names another instant than the real row of its bucket: the two would not
+	// fold. Such a table's reads pad themselves, matching by the edges.
+	if (key && zonedSource(key, descriptor.schema)) return null;
 	const rows = transformCompiler.padRows(Object.keys(parts.selectDef), {
 		groupKeys: parts.groupKeys,
 		bins: parts.bins ?? null,
@@ -370,6 +375,15 @@ function padPlan(
 		(source) => sqlTag([`(${source}) IS NOT NULL`] as unknown as TemplateStringsArray) as ExprNode
 	);
 	return { pad: { rows, dims, partials }, where };
+}
+
+/** Whether a time bin's source is a column the schema knows to be WITH TIME ZONE. */
+function zonedSource(key: BinKey, schema: QueryDescriptor['schema']): boolean {
+	const bin = key.channels[0][1];
+	if (bin.kind !== 'time') return false;
+	const name = plainColumn(bin.source);
+	const type = name == null ? '' : (schema?.get(name)?.sqlType ?? '').toUpperCase();
+	return type.includes('TIME ZONE') || type.includes('TIMESTAMPTZ');
 }
 
 /** The mark's channel that is `field`'s id channel (see idFieldOf), or null. */
