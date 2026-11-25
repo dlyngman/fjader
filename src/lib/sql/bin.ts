@@ -120,7 +120,10 @@ const LOG_REBIN_RATIO = Math.log(REBIN_RATIO);
  * REBIN_RATIO it is wider. An axis is niced and padded past its data (a delay
  * of -60 to 180 is drawn on -100 to 200, a quarter wider), and that is not a
  * zoom out: rounded to the nearest, such an axis halved its histogram's bins
- * on the first frame.
+ * on the first frame. Normally under a whole ratio, not always: an axis with
+ * few ticks, a domain set wider than the data, or another mark's wider range on
+ * the same axis can put the first view a level or more out, and the mark then
+ * re-bins after its first result, since its first query is of the whole extent.
  *
  * View-scaled bins are resolved from the
  * level, not from the view's width itself, and a mark re-bins when the level of
