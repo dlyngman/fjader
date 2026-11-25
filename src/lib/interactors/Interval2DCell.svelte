@@ -43,9 +43,6 @@
 		() => chart.reroutePress()
 	);
 
-	// Reused for pointer conversion.
-	const point = { x: 0, y: 0 };
-
 	// The rectangle in this cell's pixels, clamped for drawing only: the data
 	// range is kept.
 	const brushScreen = $derived.by(() => {
@@ -83,12 +80,11 @@
 		return true;
 	}
 
-	function handlePointerMove(event: PointerEvent) {
+	function handlePointerMove(event: PointerEvent, inner: Point) {
 		// Another pointer's (a second finger or pen) is not this drag's: ChartCell handles it.
 		if (!drag.owns(chart, event.pointerId)) return false;
-		point.x = event.offsetX;
-		point.y = event.offsetY;
-		const inner = chart.toInnerCoordinates(point);
+		// The cell's point, not the event's offsetX: that is measured from the event's
+		// target, which is not always the chart's SVG.
 		return drag.move(chart, event.pointerId, inner.x, inner.y, chart.xScale, chart.yScale);
 	}
 

@@ -694,7 +694,10 @@
 	}
 
 	function handleClick(event: MouseEvent) {
-		chartContext.onChartClick?.(event as unknown as PointerEvent);
+		chartContext.onChartClick?.(
+			event as unknown as PointerEvent,
+			setPointer(ptrX(event), ptrY(event))
+		);
 	}
 
 	function handleContextMenu(event: MouseEvent) {

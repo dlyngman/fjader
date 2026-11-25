@@ -75,8 +75,6 @@
 		() => chart.reroutePress()
 	);
 
-	const point = { x: 0, y: 0 };
-
 	// Animated x-positions from ChartScales (smooth transitions during reorder)
 	const animPositions = $derived(chart.animatedAxisXPositions ?? []);
 
@@ -197,9 +195,9 @@
 			activeAxis = null;
 			return false;
 		}
-		point.x = event.offsetX;
-		point.y = event.offsetY;
-		return axis.drag.move(chart, event.pointerId, chart.toInnerCoordinates(point).y, s);
+		// The cell's point, not the event's offsetX: that is measured from the event's
+		// target, which is not always the chart's SVG.
+		return axis.drag.move(chart, event.pointerId, innerPoint.y, s);
 	}
 
 	function handlePointerUp(event: PointerEvent) {

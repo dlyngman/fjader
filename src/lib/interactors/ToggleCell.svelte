@@ -72,9 +72,8 @@
 		return null;
 	}
 
-	const onClick: NonNullable<ChartContext['onChartClick']> = (event) => {
+	const onClick: NonNullable<ChartContext['onChartClick']> = (event, point) => {
 		const tm = chart.tooltipManager;
-		const point = { x: event.offsetX, y: event.offsetY };
 		const { xInBounds, yInBounds, innerPoint } = chart.getActiveAxes(point);
 		const isMulti = isMultiSelect(event);
 
