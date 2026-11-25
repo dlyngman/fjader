@@ -15,6 +15,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import duckdb from 'duckdb';
 import { avg, column, count, sql, type ExprNode } from '@uwdata/mosaic-sql';
 import { stackY, withDenseCategories, TransformCompiler } from '$lib/transforms';
+import { bin } from '$lib/sql/bin';
 import { buildQueryParts, assembleQuery, castReal, pathGapChannels } from './query-builder';
 import { rowLayoutOf, type RowLayout } from './row-layout';
 import type { BinPadding, MarkConfig, Transform } from '$lib/types';
@@ -63,6 +64,11 @@ CREATE VIEW flights_v AS
 	FROM flights f JOIN band_dim b ON f.band = b.value JOIN carrier_dim c ON f.carrier = c.value;
 -- The same flights with the morning's 'medium' ones of no known band: their id is
 -- -1, the absent series, here with data.
+-- One flight a day in January, March and May 2024: February and April exist
+-- only as padding, and the months are of 31, 29, 31, 30 and 31 days.
+CREATE TABLE monthly AS
+	SELECT TIMESTAMP '2024-01-01' + INTERVAL (d) DAY AS t FROM range(152) r(d)
+	WHERE month(TIMESTAMP '2024-01-01' + INTERVAL (d) DAY) IN (1, 3, 5);
 CREATE VIEW flights_unknown_v AS
 	SELECT * REPLACE (CASE WHEN band = 'medium' AND hour < 6 THEN -1 ELSE band_idx END AS band_idx)
 	FROM flights_v;
@@ -421,5 +427,61 @@ describe('what a padded row holds on a path', () => {
 		expect(empty.length + drawn.length).toBe(3);
 		expect(drawn.length).toBeGreaterThan(0);
 		for (const f of drawn) expect(cell(f).every((row) => !Number.isNaN(row.y))).toBe(true);
+	});
+});
+
+describe("a binned path's point and its bin's edges", () => {
+	it('numeric bins: the point is the middle of its edges, on real and padded rows alike', async () => {
+		const edge = (offset: number) => sql`CAST(floor("hour") + ${offset} AS REAL)`;
+		const bins = (offset: number): BinPadding => ({ ...HOUR_BINS.x, offset });
+		const { rows, layout } = await run({
+			select: {
+				x: edge(0.5),
+				x1: edge(0),
+				x2: edge(1),
+				y: castReal(count()),
+				fill: castReal(column('band_idx'))
+			},
+			transforms: [],
+			bins: { x: bins(0.5), x1: bins(0), x2: bins(1) },
+			identity: BAND_IDENTITY,
+			path: true
+		});
+		// Ordered by the lower edge, which is what the layout is read from.
+		expect(layout).toEqual({ kind: 'grid', facets: 1, bins: BINS, series: SERIES_IDS.length });
+		for (const row of rows) {
+			expect(row.x1).toBe(Math.floor(row.x1));
+			expect(row.x2).toBe(row.x1 + 1);
+			expect(row.x).toBe(row.x1 + 0.5);
+		}
+	});
+
+	it('calendar bins: the middle of the month itself, whatever its length', async () => {
+		// As the lifecycle writes a time channel: seconds from the scale's origin.
+		const T0 = Date.UTC(2024, 0, 1) / 1000;
+		const stats = { t: { min: T0 * 1000, max: Date.UTC(2024, 4, 31), type: 'date' } };
+		const month = bin('t', { interval: 'month' });
+		const at = (offset: number) => month.withOffset(offset);
+		const seconds = (offset: number) =>
+			sql`CAST((epoch(${at(offset).resolve(stats, 'time')}) - ${T0}) AS REAL)`;
+		const padding = (offset: number) => at(offset).padding(stats, 'time', null, 1, T0)!;
+		const { rows, layout } = await run({
+			select: { x: seconds(0.5), x1: seconds(0), x2: seconds(1), y: castReal(count()) },
+			transforms: [],
+			bins: { x: padding(0.5), x1: padding(0), x2: padding(1) },
+			series: false,
+			table: 'monthly'
+		});
+		expect(layout.kind).toBe('grid');
+		const DAY = 86_400;
+		const months = rows.filter((row) => row.x1 >= 0 && row.x1 < 152 * DAY);
+		// January to May: starts at 0, 31, 60, 91 and 121 days.
+		expect(months.map((row) => row.x1 / DAY)).toEqual([0, 31, 60, 91, 121]);
+		expect(months.map((row) => (row.x2 - row.x1) / DAY)).toEqual([31, 29, 31, 30, 31]);
+		// The point: halfway between its month's own edges. Half of "one month"
+		// would be 15 days in every one of them.
+		expect(months.map((row) => (row.x - row.x1) / DAY)).toEqual([15.5, 14.5, 15.5, 15, 15.5]);
+		// February and April are padding, and are placed by the same rule.
+		expect(months.map((row) => row.y)).toEqual([31, 0, 31, 0, 31]);
 	});
 });

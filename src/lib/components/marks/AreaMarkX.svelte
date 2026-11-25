@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { pathDimChannels, pathDimTooltipColumns } from './utils/path-dim';
 	import { READS_RUNS_AND_GRIDS } from './lifecycle/row-layout';
 	import { outlineColor } from './utils/area-outline';
 	import { getContext, onDestroy, untrack } from 'svelte';
@@ -185,7 +186,8 @@
 	const channelSelect = $derived(
 		buildSelectFromChannels({
 			x: x2, // Alias for tooltip nearest-point query (expects 'x' column)
-			y: entry.y,
+			// A bin() draws at its bins' centres and brings their edges (path-dim.ts).
+			...pathDimChannels('y', entry.y),
 			x1,
 			x2,
 			...(markColor.selectField && { fill: markColor.selectField }),
@@ -350,7 +352,11 @@
 					colorColumn: 'fill',
 					...(entry.z != null && { seriesColumn: 'z', markSeries }),
 					// Stacked areas: containment-based proximity (x0 ≤ cursor ≤ x1)
-					...(hasStackTransform && { columns: { x: 'x1', xLow: 'x0', xHigh: 'x1' } }),
+					// A bin() on y shows as its range, not as one of its three values.
+					columns: {
+						...(hasStackTransform && { x: 'x1', xLow: 'x0', xHigh: 'x1' }),
+						...pathDimTooltipColumns('y', entry.y)
+					},
 					markColor,
 					proximityAxis: entry.tooltipProximity,
 					constantRadius: entry.dotRadius ? Number(entry.dotRadius) : undefined,
