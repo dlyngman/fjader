@@ -41,7 +41,7 @@ import {
 	type ExprNode
 } from '@uwdata/mosaic-sql';
 import { isWindowExpression, isVerbatimWindowExpression } from '$lib/sql/expression-utils';
-import { buildOuterWindow } from '$lib/components/marks/lifecycle/query-builder';
+import { buildOuterWindow, type BinKey } from '$lib/components/marks/lifecycle/query-builder';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -94,7 +94,8 @@ export const BIN_WINDOW_MARGIN = 1;
  */
 export function rewriteForPreagg(
 	selectDef: Record<string, unknown>,
-	passthroughChannels?: Map<string, string>
+	passthroughChannels?: Map<string, string>,
+	binKeys: BinKey[] = []
 ): PreaggAnalysis | null {
 	const preaggCols: Record<string, ExprNode> = {};
 	const outputSelect: Record<string, ExprNode> = {};
@@ -113,8 +114,25 @@ export function rewriteForPreagg(
 
 	let statCounter = 0;
 
+	// A bin several channels are edges of is held once, as its key: the table is
+	// grouped by it, and a read derives the edges from it as a base read does
+	// (query-builder's sharedBinKeys). The channels stay in the output select as
+	// group channels, for the read to replace.
+	const keyOf = new Map<string, BinKey>();
+	for (const key of binKeys) {
+		const keyExpr = sql([key.sql] as unknown as TemplateStringsArray) as ExprNode;
+		preaggCols[key.alias] = keyExpr;
+		preaggGroupBy.push(keyExpr);
+		for (const [channel] of key.channels) keyOf.set(channel, key);
+	}
+
 	for (const [channel, expr] of Object.entries(selectDef)) {
 		if (expr == null || !isNode(expr)) return null;
+
+		if (keyOf.has(channel)) {
+			outputSelect[channel] = column(channel);
+			continue;
+		}
 
 		if (isWindowExpression(expr)) {
 			const windowNode = expr as unknown as WindowNode;

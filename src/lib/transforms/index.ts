@@ -22,7 +22,7 @@ import type {
 	ScaleMap
 } from '$lib/types';
 import type { DataAccessor } from '$lib/data/DataAccessor';
-import { numericBinEdgeSQL } from '$lib/sql/bin';
+import { binEdgeSQL, binKeySQL, numericBinEdgeSQL } from '$lib/sql/bin';
 import { valueAxisOf } from './value-axis';
 
 // =============================================================================
@@ -357,7 +357,9 @@ function densify(
 	aliases: string[],
 	plan: DensePlan,
 	window: BinWindow | null = null,
-	gaps: readonly string[] = []
+	gaps: readonly string[] = [],
+	/** An alias to write the band bin's key under (MarkConfig.padKey), or null. */
+	keyAlias: string | null = null
 ): SelectQuery {
 	const { band, dim, cross, bins } = plan;
 	const crossAlias = new Map(cross.map(([key], i) => [key, `k${i}`]));
@@ -366,11 +368,14 @@ function densify(
 	for (const alias of aliases) {
 		const crossed = crossAlias.get(alias);
 		const bin = binOf.get(alias);
-		if (bin) {
+		if (alias === keyAlias) {
+			// The bin's key itself: what a table keyed by its bin is grouped by.
+			select[alias] = rawSql('d.k') as ExprNode;
+		} else if (bin) {
 			// Every row's edge from its bin index, real and padded alike, so the
 			// edges are the same bits on every update: they are what tells the
 			// renderer the row set has not changed (alignmentKey).
-			select[alias] = rawSql(binEdge(bin, 'd.k')) as ExprNode;
+			select[alias] = rawSql(binEdgeSQL(bin, 'd.k')) as ExprNode;
 		} else if (alias === band) {
 			// REAL, as the inner query's id columns are: an INTEGER column would
 			// reach the GPU through a copy, and hand the renderer other bits than
@@ -554,21 +559,9 @@ function binWindowFilter(bin: BinPadding, edge: string, window: BinWindow): stri
 		return `${k} BETWEEN ${k0} AND ${k1}`;
 	}
 	const [lo, hi] = timeWindowMs(bin, window);
-	const first = binEdge(bin, `time_bucket(${bin.interval}, epoch_ms(${lo}))`);
-	const last = binEdge(bin, `time_bucket(${bin.interval}, epoch_ms(${hi}))`);
+	const first = binEdgeSQL(bin, `time_bucket(${bin.interval}, epoch_ms(${lo}))`);
+	const last = binEdgeSQL(bin, `time_bucket(${bin.interval}, epoch_ms(${hi}))`);
 	return `${edge} BETWEEN ${first} AND ${last}`;
-}
-
-/**
- * Bin `k`'s edge as the REAL the query draws. Numeric: `min + alpha * (k +
- * offset)`, in DOUBLE arithmetic. Time: the bucket start plus `offset`
- * intervals, as seconds from `t0`, the form the mark's time channels take.
- */
-function binEdge(bin: BinPadding, k: string): string {
-	if (bin.kind === 'number') {
-		return `CAST(${numericBinEdgeSQL(bin.min, bin.alpha, bin.offset, k)} AS REAL)`;
-	}
-	return `CAST((epoch(${k} + (${bin.interval}) * ${bin.offset}) - ${bin.t0}) AS REAL)`;
 }
 
 /**
@@ -582,7 +575,7 @@ function binMatch(bin: BinPadding, edge: string): string {
 	if (bin.kind === 'number') {
 		return `round((CAST(${edge} AS DOUBLE) - ${sqlNumber(bin.min)}) / ${sqlNumber(bin.alpha)}) - ${bin.offset} = d.k`;
 	}
-	return `${edge} = ${binEdge(bin, 'd.k')}`;
+	return `${edge} = ${binEdgeSQL(bin, 'd.k')}`;
 }
 
 /** A JS number as a DOUBLE literal: a bare 0.1 would be read as a DECIMAL. */
@@ -875,12 +868,18 @@ export function dense(options: { enabled?: boolean } = {}): SqlTransform {
 			// Silent: a table that cannot hold the whole extent's padding is not a
 			// snap. Its reads pad themselves (over their window), and say so if
 			// they cannot.
+			const padKey = config?.padKey ?? null;
 			const plan = densePlan(aliases, config, enabled);
 			if (!plan) return null;
+			// The key is of the bin the padding enumerates, or the rows cannot
+			// carry it.
+			const bandBin = padKey ? plan.bins?.find(([alias]) => alias === plan.band)?.[1] : null;
+			if (padKey && (!bandBin || binKeySQL(bandBin) !== padKey.sql)) return null;
+			const all = padKey ? [...aliases, padKey.alias] : aliases;
 			const empty = Query.select(
-				Object.fromEntries(aliases.map((alias) => [alias, rawSql('NULL')]))
+				Object.fromEntries(all.map((alias) => [alias, rawSql('NULL')]))
 			).where(rawSql('false')) as SelectQuery;
-			return String(densify(empty, aliases, plan));
+			return String(densify(empty, all, plan, null, [], padKey?.alias ?? null));
 		},
 		describe() {
 			return 'Dense categories';
