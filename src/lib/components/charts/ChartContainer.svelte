@@ -658,6 +658,7 @@
 		},
 
 		config: chartConfig,
+		gpuCoordinator,
 
 		onChartClick: null,
 		onInteractorPointerDown: null,

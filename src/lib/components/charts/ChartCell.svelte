@@ -480,6 +480,7 @@
 
 		// Configuration store — from parent ChartContainer
 		config: chartConfig,
+		gpuCoordinator,
 
 		// Pointer hooks — cell-local (mutable slots set by interactors)
 		onChartClick: null,

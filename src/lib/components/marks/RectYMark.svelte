@@ -308,7 +308,7 @@
 					chartContext,
 					markId,
 					filterGroups.get(entry.selection as string | undefined),
-					{ gpuCoordinator, onMarkLOD }
+					{ onMarkLOD }
 				);
 			}
 		});

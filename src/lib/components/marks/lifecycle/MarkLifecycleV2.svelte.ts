@@ -82,7 +82,6 @@ import {
 
 import { AdaptiveBinRung } from '$lib/lod/AdaptiveBinRung.svelte';
 import type { MarkLODSurface } from '$lib/lod/rung-types';
-import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import { generateMarkId, buildChannelFieldMap, resolveSortChannel } from '../utils';
 import { buildExpressionLabel, isLabeledTipEntry } from '../utils/channel-field-map';
 import { detectChannelsNeedingDataDomain } from './domain-computation';
@@ -618,7 +617,6 @@ export class MarkLifecycleV2 {
 		markId: string,
 		filterGroup: FilterGroup,
 		options?: {
-			gpuCoordinator?: GPUCoordinator | null;
 			onMarkLOD?: ((surface: MarkLODSurface | null) => void) | null;
 		}
 	) {
@@ -702,12 +700,18 @@ export class MarkLifecycleV2 {
 			}
 		});
 
-		// AdaptiveBinRung for binned marks (watches viewport domain, triggers rebin)
-		if (this.#autoBinNodes.size > 0 && options?.gpuCoordinator) {
+		// AdaptiveBinRung for binned marks (watches viewport domain, triggers rebin).
+		// For any mark with a bin() channel: the chart gives the coordinator, so no
+		// mark has to ask for it.
+		// Not for a path mark yet: finer bins over its whole extent pass the
+		// padding's row limit, and an unpadded path is drawn wrongly (a stacked
+		// area's bands overlap, a gap closes) where an unpadded bar is not.
+		const gpuCoordinator = chartContext.gpuCoordinator ?? null;
+		if (this.#autoBinNodes.size > 0 && gpuCoordinator && !config._rowLayouts) {
 			const binAxes = [...this.#autoBinNodes.keys()].map(
 				(ch) => (ch.startsWith('x') ? 'x' : 'y') as 'x' | 'y'
 			);
-			this.#adaptiveBinRung = new AdaptiveBinRung(options.gpuCoordinator, chartContext, {
+			this.#adaptiveBinRung = new AdaptiveBinRung(gpuCoordinator, chartContext, {
 				binAxes,
 				binningThreshold: 1.5,
 				setParam: (_key, value) => {
@@ -749,7 +753,7 @@ export class MarkLifecycleV2 {
 					}
 				}
 			});
-			if (options.onMarkLOD) {
+			if (options?.onMarkLOD) {
 				// The palette, tooltips and shift+scroll reach a mark's rungs through
 				// its MarkLODSurface; a binned mark has one rung and no DensityHost.
 				const rung = this.#adaptiveBinRung;

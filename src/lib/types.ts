@@ -8,6 +8,7 @@ import type { DataAccessor } from '$lib/data/DataAccessor';
 import type { ChartConfig } from '$lib/config/ChartConfig.svelte';
 import type { DimValue } from '$lib/query-engine/categorical-identity';
 import type { AutoBinNode } from '$lib/sql/bin';
+import type { GPUCoordinator } from '$lib/gpu/GPUCoordinator.svelte';
 import type { SelectionResponse } from '$lib/components/rendering/activity-reads';
 
 /** What a mark does with NULL in its categorical channels; see BaseMarkProps.nulls. */
@@ -790,6 +791,12 @@ export interface ChartContext {
 
 	// Configuration store
 	readonly config: ChartConfig;
+
+	/**
+	 * The coordinator the chart renders through, for what a mark's lifecycle runs
+	 * on its frame loop (a binned mark's rebin watch). Null without WebGPU.
+	 */
+	readonly gpuCoordinator?: GPUCoordinator | null;
 
 	// Pointer hooks (mutable slots set by interactors)
 	/** A click on the chart; `point` is the pointer relative to the chart's SVG (a shared
