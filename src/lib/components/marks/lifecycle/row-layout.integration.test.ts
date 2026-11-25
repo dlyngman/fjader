@@ -13,9 +13,9 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import duckdb from 'duckdb';
-import { column, count, sql, type ExprNode } from '@uwdata/mosaic-sql';
+import { avg, column, count, sql, type ExprNode } from '@uwdata/mosaic-sql';
 import { stackY, withDenseCategories, TransformCompiler } from '$lib/transforms';
-import { buildQueryParts, assembleQuery, castReal } from './query-builder';
+import { buildQueryParts, assembleQuery, castReal, gapChannels } from './query-builder';
 import { rowLayoutOf, type RowLayout } from './row-layout';
 import type { BinPadding, MarkConfig, Transform } from '$lib/types';
 
@@ -61,6 +61,11 @@ CREATE TABLE carrier_dim AS
 CREATE VIEW flights_v AS
 	SELECT f.*, b.id AS band_idx, c.id AS carrier_idx
 	FROM flights f JOIN band_dim b ON f.band = b.value JOIN carrier_dim c ON f.carrier = c.value;
+-- The same flights with the morning's 'medium' ones of no known band: their id is
+-- -1, the absent series, here with data.
+CREATE VIEW flights_unknown_v AS
+	SELECT * REPLACE (CASE WHEN band = 'medium' AND hour < 6 THEN -1 ELSE band_idx END AS band_idx)
+	FROM flights_v;
 `;
 
 let db: DB;
@@ -84,6 +89,10 @@ interface Case {
 	bins?: Record<string, BinPadding>;
 	identity?: MarkConfig['identity'];
 	series?: boolean;
+	/** The table the mark reads; the flights' view by default. */
+	table?: string;
+	/** A path mark's padding facts (MarkConfig.gaps, absentSeriesGap). */
+	path?: boolean;
 }
 
 /** A path mark's query run as the lifecycle assembles it, and the layout it declares. */
@@ -97,16 +106,19 @@ async function run(c: Case): Promise<{
 	const parts = buildQueryParts(c.select, c.series === false ? null : PATH_ORDER, hasSQL);
 	parts.bins = c.bins ?? null;
 	// The channel names the stack reads its band, value and series from.
+	const table = c.table ?? 'flights_v';
 	const config = {
 		markType: 'areay',
-		table: 'flights_v',
+		table,
 		x: 'x',
 		y: 'y2',
 		fill: 'fill',
-		identity: c.identity
+		identity: c.identity,
+		// As the lifecycle states them for an unstacked path mark.
+		...(c.path ? { gaps: gapChannels(c.select), absentSeriesGap: true } : {})
 	} as MarkConfig;
 	const compiler = new TransformCompiler(transforms, config);
-	const query = assembleQuery({ table: 'flights_v', parts, transformCompiler: compiler });
+	const query = assembleQuery({ table, parts, transformCompiler: compiler });
 	const text = String(query);
 	const rows = (await db.all(text)).map((row) =>
 		Object.fromEntries(Object.entries(row).map(([k, v]) => [k, Number(v)]))
@@ -270,5 +282,123 @@ describe('rows that come back in another order', () => {
 			resorted.map((row) => row[channel])
 		);
 		expect(layout.kind).toBe('refused');
+	});
+});
+
+describe('what a padded row holds on a path', () => {
+	const series = SERIES_IDS.length;
+	const ofSeries = (rows: Record<string, number>[], id: number) =>
+		rows.filter((row) => row.fill === id);
+
+	it('a count stays 0 where a series has no flights, and the layout is unchanged', async () => {
+		const { rows, layout } = await run({
+			select: { x: HOUR_BIN, y: castReal(count()), fill: castReal(column('band_idx')) },
+			transforms: [],
+			bins: HOUR_BINS,
+			identity: BAND_IDENTITY,
+			path: true
+		});
+		expect(layout).toEqual({ kind: 'grid', facets: 1, bins: BINS, series });
+		// 'long' (id 0) has no flights after noon: a count of none is 0, drawn.
+		const longAfternoon = ofSeries(rows, 0).filter((row) => row.x >= 12);
+		expect(longAfternoon).toHaveLength(12);
+		expect(longAfternoon.every((row) => row.y === 0)).toBe(true);
+	});
+
+	it('the absent series is left out when it is empty: NaN in every bin, still a row', async () => {
+		const { rows } = await run({
+			select: { x: HOUR_BIN, y: castReal(count()), fill: castReal(column('band_idx')) },
+			transforms: [],
+			bins: HOUR_BINS,
+			identity: BAND_IDENTITY,
+			path: true
+		});
+		const absent = ofSeries(rows, -1);
+		expect(absent).toHaveLength(BINS);
+		expect(absent.every((row) => Number.isNaN(row.y))).toBe(true);
+		// No other series is touched.
+		expect(rows.filter((row) => row.fill !== -1).every((row) => !Number.isNaN(row.y))).toBe(true);
+	});
+
+	it('the absent series keeps its data when it has some, zeros included', async () => {
+		const { rows } = await run({
+			select: { x: HOUR_BIN, y: castReal(count()), fill: castReal(column('band_idx')) },
+			transforms: [],
+			bins: HOUR_BINS,
+			identity: BAND_IDENTITY,
+			table: 'flights_unknown_v',
+			path: true
+		});
+		const absent = ofSeries(rows, -1);
+		expect(absent).toHaveLength(BINS);
+		expect(absent.filter((row) => row.x < 6).every((row) => row.y > 0)).toBe(true);
+		expect(absent.filter((row) => row.x >= 6).every((row) => row.y === 0)).toBe(true);
+	});
+
+	it('a mean is a gap where a series has no flights, not a point at zero', async () => {
+		const { rows, layout } = await run({
+			select: {
+				x: HOUR_BIN,
+				y: castReal(avg(column('hour'))),
+				fill: castReal(column('band_idx'))
+			},
+			transforms: [],
+			bins: HOUR_BINS,
+			identity: BAND_IDENTITY,
+			path: true
+		});
+		expect(layout).toEqual({ kind: 'grid', facets: 1, bins: BINS, series });
+		const long = ofSeries(rows, 0);
+		expect(long.filter((row) => row.x >= 12).every((row) => Number.isNaN(row.y))).toBe(true);
+		// Where it flies, the mean of the hours in bin b lies in [b, b + 1).
+		for (const row of long.filter((r) => r.x < 12)) {
+			expect(row.y).toBeGreaterThanOrEqual(row.x);
+			expect(row.y).toBeLessThan(row.x + 1);
+		}
+		// The empty absent series is all gaps already.
+		expect(ofSeries(rows, -1).every((row) => Number.isNaN(row.y))).toBe(true);
+	});
+
+	it('without the path facts (a bar, a stack) a padded row is 0, as before', async () => {
+		const { rows } = await run({
+			select: {
+				x: HOUR_BIN,
+				y: castReal(avg(column('hour'))),
+				fill: castReal(column('band_idx'))
+			},
+			transforms: [],
+			bins: HOUR_BINS,
+			identity: BAND_IDENTITY
+		});
+		expect(rows.every((row) => !Number.isNaN(row.y))).toBe(true);
+		expect(ofSeries(rows, -1).every((row) => row.y === 0)).toBe(true);
+	});
+
+	it('faceted, the absent series is judged per cell', async () => {
+		// 'medium' before 06:00 is the absent series' only data, and the carrier
+		// with id 1 has no such flights at all: its cell leaves the series out,
+		// the others draw it.
+		const { rows } = await run({
+			select: {
+				x: HOUR_BIN,
+				y: castReal(count()),
+				fill: castReal(column('band_idx')),
+				__facet: castReal(column('carrier_idx'))
+			},
+			transforms: [],
+			bins: HOUR_BINS,
+			identity: {
+				...BAND_IDENTITY,
+				__facet: { dim: 'carrier_dim', size: CARRIERS.length, positional: false }
+			},
+			table: 'flights_unknown_v',
+			path: true
+		});
+		const cell = (facet: number) => rows.filter((row) => row.__facet === facet && row.fill === -1);
+		const empty = [0, 1, 2].filter((f) => cell(f).every((row) => Number.isNaN(row.y)));
+		const drawn = [0, 1, 2].filter((f) => cell(f).some((row) => row.y > 0));
+		expect(empty.length + drawn.length).toBe(3);
+		expect(drawn.length).toBeGreaterThan(0);
+		for (const f of drawn) expect(cell(f).every((row) => !Number.isNaN(row.y))).toBe(true);
 	});
 });

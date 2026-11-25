@@ -235,6 +235,70 @@ export function withoutOtherMembers(sql: string): string {
 /** The original band id, carried through bucketing, which rewrites the band column. */
 const BAND_SOURCE_COLUMN = '__dplot_band_src';
 
+/** The facet channel of a faceted mark's query: a crossed key that is not a series. */
+const FACET_CHANNEL = '__facet';
+
+/**
+ * The channels of a padded result that hold measures: what `densify` pads
+ * with a value (0, or NaN for a gap), as opposed to the bins, the band, the
+ * crossed keys and the id, member and rank columns it fills by other rules.
+ */
+function measureAliases(aliases: string[], plan: DensePlan): string[] {
+	const binned = new Set((plan.bins ?? []).map(([channel]) => channel));
+	const crossed = new Set(plan.cross.map(([key]) => key));
+	return aliases.filter(
+		(alias) =>
+			!binned.has(alias) &&
+			alias !== plan.band &&
+			!crossed.has(alias) &&
+			alias !== RANK_COLUMN &&
+			!alias.startsWith(OTHER_MEMBER_PREFIX) &&
+			!plan.identity[alias]
+	);
+}
+
+/**
+ * Leave out the absent series when it is empty (MarkConfig.absentSeriesGap).
+ *
+ * Padding crosses each series key with its dim's ids and -1, the id of a value
+ * the dim does not hold (a NULL series, or one not folded in yet). When no row
+ * carries it, that series is zero in every bin: on a bar chart nothing, on a
+ * line chart a line along the baseline that no legend names. Its measures
+ * become NaN, which a path breaks on.
+ *
+ * Decided from the VALUES, zero in every bin of the series (per facet), not
+ * from which rows the join added: a preagg table holds its padding rows as
+ * rows like any other, and a read of one must give what a read of the base
+ * table gives. A series -1 with data keeps it. A window over the padded
+ * result, which is bins × series: bounded by the padding row limit.
+ *
+ * -1 is still crossed in, always, so the number of series per bin does not
+ * change with the data: the row layout stays what it was.
+ */
+function hideEmptyAbsentSeries(
+	padded: SelectQuery,
+	aliases: string[],
+	plan: DensePlan,
+	gaps: readonly string[]
+): SelectQuery {
+	const series = plan.cross.map(([key]) => key).filter((key) => key !== FACET_CHANNEL);
+	// A gap channel is already NaN wherever the series has no data.
+	const zeroed = measureAliases(aliases, plan).filter((alias) => !gaps.includes(alias));
+	if (series.length === 0 || zeroed.length === 0) return padded;
+	const absent = series.map((key) => `${column(key)} = -1`).join(' OR ');
+	const partition = plan.cross.map(([key]) => `${column(key)}`).join(', ');
+	const select: Record<string, ExprNode> = {};
+	for (const alias of aliases) {
+		select[alias] = zeroed.includes(alias)
+			? (rawSql(
+					`CASE WHEN (${absent}) AND MAX(ABS(${column(alias)})) OVER (PARTITION BY ${partition}) = 0 ` +
+						`THEN 'NaN'::REAL ELSE ${column(alias)} END`
+				) as ExprNode)
+			: (column(alias) as ExprNode);
+	}
+	return Query.from({ __padded: padded }).select(select) as SelectQuery;
+}
+
 /**
  * Give every category in the dim a row, at zero past the cutoff.
  *
@@ -279,7 +343,8 @@ function densify(
 	inner: SelectQuery,
 	aliases: string[],
 	plan: DensePlan,
-	window: BinWindow | null = null
+	window: BinWindow | null = null,
+	gaps: readonly string[] = []
 ): SelectQuery {
 	const { band, dim, cross, bins } = plan;
 	const crossAlias = new Map(cross.map(([key], i) => [key, `k${i}`]));
@@ -324,6 +389,11 @@ function densify(
 			// would enter the colour scale's domain, shift every palette rank after
 			// it, and repaint bars that had not changed.
 			select[alias] = sqlTag`COALESCE(a.${column(alias)}, CAST(-1 AS REAL))` as ExprNode;
+		} else if (gaps.includes(alias)) {
+			// A measure with no value over no rows (a mean, a minimum), on a mark
+			// that draws rows as points along a path: a gap, which the path
+			// renderers break on. 0 there is a point at zero that no data put there.
+			select[alias] = sqlTag`COALESCE(a.${column(alias)}, 'NaN'::REAL)` as ExprNode;
 		} else {
 			// A measure. 0 is the point: it is what makes a departing bar shrink to
 			// nothing rather than vanish.
@@ -761,18 +831,27 @@ export function dense(options: { enabled?: boolean } = {}): SqlTransform {
 			// ORDER BY takes from alignment() as for any other read.
 			const aliases = getSelectAliases(query);
 			const window = config?.binWindow ?? null;
+			const gaps = config?.gaps ?? [];
+			// On a path, an empty absent series is left out: on either read, so a
+			// preagg table's rows give what the base table's give.
+			const finish = (padded: SelectQuery, plan: DensePlan | null) =>
+				plan && config?.absentSeriesGap
+					? hideEmptyAbsentSeries(padded, aliases, plan, gaps)
+					: padded;
 			if (config?.padded) {
 				// Holding every bin of the extent: a window keeps its bins only.
-				const plan = window ? densePlan(aliases, config, enabled, reported) : null;
-				const bandBin = plan?.bins?.[0];
-				if (!bandBin) return query;
+				const plan =
+					window || config.absentSeriesGap ? densePlan(aliases, config, enabled, reported) : null;
+				const bandBin = window ? plan?.bins?.[0] : undefined;
+				if (!bandBin) return finish(query, plan);
 				const [alias, bin] = bandBin;
-				return Query.from({ __window: query })
+				const windowed = Query.from({ __window: query })
 					.select(aliases)
 					.where(rawSql(binWindowFilter(bin, column(alias).toString(), window!))) as SelectQuery;
+				return finish(windowed, plan);
 			}
 			const plan = densePlan(aliases, config, enabled, reported);
-			return plan ? densify(query, aliases, plan, window) : query;
+			return plan ? finish(densify(query, aliases, plan, window, gaps), plan) : query;
 		},
 		/**
 		 * The rows apply() would add, as the padding of an empty result: the same

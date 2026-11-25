@@ -43,6 +43,8 @@
 			// (AA all, B6 a fifth) and its delays are shifted by 15 minutes more than
 			// the last one's. The bands are thirds of the distances. 'B6' also has no long flights, so its long rows exist
 			// only as padding.
+			// 'UA' has no flights delayed 60 to 110 minutes: a hole in the middle of
+			// its range, where a count is 0 and a mean is a gap.
 			await queryEngine.exec(`
 				CREATE TABLE pg_flights AS
 				SELECT delay + 15 * k AS delay, distance, carrier, band FROM (
@@ -57,6 +59,7 @@
 					)
 				)
 				WHERE (n // 5) % 5 >= k AND NOT (carrier = 'B6' AND band = 'long')
+					AND NOT (carrier = 'UA' AND delay + 15 * k BETWEEN 60 AND 110)
 			`);
 			isLoaded = true;
 		} catch (error) {
@@ -84,8 +87,11 @@
 				<h3>1. A line per carrier</h3>
 				<p class="desc">
 					Five lines of counts, one per carrier, each joined along the bins: AA the tallest, B6 the
-					lowest, each peak a little right of the last. No line jumps between carriers. A flat line
-					along the baseline, if there is one, is the padding's own series: known, and a later step.
+					lowest, each peak a little right of the last. No line jumps between carriers, and no extra
+					line runs along the baseline: the padding's own series, for a carrier the data does not
+					have, is left out when it is empty. UA has no flights delayed 60 to 110 minutes: a count
+					of none is 0, so its line drops to the baseline across that stretch and comes back,
+					unbroken.
 				</p>
 				<div class="panel">
 					<ChartContainer xLabel="delay" yLabel="count">
@@ -208,10 +214,13 @@
 			</div>
 
 			<div class="case">
-				<h3>6. A line of means (known to be wrong until padded values are fixed)</h3>
+				<h3>6. A line of means: a gap where there is no data</h3>
 				<p class="desc">
-					Mean distance per carrier. A bin with no flights is padded with 0, so a line dips to zero
-					there where a gap is meant. Here to be seen, not fixed yet.
+					Mean distance per carrier. UA has no flights delayed 60 to 110 minutes, so it has no mean
+					there: its line stops before 60 and starts again after 110, with nothing in between, and
+					never dips to zero. The other four lines run through. At the ends, each line simply starts
+					and stops where its carrier's flights do. Hovering inside UA's gap shows the other
+					carriers and nothing for UA.
 				</p>
 				<div class="panel">
 					<ChartContainer xLabel="delay" yLabel="mean distance">

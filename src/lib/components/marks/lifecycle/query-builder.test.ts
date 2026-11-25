@@ -19,7 +19,10 @@ import {
 	castNumeric,
 	splitWindowSelect,
 	buildOuterWindow,
-	outerOrder
+	outerOrder,
+	gapChannels,
+	measureChannels,
+	castReal
 } from './query-builder';
 
 // ---------------------------------------------------------------------------
@@ -415,5 +418,40 @@ describe('outerOrder', () => {
 
 	it('keeps a facet leading, so each cell stays contiguous', () => {
 		expect(outerOrder(['__facet'], ['x', '__facet'])).toEqual(['__facet', 'x']);
+	});
+});
+
+describe('gapChannels: measures with no value over no rows', () => {
+	const select = {
+		x: sqlColumn('hour'),
+		n: count(),
+		total: sum(sqlColumn('fare')),
+		mean: avg(sqlColumn('fare')),
+		mid: median(sqlColumn('fare')),
+		ratio: sql`${sum(sqlColumn('fare'))} / ${count()}`,
+		fill: 'carrier'
+	};
+
+	it('a count and a sum of nothing are 0; a mean, a median and any expression over aggregates are not', () => {
+		expect(measureChannels(select)).toEqual(['n', 'total', 'mean', 'mid', 'ratio']);
+		expect(gapChannels(select)).toEqual(['mean', 'mid', 'ratio']);
+	});
+
+	it('sees through the numeric wrapping a channel may already carry', () => {
+		const wrapped = { n: castReal(count()), mean: castReal(avg(sqlColumn('fare'))) };
+		expect(measureChannels(wrapped)).toEqual(['n', 'mean']);
+		expect(gapChannels(wrapped)).toEqual(['mean']);
+	});
+
+	it('leaves out window expressions, plain columns and strings', () => {
+		const windowed = {
+			x: sqlColumn('hour'),
+			rolling: avg(sqlColumn('fare'))
+				.orderby(sqlColumn('hour'))
+				.frame(frameRows([preceding(3), following(0)])),
+			fill: 'carrier'
+		};
+		expect(measureChannels(windowed)).toEqual([]);
+		expect(gapChannels(windowed)).toEqual([]);
 	});
 });

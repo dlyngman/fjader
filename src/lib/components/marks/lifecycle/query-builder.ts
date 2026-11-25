@@ -380,6 +380,67 @@ export function buildQueryParts(
 }
 
 // ---------------------------------------------------------------------------
+// Measures — what a row with no data holds
+// ---------------------------------------------------------------------------
+
+/** Aggregates whose value over no rows is zero. */
+const ZERO_OVER_NOTHING = new Set(['count', 'sum']);
+
+/**
+ * The measure channels of `select` whose value over no rows is NO VALUE, where
+ * a count or a sum of none is 0: a mean, a minimum, a maximum, a median, and
+ * any expression over aggregates (a ratio of sums is a mean). For a mark that
+ * draws rows as points along a path, a padded row is a gap in these channels
+ * (MarkConfig.gaps).
+ *
+ * "No value" is the safe reading of an expression that cannot be classified:
+ * a gap where a zero was meant shows less than there is, a zero where a gap
+ * was meant shows something false.
+ */
+export function gapChannels(select: Record<string, unknown>): string[] {
+	const gaps: string[] = [];
+	for (const channel of measureChannels(select)) {
+		const aggregate = unwrapCast(select[channel]) as { type?: string; name?: string };
+		const zero =
+			aggregate.type === 'AGGREGATE' &&
+			typeof aggregate.name === 'string' &&
+			ZERO_OVER_NOTHING.has(aggregate.name.toLowerCase());
+		if (!zero) gaps.push(channel);
+	}
+	return gaps;
+}
+
+/**
+ * `expr` without the numeric wrapping a channel may already carry: a CAST, and
+ * `castReal`'s COALESCE of one to NaN. What is inside is still the aggregate.
+ */
+function unwrapCast(expr: unknown): unknown {
+	let node = expr as { type?: string; name?: string; expr?: unknown; args?: unknown[] };
+	for (;;) {
+		if (node?.type === 'CAST' && node.expr) node = node.expr as typeof node;
+		else if (
+			node?.type === 'FUNCTION' &&
+			node.name?.toLowerCase() === 'coalesce' &&
+			node.args?.length === 2
+		)
+			node = node.args[0] as typeof node;
+		else return node;
+	}
+}
+
+/** The channels of `select` that are aggregates: its measures, in select order. */
+export function measureChannels(select: Record<string, unknown>): string[] {
+	const measures: string[] = [];
+	for (const channel in select) {
+		const expr = select[channel];
+		if (expr == null || !isNode(expr)) continue;
+		if (isAggregateExpression(expr as ExprNode) && !isWindowExpression(expr))
+			measures.push(channel);
+	}
+	return measures;
+}
+
+// ---------------------------------------------------------------------------
 // Assembly — the one sequence every query path follows
 // ---------------------------------------------------------------------------
 
