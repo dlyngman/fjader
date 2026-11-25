@@ -395,6 +395,8 @@
 			dataVersion={setup?.dataVersion || 0}
 			grow={!hasExplicitBounds}
 			rebinSource={setup?.rebinSource ?? null}
+			landsFor={setup?.landsFor ?? 0}
+			bottomMoves={hasStackTransform || typeof x1 !== 'number'}
 		/>
 		{#if (entry.strokeWidth ?? 0) > 0}
 			<Lines
@@ -417,6 +419,8 @@
 				dataVersion={setup?.dataVersion || 0}
 				grow={hasExplicitBounds ? null : 'x'}
 				rebinSource={setup?.rebinSource ?? null}
+				landsFor={setup?.landsFor ?? 0}
+				dimAxis="y"
 			/>
 			{#if showBothBoundaries}
 				<Lines
@@ -439,6 +443,8 @@
 					dataVersion={setup?.dataVersion || 0}
 					grow={hasExplicitBounds ? null : 'x'}
 					rebinSource={setup?.rebinSource ?? null}
+					landsFor={setup?.landsFor ?? 0}
+					dimAxis="y"
 				/>
 			{/if}
 		{/if}

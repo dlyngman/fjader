@@ -11,6 +11,7 @@
 	import type { ChartContext, WebGPUCanvasContext, CurveType } from '$lib/types';
 	import type { RebinSource } from '$lib/gpu/bin-remap';
 	import { RUNS } from '$lib/components/marks/lifecycle/row-layout';
+	import { foldsBetweenUpdates, landingTracker } from './path-fold';
 
 	// Areas uses projectToPixels() directly (like Lines, not like Rects).
 	// We define x/y so scaleX/scaleY functions are generated.
@@ -89,6 +90,18 @@
 		 * Absent, the rows are runs.
 		 */
 		rebinSource?: RebinSource | null;
+		/**
+		 * Whether the bottom edge is data (a stack's lower edge, an area between
+		 * two columns) as opposed to the constant baseline. Data travels between
+		 * results on a grid, as the top edge does; a baseline never changes, and
+		 * is left a static buffer.
+		 */
+		bottomMoves?: boolean;
+		/**
+		 * The data version whose first write lands at once, not travelling: a
+		 * catch-up result (MarkLifecycleV2.landsFor). 0: none.
+		 */
+		landsFor?: number;
 	}
 
 	let {
@@ -114,7 +127,9 @@
 		constantColor = DEFAULT_FILL_COLOR,
 		markId = '',
 		grow = false,
-		rebinSource = null
+		rebinSource = null,
+		bottomMoves = true,
+		landsFor = 0
 	}: Props = $props();
 
 	/** How the rows are laid out; a refused layout draws nothing (the lifecycle says why). */
@@ -472,11 +487,40 @@
 	$effect(() => {
 		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.DIM, dimData);
 	});
+	// The edges: on a grid they TRAVEL from what is drawn to the new result
+	// (path-fold.ts), as ONE write per data update, so one update starts one
+	// transition and both edges of a stacked band move on one clock. The dim's
+	// values go with it: they are how a result of another layout is noticed and
+	// snapped. Measured on the value axis, so they resolve in pixel space and
+	// glide while that axis refits. A bottom that is the baseline stays static.
+	// Runs are replaced.
+	const SCALED_EDGES = [BINDINGS.TOP, BINDINGS.BOTTOM];
+	const SCALED_TOP = [BINDINGS.TOP];
+	const lands = landingTracker();
 	$effect(() => {
-		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.TOP, topData);
-	});
-	$effect(() => {
-		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.BOTTOM, bottomData);
+		if (!renderer?.resourcesCreated) return;
+		if (!foldsBetweenUpdates(rowLayout)) {
+			renderer.writeAttribute(BINDINGS.TOP, topData);
+			renderer.writeAttribute(BINDINGS.BOTTOM, bottomData);
+			return;
+		}
+		const land = lands(dataVersion, landsFor) ? 'all' : undefined;
+		const dimAxis = orientation === 'horizontal' ? 'y' : 'x';
+		if (bottomMoves) {
+			renderer.writeMorphed(
+				dimAxis,
+				dimData,
+				[
+					[BINDINGS.TOP, topData],
+					[BINDINGS.BOTTOM, bottomData]
+				],
+				land,
+				SCALED_EDGES
+			);
+		} else {
+			renderer.writeMorphed(dimAxis, dimData, [[BINDINGS.TOP, topData]], land, SCALED_TOP);
+			renderer.writeAttribute(BINDINGS.BOTTOM, bottomData);
+		}
 	});
 	$effect(() => {
 		if (renderer?.resourcesCreated && seriesData)
