@@ -499,6 +499,8 @@ export class GPUCoordinator {
 	#chartIOVisible = new Map<string, boolean>(); // per-chart IO state
 	#pageVisible = true;
 	#boundPageVisibilityHandler: (() => void) | null = null;
+	/** Set by destroy(): an initialize() still waiting for its device then releases it. */
+	#destroyed = false;
 
 	// =========================================================================
 	// PER-FRAME CALLBACKS (for tooltip scheduling, etc.)
@@ -692,6 +694,13 @@ export class GPUCoordinator {
 
 		try {
 			await this.#initWebGPU();
+			// Destroyed while the device was being requested (a page left before
+			// it arrived): destroy() found no device, so release it here.
+			if (this.#destroyed) {
+				this.#device?.destroy();
+				this.#device = null;
+				return;
+			}
 			await this.#initializeScaleBindGroupLayouts();
 
 			this.#initialized = true;
@@ -3308,9 +3317,21 @@ export class GPUCoordinator {
 	destroy(): void {
 		console.log('Destroying GPUCoordinator');
 
+		this.#destroyed = true;
+
 		// Stop animation loop
 		this.#animationLoop?.destroy();
 		this.#animationLoop = null;
+
+		// Both hold this coordinator: the listener from `document`, the observer
+		// through the canvases it watches.
+		if (this.#boundPageVisibilityHandler) {
+			document.removeEventListener('visibilitychange', this.#boundPageVisibilityHandler);
+			this.#boundPageVisibilityHandler = null;
+		}
+		this.#visibilityObserver?.disconnect();
+		this.#visibilityObserver = null;
+		this.#chartIOVisible.clear();
 
 		// Cleanup timestamp query resources (FIXED: was leaking)
 		this.#resolveBuffer?.destroy();

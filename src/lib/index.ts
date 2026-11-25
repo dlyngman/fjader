@@ -1,4 +1,5 @@
 // src/lib/index.ts
+import { onDestroy } from 'svelte';
 import { setScaleRegistry } from '$lib/scales';
 import { setGPUCoordinator } from '$lib/gpu';
 import { setQueryContext, initDuckDB } from '$lib/query-engine';
@@ -47,6 +48,12 @@ export function initFjader(init?: FjaderInit) {
 	gpuCoordinator.setScaleRegistry(scaleRegistry);
 	gpuCoordinator.setFilterGroups(filterGroups);
 	scaleRegistry.setGPUCoordinator(gpuCoordinator);
+
+	// Leaving the page that called initFjader() releases the GPU device. After
+	// the unmount, not during it: Svelte runs this component's teardown before
+	// its children's, and the marks release their renderers through the
+	// coordinator in theirs.
+	onDestroy(() => queueMicrotask(() => gpuCoordinator.destroy()));
 
 	return { queryEngine, filterGroups, scaleRegistry, gpuCoordinator };
 }
