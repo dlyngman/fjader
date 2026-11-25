@@ -604,6 +604,7 @@
 			m4Decimator={m4Eligible ? m4Decimator : null}
 			rebinSource={setup?.rebinSource ?? null}
 			{dotsRung}
+			landsFor={setup?.landsFor ?? 0}
 		/>
 	{/key}
 	{#if smoothRung?.active && smoothRung.node}

@@ -9,6 +9,7 @@
 	import { PATH_WGSL, pathFacetWGSL } from '$lib/gpu/PathShaderLib';
 	import type { RebinSource } from '$lib/gpu/bin-remap';
 	import { RUNS } from '$lib/components/marks/lifecycle/row-layout';
+	import { foldsBetweenUpdates, landingTracker } from './path-fold';
 	import { DEFAULT_STROKE_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, WebGPUCanvasContext, CurveType } from '$lib/types';
 	import type { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte';
@@ -95,6 +96,18 @@
 		 * Absent, the rows are runs.
 		 */
 		rebinSource?: RebinSource | null;
+		/**
+		 * The axis the path runs along, whose values are the rows' positions in
+		 * their bins: x for a line mark and a vertical area's outline, y for a
+		 * horizontal area's. The other axis's channel is the value, which travels
+		 * between results on a grid.
+		 */
+		dimAxis?: 'x' | 'y';
+		/**
+		 * The data version whose first write lands at once, not travelling: a
+		 * catch-up result (MarkLifecycleV2.landsFor). 0: none.
+		 */
+		landsFor?: number;
 	}
 
 	let {
@@ -121,7 +134,9 @@
 		globalAlpha = 1.0,
 		markId = '',
 		grow = null,
-		rebinSource = null
+		rebinSource = null,
+		dimAxis = 'x',
+		landsFor = 0
 	}: Props = $props();
 
 	/** How the rows are laid out; a refused layout draws nothing (the lifecycle says why). */
@@ -440,11 +455,37 @@
 
 	// --- WRITING EFFECTS ---
 
+	// The dim: static. On a grid it is the same for every result of one layout.
 	$effect(() => {
-		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.X, xData);
+		if (!renderer?.resourcesCreated) return;
+		if (dimAxis === 'x') renderer.writeAttribute(BINDINGS.X, xData);
+		else renderer.writeAttribute(BINDINGS.Y, yData);
 	});
+	// The value: on a grid it TRAVELS from what is drawn to the new result
+	// (path-fold.ts), as ONE write per data update, so one update starts one
+	// transition. The dim's values go with it: they are how a result of another
+	// layout is noticed and snapped. Measured on the value axis, so it resolves
+	// in pixel space and glides while that axis refits. Runs are replaced.
+	const SCALED_Y = [BINDINGS.Y];
+	const SCALED_X = [BINDINGS.X];
+	const lands = landingTracker();
 	$effect(() => {
-		if (renderer?.resourcesCreated) renderer.writeAttribute(BINDINGS.Y, yData);
+		if (!renderer?.resourcesCreated) return;
+		const alongX = dimAxis === 'x';
+		const binding = alongX ? BINDINGS.Y : BINDINGS.X;
+		const value = alongX ? yData : xData;
+		if (!foldsBetweenUpdates(rowLayout)) {
+			renderer.writeAttribute(binding, value);
+			return;
+		}
+		const land = lands(dataVersion, landsFor) ? 'all' : undefined;
+		renderer.writeMorphed(
+			dimAxis,
+			alongX ? xData : yData,
+			[[binding, value]],
+			land,
+			alongX ? SCALED_Y : SCALED_X
+		);
 	});
 	$effect(() => {
 		if (renderer?.resourcesCreated && seriesData)
