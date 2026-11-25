@@ -19,6 +19,12 @@
 	 *   ?mutations=1  count DOM mutation records per frame (observing costs too,
 	 *                 so leave it off for timing runs)
 	 *   ?scale=N      the flights table N times over (default 1: 200k rows)
+	 *   ?stack=js     the stacked histogram and area charts (20 and 25) stack
+	 *                 in JS, not SQL, and every run of that transform is counted:
+	 *                 each event in the log carries the count so far (`jsApplies`),
+	 *                 so a phase's count is the difference to the next phase's.
+	 *                 Against the phase's frames it says whether a mark's JS
+	 *                 transforms run per data update or per animated frame.
 	 *
 	 * Run session, wait for the summary, then Save log (dash30-<variant>.json in
 	 * Downloads). One run per page load: reload between runs. Don't move the
@@ -96,9 +102,33 @@
 	const MUTATIONS = params.get('mutations') === '1';
 	const SCALE = Math.max(1, Number(params.get('scale')) || 1);
 	const CHART_COUNT = Math.min(30, Math.max(1, Number(params.get('charts')) || 30));
+	const STACK_JS = params.get('stack') === 'js';
 	const VARIANT = `${LABEL_MODE === 'none' ? 'nolabels' : LABEL_MODE === 'text' ? 'textmark' : 'attached'}-${AXES ? 'axes' : 'noaxes'}${
 		CHART_COUNT < 30 ? `-c${CHART_COUNT}` : ''
-	}${SCALE > 1 ? `-x${SCALE}` : ''}${MUTATIONS ? '-mut' : ''}`;
+	}${SCALE > 1 ? `-x${SCALE}` : ''}${MUTATIONS ? '-mut' : ''}${STACK_JS ? '-stackjs' : ''}`;
+
+	/** Runs of the JS stack transform so far (?stack=js), over every chart using it. */
+	let jsApplies = 0;
+	/** One transforms array per stacked chart, built once: a new array rebuilds the mark. */
+	const stacks = new Map();
+	function stackOf(c) {
+		let transforms = stacks.get(c.id);
+		if (!transforms) {
+			if (STACK_JS) {
+				const js = stackY({ engine: 'js' });
+				const counted = {
+					...js,
+					apply(...args) {
+						jsApplies++;
+						return js.apply(...args);
+					}
+				};
+				transforms = [counted];
+			} else transforms = [stackY()];
+			stacks.set(c.id, transforms);
+		}
+		return transforms;
+	}
 
 	const { queryEngine, gpuCoordinator } = initFjader();
 	const log = attachQueryLog(queryEngine);
@@ -288,7 +318,13 @@
 		chartEl(id).querySelector('rect.interaction-target').getBoundingClientRect();
 
 	function mark(kind, label, extra = {}) {
-		events.push({ kind, label, t: performance.now(), ...extra });
+		events.push({
+			kind,
+			label,
+			t: performance.now(),
+			...(STACK_JS ? { jsApplies } : {}),
+			...extra
+		});
 		// Mirrored as User Timing, so a Chrome performance trace shows it (docs/measuring.md).
 		performance.mark(`fjader:${kind}:${label}`);
 	}
@@ -716,7 +752,7 @@
 									y={count()}
 									fill={c.fill}
 									inset={0.5}
-									transforms={[stackY()]}
+									transforms={stackOf(c)}
 									selection="brush"
 								/>
 							{:else if c.kind === 'line'}
@@ -735,7 +771,7 @@
 									x={bin(c.x)}
 									y={count()}
 									fill={c.fill}
-									transforms={[stackY()]}
+									transforms={stackOf(c)}
 									selection="brush"
 								/>
 							{:else if c.kind === 'dots'}

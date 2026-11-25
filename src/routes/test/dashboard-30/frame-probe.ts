@@ -121,10 +121,33 @@ class PassTimer {
 	/** The readback the last finished encoder copied into, its query count and pass kinds. */
 	#pending: { slot: number; count: number; kinds: string } | null = null;
 	readonly #restore: () => void;
+	/**
+	 * Whether the query set exists. Its creation can fail: Metal has few counter
+	 * sample buffers, shared by every tab's devices. A pass given an invalid
+	 * query set is invalid, and so is its whole frame, for every chart: so no
+	 * pass is timed until the device has said the query set is good, and none
+	 * ever if it is not.
+	 */
+	#usable = false;
 
 	constructor(device: GPUDevice) {
 		const n = PassTimer.QUERIES;
+		const scopes = ['validation', 'out-of-memory', 'internal'] as const;
+		for (const scope of scopes) device.pushErrorScope(scope);
 		this.#querySet = device.createQuerySet({ type: 'timestamp', count: n });
+		Promise.all(scopes.map(() => device.popErrorScope())).then(
+			(errors) => {
+				const error = errors.find((e) => e !== null);
+				if (!error) this.#usable = true;
+				else
+					console.warn(
+						'[frame-probe] No GPU pass timing: the timestamp query set could not be created ' +
+							`(${error.message.split('\n')[0]}). Other tabs holding GPU devices use up the ` +
+							'few Metal allows: close them, or restart the browser, for pass times.'
+					);
+			},
+			() => {}
+		);
 		this.#resolve = device.createBuffer({
 			size: n * 8,
 			usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC
@@ -150,7 +173,7 @@ class PassTimer {
 			) => {
 				return (d?: D): R => {
 					const desc = (d ?? {}) as D;
-					if (used + 2 > n) return begin.call(encoder, desc);
+					if (!this.#usable || used + 2 > n) return begin.call(encoder, desc);
 					const had = desc.timestampWrites;
 					desc.timestampWrites = {
 						querySet,
@@ -243,6 +266,7 @@ class PassTimer {
 
 	destroy(): void {
 		this.#restore();
+		this.#querySet.destroy();
 	}
 }
 
