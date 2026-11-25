@@ -294,11 +294,7 @@
 					queryEngine,
 					chartContext,
 					markId,
-					filterGroups.get(selection as string | undefined),
-					// The coordinator's frame loop drives a bin() channel's adaptive
-					// rebinning: without it, labels on a histogram's bins kept the
-					// bins of the full extent while the bars rebinned under them.
-					{ gpuCoordinator }
+					filterGroups.get(selection as string | undefined)
 				);
 			}
 		});
