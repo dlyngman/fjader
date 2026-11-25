@@ -11,8 +11,20 @@ vi.mock('$lib/query-engine', async (orig) => ({
 	initDuckDB: (opts: unknown) => initDuckDB(opts)
 }));
 vi.mock('$lib/scales', () => ({ setScaleRegistry: () => ({ setGPUCoordinator() {} }) }));
+const destroyCoordinator = vi.fn();
 vi.mock('$lib/gpu', () => ({
-	setGPUCoordinator: () => ({ setScaleRegistry() {}, setFilterGroups() {} })
+	setGPUCoordinator: () => ({
+		setScaleRegistry() {},
+		setFilterGroups() {},
+		destroy: destroyCoordinator
+	})
+}));
+// initFjader() runs in a component's script; here it runs bare, so the
+// teardown it registers is collected instead.
+const teardowns: (() => void)[] = [];
+vi.mock('svelte', async (orig) => ({
+	...(await orig<object>()),
+	onDestroy: (fn: () => void) => teardowns.push(fn)
 }));
 
 function fakeConn() {
@@ -65,6 +77,18 @@ describe('initFjader argument', () => {
 	beforeEach(() => {
 		setQueryContext.mockClear();
 		initDuckDB.mockClear();
+		destroyCoordinator.mockClear();
+		teardowns.length = 0;
+	});
+
+	it('destroys the GPU coordinator after its component unmounts, not during', async () => {
+		initFjader();
+		expect(teardowns).toHaveLength(1);
+		teardowns[0]();
+		// The marks' own teardowns still run in this unmount and use the coordinator.
+		expect(destroyCoordinator).not.toHaveBeenCalled();
+		await Promise.resolve();
+		expect(destroyCoordinator).toHaveBeenCalledTimes(1);
 	});
 
 	it('initializes DuckDB with jsDelivr defaults when called without arguments', () => {

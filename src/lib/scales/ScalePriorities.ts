@@ -112,7 +112,7 @@ function resolveConfigurationForType(
 ): Record<string, unknown> {
 	const schema = SCALE_CONFIG_SCHEMAS[scaleType];
 	if (!schema) {
-		console.warn(`⚠️ No configuration schema found for scale type: ${scaleType}`);
+		console.warn(`No configuration schema found for scale type: ${scaleType}`);
 		return {};
 	}
 
@@ -129,7 +129,7 @@ function resolveConfigurationForType(
 			if (validateConfigValue(value, propSchema)) {
 				validValues.push(value);
 			} else {
-				console.warn(`❌ Invalid ${propName} value for ${scaleType} scale:`, {
+				console.warn(`Invalid ${propName} value for ${scaleType} scale:`, {
 					value,
 					expected: propSchema.type,
 					range: propSchema.range,
@@ -142,13 +142,8 @@ function resolveConfigurationForType(
 
 		try {
 			resolvedConfig[propName] = propSchema.strategy(validValues);
-			console.log(`🔧 Resolved ${scaleType}.${propName}: ${resolvedConfig[propName]}`, {
-				strategy: propSchema.strategy.name || 'custom',
-				fromValues: validValues,
-				description: propSchema.description
-			});
 		} catch (error) {
-			console.error(`❌ Failed to resolve ${scaleType}.${propName}:`, (error as Error).message);
+			console.error(`Failed to resolve ${scaleType}.${propName}:`, (error as Error).message);
 			throw new Error(
 				`Configuration resolution failed for ${scaleType}.${propName}: ${(error as Error).message}`,
 				{ cause: error }

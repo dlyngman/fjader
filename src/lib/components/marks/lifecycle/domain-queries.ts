@@ -243,10 +243,6 @@ export async function fetchCategoricalDomains(
 						if (stale()) return;
 						const row = Array.from(result)[0];
 						if (row && row.min_color != null && row.max_color != null) {
-							console.log(`[fetchCategoricalDomains] Color domain (sequential):`, [
-								row.min_color,
-								row.max_color
-							]);
 							colorScaleState.setDomain([row.min_color, row.max_color] as (string | number)[]);
 						}
 					})
@@ -341,7 +337,6 @@ export async function fetchGlobalAggregates(
 ): Promise<{ globalAggregatesSet: boolean }> {
 	// Only proceed if we have channels needing data-derived domains
 	if (channelsNeedingDataDomain.size === 0) {
-		console.log(`[${markId}] No aggregated channels, skipping sidecar query`);
 		return { globalAggregatesSet: false };
 	}
 
@@ -349,20 +344,12 @@ export async function fetchGlobalAggregates(
 	// until fieldInfo is available (which requires the DataClient created later).
 	// Domains will be set from query results via registerDataDerivedDomains.
 	if (autoBinNodeCount > 0) {
-		console.log(`[${markId}] Skipping sidecar: bin domains derived from query results`);
 		return { globalAggregatesSet: false };
 	}
-
-	console.log(
-		`🔍 [${markId}] Building sidecar query for channels:`,
-		Array.from(channelsNeedingDataDomain)
-	);
 
 	try {
 		// Step 1: Build the inner query with channel-named aliases (forMosaic=false)
 		const innerQuery = buildQueryFn(table, config, [], false);
-
-		console.log(`📊 [${markId}] Inner query SQL:`, innerQuery.toString());
 
 		// Step 2: Build outer aggregation to get min/max of each channel
 		const outerSelect: Record<string, ExprValue> = {};
@@ -400,31 +387,24 @@ export async function fetchGlobalAggregates(
 
 		// Skip if no aggregation expressions were generated
 		if (Object.keys(outerSelect).length === 0) {
-			console.log(`📊 [${markId}] Skipping sidecar: no SQL channels to aggregate`);
 			return { globalAggregatesSet: false };
 		}
 
 		const sidecarQuery = Query.from(innerQuery).select(outerSelect);
-
-		console.log(`📊 [${markId}] Sidecar query SQL:`, sidecarQuery.toString());
 
 		// Step 3: Execute the query
 		const result = await coordinator.query(sidecarQuery, { cache: true, source: table });
 		if (stale()) return { globalAggregatesSet: false };
 		const extents: Record<string, unknown> = Array.from(result)[0];
 
-		console.log(`✅ [${markId}] Sidecar results:`, extents);
-
 		// Step 4: Apply extents to scales
 		if (channelsNeedingDataDomain.has('x') && extents.min_x != null && extents.max_x != null) {
 			const xExtent = [extents.min_x as number, extents.max_x as number];
-			console.log(`📊 [${markId}] Applying X extent from sidecar:`, xExtent);
 			if (xScaleState && place('x', xScaleState)) xScaleState.addMark(xExtent, markId);
 		}
 
 		if (channelsNeedingDataDomain.has('y') && extents.min_y != null && extents.max_y != null) {
 			const yExtent = [extents.min_y as number, extents.max_y as number];
-			console.log(`📊 [${markId}] Applying Y extent from sidecar:`, yExtent);
 			if (yScaleState && place('y', yScaleState)) yScaleState.addMark(yExtent, markId);
 		}
 
@@ -434,13 +414,12 @@ export async function fetchGlobalAggregates(
 			extents.max_color != null
 		) {
 			const colorExtent = [extents.min_color, extents.max_color];
-			console.log(`📊 [${markId}] Applying color extent from sidecar:`, colorExtent);
 			colorScaleState?.setDomain(colorExtent as (string | number)[]);
 		}
 
 		return { globalAggregatesSet: true };
 	} catch (error) {
-		console.error(`❌ [${markId}] Sidecar query failed:`, error);
+		console.error(`[${markId}] Sidecar query failed:`, error);
 		return { globalAggregatesSet: false };
 	}
 }

@@ -421,9 +421,6 @@ export class GPUCoordinator {
 
 	// Timestamp query resources (optional, for GPU timing)
 	#canTimestamp = false;
-	#querySet: GPUQuerySet | null = null;
-	#resolveBuffer: GPUBuffer | null = null;
-	#resultBuffer: GPUBuffer | null = null;
 
 	// =========================================================================
 	// RESOURCE REGISTRY (Renderer → Resources tracking)
@@ -499,6 +496,8 @@ export class GPUCoordinator {
 	#chartIOVisible = new Map<string, boolean>(); // per-chart IO state
 	#pageVisible = true;
 	#boundPageVisibilityHandler: (() => void) | null = null;
+	/** Set by destroy(): an initialize() still waiting for its device then releases it. */
+	#destroyed = false;
 
 	// =========================================================================
 	// PER-FRAME CALLBACKS (for tooltip scheduling, etc.)
@@ -692,13 +691,18 @@ export class GPUCoordinator {
 
 		try {
 			await this.#initWebGPU();
+			// Destroyed while the device was being requested (a page left before
+			// it arrived): destroy() found no device, so release it here.
+			if (this.#destroyed) {
+				this.#device?.destroy();
+				this.#device = null;
+				return;
+			}
 			await this.#initializeScaleBindGroupLayouts();
 
 			this.#initialized = true;
 			this.#handleScaleTopologyChange();
 			// this.#createColorScaleBuffers();
-
-			console.log('GPUCoordinator initialized with Registry Pattern');
 		} catch (error) {
 			console.error('GPUCoordinator initialization failed:', error);
 			throw error;
@@ -738,29 +742,13 @@ export class GPUCoordinator {
 			throw new Error(HTML_IN_CANVAS_MISSING_MESSAGE);
 		}
 
+		// The feature is for timing probes that read this device (the frame probe
+		// of /test/dashboard-30); the coordinator itself holds no query set.
 		this.#device = await adapter.requestDevice({
 			requiredFeatures: this.#canTimestamp ? ['timestamp-query'] : []
 		});
 
 		this.#presentationFormat = navigator.gpu.getPreferredCanvasFormat();
-
-		// Setup timestamp query resources if available
-		if (this.#canTimestamp) {
-			this.#querySet = this.#device.createQuerySet({
-				type: 'timestamp',
-				count: 2
-			});
-
-			this.#resolveBuffer = this.#device.createBuffer({
-				size: this.#querySet.count * 8,
-				usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC
-			});
-
-			this.#resultBuffer = this.#device.createBuffer({
-				size: this.#resolveBuffer.size,
-				usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
-			});
-		}
 
 		// Signal that initialization is complete
 		this.#resolveReady(true);
@@ -3306,16 +3294,21 @@ export class GPUCoordinator {
 	}
 
 	destroy(): void {
-		console.log('Destroying GPUCoordinator');
+		this.#destroyed = true;
 
 		// Stop animation loop
 		this.#animationLoop?.destroy();
 		this.#animationLoop = null;
 
-		// Cleanup timestamp query resources (FIXED: was leaking)
-		this.#resolveBuffer?.destroy();
-		this.#resultBuffer?.destroy();
-		this.#querySet = null; // QuerySet has no destroy(), just null reference
+		// Both hold this coordinator: the listener from `document`, the observer
+		// through the canvases it watches.
+		if (this.#boundPageVisibilityHandler) {
+			document.removeEventListener('visibilitychange', this.#boundPageVisibilityHandler);
+			this.#boundPageVisibilityHandler = null;
+		}
+		this.#visibilityObserver?.disconnect();
+		this.#visibilityObserver = null;
+		this.#chartIOVisible.clear();
 
 		// Destroy retained and pending-release renderers
 		for (const retained of this.#retainedRenderers.values()) {
@@ -3367,7 +3360,6 @@ export class GPUCoordinator {
 		this.#device = null;
 
 		this.#initialized = false;
-		console.log('GPUCoordinator destruction complete');
 	}
 }
 

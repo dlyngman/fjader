@@ -107,6 +107,8 @@
 
 	const chartId = c.chartId;
 
+	let destroyed = false;
+
 	// Enhanced initialization with comprehensive error handling
 	async function initWebGPU() {
 		try {
@@ -126,6 +128,9 @@
 			);
 
 			await Promise.race([gpuCoordinator.ready, timeout]);
+			// Unmounted while the device was on its way (a page left early): there
+			// is no canvas to configure, and nothing left to tell.
+			if (destroyed) return;
 
 			// Configure context with proper error handling
 			await configureContext();
@@ -139,10 +144,9 @@
 				rejectReady(new Error(initializationError));
 				return;
 			}
-			console.log(`✅ WebGPUCanvas ${chartId} initialized successfully`);
 			resolveReady();
 		} catch (error) {
-			console.error(`❌ WebGPUCanvas ${chartId} initialization failed:`, error);
+			console.error(`WebGPUCanvas ${chartId} initialization failed:`, error);
 			initializationError = (error as Error).message;
 			rejectReady(error);
 			throw error;
@@ -186,7 +190,7 @@
 			// Setup initial canvas size
 			setupCanvas();
 		} catch (error) {
-			console.error(`❌ Context configuration failed for chart ${chartId}:`, error);
+			console.error(`Context configuration failed for chart ${chartId}:`, error);
 			contextConfigured = false;
 			throw error;
 		}
@@ -195,11 +199,9 @@
 	// Clean registration with coordinator
 	function registerWithCoordinator() {
 		if (!contextConfigured) {
-			console.error(`⚠️ Attempting to register chart ${chartId} before context is configured`);
+			console.error(`Attempting to register chart ${chartId} before context is configured`);
 			return;
 		}
-
-		console.log(`📋 Registering chart ${chartId} with coordinator`);
 
 		try {
 			chartControl = gpuCoordinator.registerChart(chartId, canvas, {
@@ -214,9 +216,8 @@
 			// Notify coordinator that context is ready
 			chartControl.setContextReady();
 			atlasSurface = textAtlas.attach(gpuCoordinator.device!, gpuCoordinator, chartId);
-			console.log(`✅ Chart ${chartId} registered and ready`);
 		} catch (error) {
-			console.error(`❌ Chart registration failed for ${chartId}:`, error);
+			console.error(`Chart registration failed for ${chartId}:`, error);
 			throw error;
 		}
 	}
@@ -224,7 +225,6 @@
 	// Robust canvas setup with dimension change detection
 	function setupCanvas() {
 		if (!canvas || !contextConfigured) {
-			console.debug(`⚠️ setupCanvas called before canvas/context ready for ${chartId}`);
 			return;
 		}
 
@@ -247,7 +247,7 @@
 			// check: no change, no work.
 			chartControl?.setPlotRect(plotRect());
 		} catch (error) {
-			console.error(`❌ Canvas setup failed for ${chartId}:`, error);
+			console.error(`Canvas setup failed for ${chartId}:`, error);
 			initializationError = `Canvas setup failed: ${(error as Error).message}`;
 		}
 	}
@@ -325,14 +325,14 @@
 		try {
 			await initWebGPU();
 		} catch (error) {
-			console.error(`❌ WebGPUCanvas ${chartId} mount failed:`, error);
+			console.error(`WebGPUCanvas ${chartId} mount failed:`, error);
 			// Error is already stored in initializationError state
 		}
 	});
 
 	onDestroy(() => {
+		destroyed = true;
 		if (isFaceted) return; // Pass-through mode: nothing to clean up
-		console.log(`🧹 Destroying WebGPUCanvas ${chartId}`);
 
 		try {
 			if (atlasSurface) textAtlas.detach(atlasSurface);
@@ -348,9 +348,8 @@
 			if (context && contextConfigured) {
 				try {
 					context.unconfigure();
-				} catch (e) {
+				} catch {
 					// Context may already be invalid, ignore
-					console.debug(`Context unconfigure failed (may already be invalid):`, e);
 				}
 			}
 
@@ -359,10 +358,8 @@
 			// Clear references
 			gpuCoordinator = null;
 			context = null;
-
-			console.log(`✅ WebGPUCanvas ${chartId} destroyed successfully`);
 		} catch (error) {
-			console.error(`❌ Error during WebGPUCanvas ${chartId} destruction:`, error);
+			console.error(`Error during WebGPUCanvas ${chartId} destruction:`, error);
 		}
 	});
 
