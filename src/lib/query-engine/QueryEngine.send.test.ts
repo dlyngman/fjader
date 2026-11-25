@@ -36,6 +36,52 @@ function observe(engine: QueryEngine) {
 }
 
 describe('QueryEngine #send funnel', () => {
+	it('sends nothing to a connection it has closed', async () => {
+		// A page loading several tables is left after the first: the rest of
+		// its statements must not reach a connection DuckDB has freed.
+		const events: string[] = [];
+		let releaseFirst!: () => void;
+		const first = new Promise<void>((resolve) => (releaseFirst = resolve));
+		const conn: DuckDBConnection = {
+			async query() {
+				return { numRows: 0, get: () => undefined } as never;
+			},
+			async exec(sql: string) {
+				events.push(sql);
+				if (sql === 'LOAD 1') await first;
+			},
+			async close() {
+				events.push('close');
+			}
+		};
+		const engine = new QueryEngine(conn);
+
+		const loading = engine.exec(['LOAD 1', 'LOAD 2', 'LOAD 3']);
+		await vi.waitFor(() => expect(events).toContain('LOAD 1'));
+		await engine.destroy();
+		releaseFirst();
+
+		await expect(loading).rejects.toMatchObject({ name: 'AbortError' });
+		expect(events.slice(events.indexOf('close') + 1)).toEqual([]);
+	});
+
+	it('rejects every call after destroy() with the same AbortError', async () => {
+		// A page loading with one call per table is left during the first: the
+		// next call arrives after the destroy, and reads like the one cut short.
+		const { conn, sent } = fakeConnection();
+		const engine = new QueryEngine(conn);
+		await engine.destroy();
+		sent.length = 0;
+
+		const aborted = { name: 'AbortError', message: 'Engine destroyed' };
+		await expect(engine.exec('CREATE TABLE t (a INT)')).rejects.toMatchObject(aborted);
+		await expect(engine.query('SELECT 1')).rejects.toMatchObject(aborted);
+		await expect(engine.execBatch(['SELECT 1'])).rejects.toMatchObject(aborted);
+		await expect(engine.describe('t')).rejects.toMatchObject(aborted);
+		await expect(engine.ensureColumns('t', { categorical: ['a'] })).rejects.toMatchObject(aborted);
+		expect(sent).toEqual([]);
+	});
+
 	it('sends queries, statements, DESCRIBE and Arrow inserts through the observer', async () => {
 		const { conn } = fakeConnection();
 		const engine = new QueryEngine(conn);

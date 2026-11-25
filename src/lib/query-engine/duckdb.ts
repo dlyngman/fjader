@@ -141,5 +141,16 @@ async function doInit({ bundles }: InitDuckDBOptions): Promise<DuckDBConnection>
 	// config's other fields decide how big integers, decimals, timestamps and
 	// durations come back, and stay at their defaults.
 	await db.open({ query: { queryPollingInterval: QUERY_POLLING_INTERVAL_MS } });
-	return connectionFrom(await db.connect(), { pollingIntervalMs: QUERY_POLLING_INTERVAL_MS });
+	const connection = connectionFrom(await db.connect(), {
+		pollingIntervalMs: QUERY_POLLING_INTERVAL_MS
+	});
+	// This database and its worker are fjader's own: closing the connection ends
+	// them too, or the worker would stay behind with every table it loaded.
+	return {
+		...connection,
+		async close() {
+			await connection.close();
+			await db.terminate();
+		}
+	};
 }

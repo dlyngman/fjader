@@ -67,6 +67,8 @@ Three things to know before using it in a deployed app:
 
 A chart is a container, and everything in it is its child: axes, grid, marks, and the crosshair, brushes, toggles and legend when you add them; each draws where it belongs. It fills its parent, so give the parent a height; the Python widget and Streamlit set one for you (400 and 500 px). The same chart can be written as a JSON spec and rendered with `Fjader.render(element, spec)`; the npm package ships Svelte source, so this needs a build that compiles Svelte, such as Vite with the Svelte plugin.
 
+When the component that called `initFjader()` unmounts, fjader releases its GPU device and, if it started DuckDB itself, ends that worker; a connection you passed in stays open. A load still running then, such as the `queryEngine.exec` above when its page is left early, rejects with an `AbortError`, which can be ignored.
+
 ## Python
 
 ```python
