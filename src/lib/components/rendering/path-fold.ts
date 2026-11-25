@@ -21,6 +21,8 @@ export function foldsBetweenUpdates(layout: RowLayout): boolean {
  * Whether a write lands at once, not travelling: the first write of a
  * catch-up result's data version (MarkLifecycleV2.landsFor), which arrives
  * with changes nobody watched happen. One per renderer; call once per write.
+ * For any renderer that morphs between results (Dots, Lines, Areas), not only
+ * the path renderers this file is named for.
  *
  * Plain state, not reactive: only the write effect reads and sets it.
  */

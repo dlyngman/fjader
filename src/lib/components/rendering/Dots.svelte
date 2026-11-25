@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { landingTracker } from './path-fold';
 	import { isNegativeOrNanExpr } from '$lib/gpu/NanShaderLib';
 	import { UNIFORM_BYTES } from './uniform-sizes';
 	import { getContext, onMount, onDestroy } from 'svelte';
@@ -270,16 +271,10 @@
 	// --- WRITING EFFECTS ---
 
 	// Whether this write lands: the first of the catch-up's data version
-	// (landsFor). Plain, not $state: only the write effect reads and sets it.
-	// Assumes a catch-up result is ONE morph write: should it ever take two
-	// (values, then band ids after the instant layout), the second springs.
-	// A morph SPRING right after a morph snap on a return points here.
-	let lastMorphedVersion = -1;
-	function landsNow(): boolean {
-		const first = dataVersion !== lastMorphedVersion;
-		lastMorphedVersion = dataVersion;
-		return first && landsFor !== 0 && landsFor === dataVersion;
-	}
+	// (landingTracker). Assumes a catch-up result is ONE morph write: should it
+	// ever take two (values, then band ids after the instant layout), the second
+	// springs. A morph SPRING right after a morph snap on a return points here.
+	const lands = landingTracker();
 
 	// The measure axis's single channel morphs, as ONE write per data update,
 	// so one update starts one transition. The band's ids go with it: they are
@@ -294,7 +289,7 @@
 	const SCALED_X = [BINDINGS.X];
 	$effect(() => {
 		if (!renderer?.resourcesCreated || !bandAxis) return;
-		const land = landsNow() ? 'all' : undefined;
+		const land = lands(dataVersion, landsFor) ? 'all' : undefined;
 		if (bandAxis === 'x') renderer.writeMorphed('x', xData, [[BINDINGS.Y, yData]], land, SCALED_Y);
 		else renderer.writeMorphed('y', yData, [[BINDINGS.X, xData]], land, SCALED_X);
 	});

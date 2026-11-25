@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { landingTracker } from './path-fold';
 	import { isNegativeOrNanExpr } from '$lib/gpu/NanShaderLib';
 	import { UNIFORM_BYTES } from './uniform-sizes';
 	import { getContext, onMount, onDestroy, untrack } from 'svelte';
@@ -286,18 +287,13 @@
 
 	// --- WRITES --- (as Dots: see its comments on landing and morphing)
 
-	let lastMorphedVersion = -1;
-	function landsNow(): boolean {
-		const first = dataVersion !== lastMorphedVersion;
-		lastMorphedVersion = dataVersion;
-		return first && landsFor !== 0 && landsFor === dataVersion;
-	}
+	const lands = landingTracker();
 
 	const SCALED_Y = [BINDINGS.Y];
 	const SCALED_X = [BINDINGS.X];
 	$effect(() => {
 		if (!renderer?.resourcesCreated || !bandAxis) return;
-		const land = landsNow() ? 'all' : undefined;
+		const land = lands(dataVersion, landsFor) ? 'all' : undefined;
 		if (bandAxis === 'x') renderer.writeMorphed('x', xData, [[BINDINGS.Y, yData]], land, SCALED_Y);
 		else renderer.writeMorphed('y', yData, [[BINDINGS.X, xData]], land, SCALED_X);
 	});
