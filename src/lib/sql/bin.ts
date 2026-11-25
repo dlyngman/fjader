@@ -72,14 +72,36 @@ function numericBinIndexSQL(source: string, min: number, alpha: number): string 
 /**
  * Bin `k`'s edge as the REAL the query draws, `k` a bin key (`binKeySQL`) or
  * the padding's enumeration of one. Numeric: `min + alpha * (k + offset)`, in
- * DOUBLE arithmetic. Time: the bucket start plus `offset` intervals, as seconds
+ * DOUBLE arithmetic. Time: the bucket's edge (`timeBinEdgeSQL`), as seconds
  * from `t0`, the form the mark's time channels take.
  */
 export function binEdgeSQL(bin: BinPadding, k: string): string {
 	if (bin.kind === 'number') {
 		return `CAST(${numericBinEdgeSQL(bin.min, bin.alpha, bin.offset, k)} AS REAL)`;
 	}
-	return `CAST((epoch(${k} + (${bin.interval}) * ${bin.offset}) - ${bin.t0}) AS REAL)`;
+	return `CAST((epoch(${timeBinEdgeSQL(k, bin.interval, bin.offset)}) - ${bin.t0}) AS REAL)`;
+}
+
+/**
+ * The edge of a time bucket (SQL, a timestamp): `offset` intervals after the
+ * bucket's `start`. The one formula both `bin()` and `dense()`'s padding
+ * write, as numericBinEdgeSQL is for numeric bins.
+ *
+ * A whole offset steps by the interval: offset 1 is the next bucket's start,
+ * whatever the month's length. A FRACTIONAL offset is that share of the way
+ * between the two edges around it, so 0.5 is the middle of the bucket's own
+ * span: where a bar over the bucket has its centre. Half the interval is not
+ * that (half of `INTERVAL 1 month` is 15 days, in a month of 31), and
+ * `INTERVAL 0.5 month` is not SQL at all.
+ */
+export function timeBinEdgeSQL(start: string, interval: string, offset: number): string {
+	const whole = Math.floor(offset);
+	const share = offset - whole;
+	if (share === 0) return `${start} + (${interval}) * ${offset}`;
+	// As timestamps: a DATE minus a DATE is a count of days, not an interval.
+	const lower = `CAST(${start} + (${interval}) * ${whole} AS TIMESTAMP)`;
+	const upper = `CAST(${start} + (${interval}) * ${whole + 1} AS TIMESTAMP)`;
+	return `${lower} + (${upper} - ${lower}) * ${share}`;
 }
 
 /** A JS number as a DOUBLE literal: a bare 0.1 would be read as a DECIMAL. */
@@ -152,7 +174,18 @@ export class AutoBinNode {
 			currentDomain,
 			binStepMultiplier
 		);
-		if (isTemporal) return binDate(col, [min, max], binOptions);
+		if (isTemporal) {
+			const offset = binOptions.offset ?? 0;
+			if (Number.isInteger(offset)) return binDate(col, [min, max], binOptions);
+			// A point inside the bucket (its centre): from its two edges, in the
+			// formula the padding writes (timeBinEdgeSQL). binDate's own choice of
+			// unit and step, as `padding` takes it.
+			const { unit, step = 1 } = binOptions.interval
+				? { unit: binOptions.interval, step: binOptions.step }
+				: timeInterval(min, max, binOptions.steps || 40);
+			const start = binDate(col, [min, max], { ...binOptions, offset: 0 });
+			return sqlFragment(timeBinEdgeSQL(String(start), String(interval(unit, step)), offset));
+		}
 		// A single value: binHistogram floors it rather than binning.
 		if (max === min) return binHistogram(col, [min, max], binOptions);
 		// binHistogram's bins, written with the formula dense() pads with, so a
