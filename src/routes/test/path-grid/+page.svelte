@@ -301,6 +301,39 @@
 					</ChartContainer>
 				</div>
 			</div>
+			<div class="case wide">
+				<h3>7. A line over a histogram: the point is the bin's centre</h3>
+				<p class="desc">
+					Twelve wide bins, drawn twice on one chart: as bars and as a line with dots. Each dot sits
+					in the middle of its bar, at the bar's top. Before, a binned line's points sat on their
+					bars' left edges, half a bin left of the data. The line starts and ends half a bin inside
+					the plot, where the first and last bars have their middles.
+				</p>
+				<div class="panel">
+					<ChartContainer xLabel="delay" yLabel="count">
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<RectYMark
+							table="pg_flights"
+							x={bin('delay', { steps: 12 })}
+							y={count()}
+							inset={0.5}
+							fill="#c9d6e8"
+							selection="pg"
+						/>
+						<LineMark
+							table="pg_flights"
+							x={bin('delay', { steps: 12 })}
+							y={count()}
+							stroke="#1f3b63"
+							dotRadius={4}
+							lod={false}
+							selection="pg"
+						/>
+					</ChartContainer>
+				</div>
+			</div>
 		</div>
 	</div>
 {/if}
