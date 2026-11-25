@@ -124,7 +124,8 @@
 			(n) => !cols.includes(n)
 		); // exclude channels already in column list (e.g. 'r')
 		const result = [...cols, ...opts, ...nums];
-		if (markLOD) result.push('lod');
+		// A mark's surface with no rung (a line with lod={false}) has nothing to show.
+		if (markLOD && markLOD.getRungs().length > 0) result.push('lod');
 		return result;
 	});
 

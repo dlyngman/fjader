@@ -12,6 +12,19 @@ export interface LODRung {
 }
 
 /**
+ * A mark's own rungs, handed to its lifecycle as a getter: the lifecycle owns
+ * the mark's one surface and reads them when the palette or the wheel asks, so
+ * a rung created or destroyed later is seen without registering again.
+ */
+export interface MarkLODParts {
+	/** The mark's rungs, in palette order; null for one not built (yet). */
+	rungs: (LODRung | null)[];
+	densityHost: DensityHost | null;
+	/** Shift+scroll over the mark, where its lifecycle has no bins to adjust. */
+	adjustResolution?(deltaY: number): void;
+}
+
+/**
  * Per-mark LOD surface registered with ChartConfig.
  * Provides shift+scroll routing, rung iteration for palette, and density diagnostics.
  */

@@ -81,7 +81,7 @@ import {
 } from '$lib/components/rendering/activity-reads';
 
 import { AdaptiveBinRung } from '$lib/lod/AdaptiveBinRung.svelte';
-import type { MarkLODSurface } from '$lib/lod/rung-types';
+import type { LODRung, MarkLODParts, MarkLODSurface } from '$lib/lod/rung-types';
 import { generateMarkId, buildChannelFieldMap, resolveSortChannel } from '../utils';
 import { buildExpressionLabel, isLabeledTipEntry } from '../utils/channel-field-map';
 import { detectChannelsNeedingDataDomain } from './domain-computation';
@@ -318,7 +318,9 @@ export class MarkLifecycleV2 {
 	#schema = $state<Map<string, ColumnSchema> | null>(null);
 	#lastBinDomain = $state<Record<string, [number, number]>>({});
 	#adaptiveBinRung: AdaptiveBinRung | null = null;
-	/** Set when this lifecycle registered a MarkLODSurface, to undo it on destroy. */
+	/** Whether this lifecycle registered the mark's MarkLODSurface, to undo it on destroy. */
+	#lodRegistered = false;
+	/** The mark's `onMarkLOD`, told of the surface and of its going. */
 	#onMarkLOD: ((surface: MarkLODSurface | null) => void) | null = null;
 
 	// --- Engine Registration ---
@@ -673,6 +675,8 @@ export class MarkLifecycleV2 {
 		filterGroup: FilterGroup,
 		options?: {
 			onMarkLOD?: ((surface: MarkLODSurface | null) => void) | null;
+			/** The mark's own rungs, beside its bins' (MarkLODParts). */
+			lod?: (() => MarkLODParts | null) | null;
 		}
 	) {
 		this.#config = config;
@@ -809,20 +813,39 @@ export class MarkLifecycleV2 {
 					}
 				}
 			});
-			if (options?.onMarkLOD) {
-				// The palette, tooltips and shift+scroll reach a mark's rungs through
-				// its MarkLODSurface; a binned mark has one rung and no DensityHost.
-				const rung = this.#adaptiveBinRung;
-				const surface: MarkLODSurface = {
-					adjustResolution: (deltaY) => rung.adjustResolution(deltaY),
-					getRungs: () => (rung.destroyed ? [] : [rung]),
-					getDensityCtx: () => null,
-					getDensityHost: () => null
-				};
-				chartContext.config.registerMarkLOD(markId, surface);
-				options.onMarkLOD(surface);
-				this.#onMarkLOD = options.onMarkLOD;
-			}
+		}
+
+		// The mark's ONE LOD surface: what the palette, the tooltips and
+		// shift+scroll reach its rungs through. Built here for any mark with a
+		// rung, its bins' or its own (`options.lod`), and registered once: two
+		// registrations under one mark id would replace each other.
+		const ownLOD = options?.lod ?? null;
+		if (this.#adaptiveBinRung || ownLOD) {
+			const binRung = this.#adaptiveBinRung;
+			const surface: MarkLODSurface = {
+				// A binned axis takes the gesture, whichever mark draws it; then the
+				// mark's own rungs; then the chart's bins, as with no mark under it.
+				adjustResolution: (deltaY) => {
+					if (binRung && !binRung.destroyed) return binRung.adjustResolution(deltaY);
+					const own = ownLOD?.();
+					if (own?.adjustResolution) return own.adjustResolution(deltaY);
+					chartContext.adjustBinMultiplier?.(deltaY < 0 ? 0.035 : -0.035);
+				},
+				getRungs: () => {
+					const rungs: LODRung[] = [];
+					if (binRung && !binRung.destroyed) rungs.push(binRung);
+					for (const rung of ownLOD?.()?.rungs ?? []) {
+						if (rung && !rung.destroyed) rungs.push(rung);
+					}
+					return rungs;
+				},
+				getDensityCtx: () => ownLOD?.()?.densityHost?.ctx ?? null,
+				getDensityHost: () => ownLOD?.()?.densityHost ?? null
+			};
+			chartContext.config.registerMarkLOD(markId, surface);
+			options?.onMarkLOD?.(surface);
+			this.#lodRegistered = true;
+			this.#onMarkLOD = options?.onMarkLOD ?? null;
 		}
 
 		// Detect channels needing data-derived domains
@@ -3323,10 +3346,11 @@ export class MarkLifecycleV2 {
 		clearTimeout(this.#refitTimeout!);
 		clearTimeout(this.#tooltipWriteTimeout!);
 
-		if (this.#onMarkLOD) {
+		if (this.#lodRegistered) {
 			this.#chartContext.config.unregisterMarkLOD(this.#markId);
-			this.#onMarkLOD(null);
+			this.#onMarkLOD?.(null);
 			this.#onMarkLOD = null;
+			this.#lodRegistered = false;
 		}
 		if (this.#adaptiveBinRung) {
 			this.#adaptiveBinRung.destroy();
