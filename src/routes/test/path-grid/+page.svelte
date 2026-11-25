@@ -28,6 +28,7 @@
 		BarMarkY,
 		Legend
 	} from '$lib/components';
+	import { AreaMarkX, RectXMark } from '$lib/components/marks';
 	import { Toggle, IntervalX } from '$lib/interactors';
 	import { Grid } from '$lib/components/guides';
 	import { bin } from '$lib/sql/bin';
@@ -301,7 +302,7 @@
 					</ChartContainer>
 				</div>
 			</div>
-			<div class="case wide">
+			<div class="case">
 				<h3>7. A line over a histogram: the point is the bin's centre</h3>
 				<p class="desc">
 					Twelve wide bins, drawn twice on one chart: as bars and as a line with dots. Each dot sits
@@ -329,6 +330,41 @@
 							stroke="#1f3b63"
 							dotRadius={4}
 							lod={false}
+							selection="pg"
+						/>
+					</ChartContainer>
+				</div>
+			</div>
+			<div class="case">
+				<h3>8. A horizontal area over horizontal bars</h3>
+				<p class="desc">
+					The same twelve bins on the y axis: bars growing to the right, and an area with dots over
+					them. Each dot sits at the end of its bar, in the middle of the bar's height. The area has
+					interval channels on both axes here (its value's and its bins'), so this is also the check
+					that it bins along y.
+				</p>
+				<div class="panel tall">
+					<ChartContainer xLabel="count" yLabel="delay">
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<RectXMark
+							table="pg_flights"
+							y={bin('delay', { steps: 12 })}
+							x={count()}
+							inset={0.5}
+							fill="#c9d6e8"
+							selection="pg"
+						/>
+						<AreaMarkX
+							table="pg_flights"
+							y={bin('delay', { steps: 12 })}
+							x={count()}
+							fill="#1f3b63"
+							fillOpacity={0.25}
+							stroke="#1f3b63"
+							strokeWidth={1.5}
+							dotRadius={4}
 							selection="pg"
 						/>
 					</ChartContainer>
@@ -363,6 +399,9 @@
 	}
 	.panel {
 		height: 300px;
+	}
+	.panel.tall {
+		height: 380px;
 	}
 	.panel.short {
 		height: 120px;
