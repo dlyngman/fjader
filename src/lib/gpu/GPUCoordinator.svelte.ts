@@ -421,9 +421,6 @@ export class GPUCoordinator {
 
 	// Timestamp query resources (optional, for GPU timing)
 	#canTimestamp = false;
-	#querySet: GPUQuerySet | null = null;
-	#resolveBuffer: GPUBuffer | null = null;
-	#resultBuffer: GPUBuffer | null = null;
 
 	// =========================================================================
 	// RESOURCE REGISTRY (Renderer → Resources tracking)
@@ -747,29 +744,13 @@ export class GPUCoordinator {
 			throw new Error(HTML_IN_CANVAS_MISSING_MESSAGE);
 		}
 
+		// The feature is for timing probes that read this device (the frame probe
+		// of /test/dashboard-30); the coordinator itself holds no query set.
 		this.#device = await adapter.requestDevice({
 			requiredFeatures: this.#canTimestamp ? ['timestamp-query'] : []
 		});
 
 		this.#presentationFormat = navigator.gpu.getPreferredCanvasFormat();
-
-		// Setup timestamp query resources if available
-		if (this.#canTimestamp) {
-			this.#querySet = this.#device.createQuerySet({
-				type: 'timestamp',
-				count: 2
-			});
-
-			this.#resolveBuffer = this.#device.createBuffer({
-				size: this.#querySet.count * 8,
-				usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC
-			});
-
-			this.#resultBuffer = this.#device.createBuffer({
-				size: this.#resolveBuffer.size,
-				usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
-			});
-		}
 
 		// Signal that initialization is complete
 		this.#resolveReady(true);
@@ -3332,11 +3313,6 @@ export class GPUCoordinator {
 		this.#visibilityObserver?.disconnect();
 		this.#visibilityObserver = null;
 		this.#chartIOVisible.clear();
-
-		// Cleanup timestamp query resources (FIXED: was leaking)
-		this.#resolveBuffer?.destroy();
-		this.#resultBuffer?.destroy();
-		this.#querySet = null; // QuerySet has no destroy(), just null reference
 
 		// Destroy retained and pending-release renderers
 		for (const retained of this.#retainedRenderers.values()) {
