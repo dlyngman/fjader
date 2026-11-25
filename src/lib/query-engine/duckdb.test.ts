@@ -2,7 +2,11 @@ import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import type { AsyncDuckDBConnection } from '@duckdb/duckdb-wasm';
 import { connectionFrom } from './duckdb';
 
-const setQueryContext = vi.fn((_conn: unknown) => ({ queryEngine: {}, filterGroups: {} }));
+const destroyEngine = vi.fn(() => Promise.resolve());
+const setQueryContext = vi.fn((_conn: unknown) => ({
+	queryEngine: { destroy: destroyEngine },
+	filterGroups: {}
+}));
 const initDuckDB = vi.fn((_opts: unknown) => Promise.resolve('internal'));
 
 vi.mock('$lib/query-engine', async (orig) => ({
@@ -78,7 +82,23 @@ describe('initFjader argument', () => {
 		setQueryContext.mockClear();
 		initDuckDB.mockClear();
 		destroyCoordinator.mockClear();
+		destroyEngine.mockClear();
 		teardowns.length = 0;
+	});
+
+	it('ends the engine it started with the page, and leaves a passed connection open', async () => {
+		vi.stubGlobal('window', {});
+		try {
+			initFjader();
+			initFjader(connectionFrom(fakeConn().conn as unknown as AsyncDuckDBConnection));
+			teardowns[0]();
+			teardowns[1]();
+			await Promise.resolve();
+			expect(destroyCoordinator).toHaveBeenCalledTimes(2);
+			expect(destroyEngine).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.unstubAllGlobals();
+		}
 	});
 
 	it('destroys the GPU coordinator after its component unmounts, not during', async () => {

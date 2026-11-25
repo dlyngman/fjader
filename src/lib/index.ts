@@ -49,11 +49,19 @@ export function initFjader(init?: FjaderInit) {
 	gpuCoordinator.setFilterGroups(filterGroups);
 	scaleRegistry.setGPUCoordinator(gpuCoordinator);
 
-	// Leaving the page that called initFjader() releases the GPU device. After
-	// the unmount, not during it: Svelte runs this component's teardown before
-	// its children's, and the marks release their renderers through the
-	// coordinator in theirs.
-	onDestroy(() => queueMicrotask(() => gpuCoordinator.destroy()));
+	// Leaving the page that called initFjader() releases the GPU device, and the
+	// DuckDB worker if fjader started it: a connection passed in belongs to the
+	// app. After the unmount, not during it: Svelte runs this component's
+	// teardown before its children's, and the marks release their renderers and
+	// drop their tables through the coordinator and the engine in theirs.
+	onDestroy(() =>
+		queueMicrotask(() => {
+			gpuCoordinator.destroy();
+			// In the browser only: on the server the connection never arrives.
+			// A failed start has been reported where it failed.
+			if (!connection && typeof window !== 'undefined') queryEngine.destroy().catch(() => {});
+		})
+	);
 
 	return { queryEngine, filterGroups, scaleRegistry, gpuCoordinator };
 }
