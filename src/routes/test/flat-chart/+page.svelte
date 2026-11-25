@@ -46,6 +46,17 @@
 	let inferredSecond = $state(false);
 	let inferredBoth = $state(false);
 
+	// Case 15: each of a chart's declarations switched off and on.
+	let declared = $state({
+		frame: true,
+		axisLeft: true,
+		axisBottom: true,
+		grid: true,
+		crosshair: true,
+		brush: true,
+		legend: true
+	});
+
 	function startCounting() {
 		const canvases = [...gridEl.querySelectorAll('canvas')];
 		cells = canvases.map(() => ({ paints: 0, top: 0 }));
@@ -417,6 +428,51 @@
 							<AxisLeft />
 							<AxisBottom />
 							<BarMarkY table="penguins" x={inferredFill} y={count()} selection="inferred" />
+						</ChartContainer>
+					</div>
+				</div>
+			</div>
+
+			<div class="chart-panel wide">
+				<h3>15. Declarations come and go with their components</h3>
+				<p class="desc">
+					Each button removes one of the chart's children and puts it back. Off: it disappears from
+					the chart, and only it. On again: it is back once, not twice (the legend lists each island
+					once, one frame, one set of ticks). The brush: draw a range, switch it off (the rectangle
+					goes, the bars on the right fill again), and on again it starts empty.
+				</p>
+				<div class="controls">
+					{#each Object.keys(declared) as key (key)}
+						<button onclick={() => (declared[key] = !declared[key])}>
+							{key}: {declared[key] ? 'on' : 'off'}
+						</button>
+					{/each}
+				</div>
+				<div class="legend-row">
+					<div class="chart-wrapper">
+						<ChartContainer xLabel="bill_length" yLabel="bill_depth">
+							{#if declared.frame}<Frame />{/if}
+							{#if declared.axisLeft}<AxisLeft />{/if}
+							{#if declared.axisBottom}<AxisBottom />{/if}
+							{#if declared.grid}<Grid />{/if}
+							{#if declared.crosshair}<Crosshair />{/if}
+							<DotsMark
+								table="penguins"
+								x="bill_length"
+								y="bill_depth"
+								fill="island"
+								selection="declared"
+							/>
+							{#if declared.brush}<IntervalX selection="declared" />{/if}
+							{#if declared.legend}<Legend position="right" selection="declared" />{/if}
+						</ChartContainer>
+					</div>
+					<div class="chart-wrapper">
+						<ChartContainer xLabel="island" yLabel="count">
+							<Frame />
+							<AxisLeft />
+							<AxisBottom />
+							<BarMarkY table="penguins" x="island" y={count()} selection="declared" />
 						</ChartContainer>
 					</div>
 				</div>
