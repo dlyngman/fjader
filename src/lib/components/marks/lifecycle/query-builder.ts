@@ -430,14 +430,24 @@ export interface BinKey {
 export function sharedBinKeys(parts: QueryParts): BinKey[] {
 	const { bins, groupByChannels } = parts;
 	if (!bins || !groupByChannels || !parts.hasAggregates) return [];
+	const idOf = (bin: BinPadding) =>
+		bin.kind === 'number'
+			? `n|${bin.source}|${bin.min}|${bin.alpha}`
+			: `t|${bin.source}|${bin.interval}|${bin.t0}`;
+	// A channel dropped for NULLs (`nulls="drop"`) is filtered by its own
+	// expression on the base scan, where a keyed bin's edges are not: its bin
+	// keeps the one-level form. Marks drop categorical channels only, so this
+	// takes a binned channel on a band or point scale.
+	const dropped = new Set<string>();
+	for (const { channel } of parts.nullDrops ?? []) {
+		if (bins[channel]) dropped.add(idOf(bins[channel]));
+	}
 	const byBin = new Map<string, BinKey>();
 	for (const channel of groupByChannels) {
 		const bin = bins[channel];
 		if (!bin) continue;
-		const id =
-			bin.kind === 'number'
-				? `n|${bin.source}|${bin.min}|${bin.alpha}`
-				: `t|${bin.source}|${bin.interval}|${bin.t0}`;
+		const id = idOf(bin);
+		if (dropped.has(id)) continue;
 		let key = byBin.get(id);
 		if (!key) byBin.set(id, (key = { alias: '', sql: binKeySQL(bin), channels: [] }));
 		key.channels.push([channel, bin]);

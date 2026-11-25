@@ -12,7 +12,7 @@ import duckdb from 'duckdb';
 import { avg, column, count, sql, sum } from '@uwdata/mosaic-sql';
 import type { ExprNode } from '@uwdata/mosaic-sql';
 import { bin } from '$lib/sql/bin';
-import { dense, filter, having, stackY } from '$lib/transforms';
+import { dense, filter, having, normalize, rank, stackY, topN } from '$lib/transforms';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
 import { assembleQuery, buildQueryParts, castNumeric, sharedBinKeys } from './query-builder';
 import type { QueryParts } from './query-builder';
@@ -182,6 +182,49 @@ const CASES: [string, Case][] = [
 		}
 	],
 	[
+		'numeric, a series, the top bins, stacked',
+		{
+			kind: 'number',
+			edges: HIST,
+			measures: { y2: sum('w') },
+			series: true,
+			transforms: [topN(5), stackY()],
+			config: { x: 'x2', y: 'y2', fill: 'fill' }
+		}
+	],
+	[
+		'numeric, a series, the top bins and Other, stacked',
+		{
+			kind: 'number',
+			edges: HIST,
+			measures: { y2: sum('w') },
+			series: true,
+			transforms: [topN(5, { includeOthers: true }), stackY()],
+			config: { x: 'x2', y: 'y2', fill: 'fill' }
+		}
+	],
+	[
+		'time, a series, normalized and stacked',
+		{
+			kind: 'time',
+			edges: HIST,
+			measures: { y2: sum('w') },
+			series: true,
+			transforms: [normalize(), stackY()],
+			config: { x: 'x2', y: 'y2', fill: 'fill' }
+		}
+	],
+	[
+		'numeric, ranked by its measure',
+		{
+			kind: 'number',
+			edges: HIST,
+			measures: { y2: count() },
+			transforms: [rank({ axis: 'x', channel: 'y2', direction: 'desc' })],
+			config: { x: 'x2', y: 'y2' }
+		}
+	],
+	[
 		'numeric, with a selection filter',
 		{
 			kind: 'number',
@@ -240,6 +283,14 @@ describe('a bin grouped once by its key', () => {
 		const one = build({ kind: 'number', edges: { x: 0 }, measures: { y: count() } }, true);
 		expect(sharedBinKeys(one.parts)).toHaveLength(0);
 		expect(one.sql).not.toContain('__bin');
+	});
+
+	it('keeps the one-level form for a bin with an edge dropped for NULLs', () => {
+		const keyed = build({ kind: 'number', edges: PATH, measures: { y: count() } }, true);
+		expect(sharedBinKeys(keyed.parts)).toHaveLength(1);
+		expect(sharedBinKeys({ ...keyed.parts, nullDrops: [{ channel: 'x', nullId: null }] })).toEqual(
+			[]
+		);
 	});
 
 	it('keeps the one-level form under having(), which names aggregates over the rows', () => {
