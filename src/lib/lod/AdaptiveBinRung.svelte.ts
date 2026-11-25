@@ -39,6 +39,11 @@ export interface AdaptiveBinRungConfig {
 	/** Trigger re-bin on MarkLifecycle. */
 	triggerReBin: (axis: string, domain: number[]) => void;
 	/**
+	 * Whether the mark's bins are held at a bound and cannot refine (a path
+	 * mark's, which must stay padded). For the palette's readout.
+	 */
+	atCap?: () => boolean;
+	/**
 	 * Each frame's viewport on a binned axis while no rebin is due, for the
 	 * mark's bin window (bin-window.ts). Not called while a rebin is due: the
 	 * rebin carries the window, and moving it first would query the old step.
@@ -64,6 +69,7 @@ export class AdaptiveBinRung implements LODRung {
 	#levelOf: (axis: 'x' | 'y', lo: number, hi: number) => number;
 	#binsDiffer: (axis: 'x' | 'y', lo: number, hi: number) => boolean;
 	#triggerReBin: (axis: string, domain: number[]) => void;
+	#atCap: (() => boolean) | null;
 	#onViewport: ((axis: 'x' | 'y', domain: [number, number]) => void) | null;
 
 	// --- Internal state ---
@@ -132,6 +138,7 @@ export class AdaptiveBinRung implements LODRung {
 			binStep: this.binStep,
 			numVisibleBins: this.numVisibleBins,
 			binWidthPx: this.binWidthPx,
+			atCap: this.#atCap?.() ?? false,
 			multiplier: this.#chartContext.binStepMultiplier ?? 1.0
 		};
 	}
@@ -149,6 +156,7 @@ export class AdaptiveBinRung implements LODRung {
 		this.#levelOf = config.levelOf;
 		this.#binsDiffer = config.binsDiffer;
 		this.#triggerReBin = config.triggerReBin;
+		this.#atCap = config.atCap ?? null;
 		this.#onViewport = config.onViewport ?? null;
 		this.#prevMultiplier = chartContext.binStepMultiplier ?? 1.0;
 

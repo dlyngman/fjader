@@ -38,6 +38,23 @@ function numericBins(
 }
 
 /**
+ * How many bins `options` gives over [min, max], as `padding` counts them: the
+ * numeric bins exactly; time buckets as their estimate (months and years are
+ * not a fixed width), with the two an end can straddle.
+ */
+function binCount(min: number, max: number, isTemporal: boolean, options: BinOptions): number {
+	if (isTemporal) {
+		const { unit, step = 1 } = options.interval
+			? { unit: options.interval, step: options.step }
+			: timeInterval(min, max, options.steps || 40);
+		const width = (UNIT_MS[unit] ?? UNIT_MS.day) * (step ?? 1);
+		return Math.ceil((max - min) / width) + 2;
+	}
+	const { min: lo, alpha } = numericBins(min, max, options);
+	return Math.floor((max - lo) / alpha) + 1;
+}
+
+/**
  * The edge of numeric bin `index` (SQL), `min + alpha * (index + offset)`, in
  * DOUBLE arithmetic. The one formula both `bin()` and `dense()`'s padding
  * write, so a bin's edge is the same bits whichever produced it: a padded row
@@ -201,13 +218,15 @@ export class AutoBinNode {
 		scaleType: string,
 		timeOffset: number | null = null,
 		currentDomain: [number, number] | null = null,
-		binStepMultiplier: number = 1.0
+		binStepMultiplier: number = 1.0,
+		maxBins: number = Infinity
 	): ExprNode {
 		const { col, min, max, isTemporal, binOptions } = this.#plan(
 			fieldInfo,
 			scaleType,
 			currentDomain,
-			binStepMultiplier
+			binStepMultiplier,
+			maxBins
 		);
 		if (isTemporal) {
 			const offset = binOptions.offset ?? 0;
@@ -277,13 +296,15 @@ export class AutoBinNode {
 		scaleType: string,
 		currentDomain: [number, number] | null = null,
 		binStepMultiplier: number = 1.0,
-		t0: number | null = null
+		t0: number | null = null,
+		maxBins: number = Infinity
 	): BinPadding | null {
 		const { col, min, max, isTemporal, binOptions } = this.#plan(
 			fieldInfo,
 			scaleType,
 			currentDomain,
-			binStepMultiplier
+			binStepMultiplier,
+			maxBins
 		);
 		const offset = binOptions.offset ?? 0;
 		const source = String(col);
@@ -317,13 +338,45 @@ export class AutoBinNode {
 		};
 	}
 
-	/** The column, extent and options both `resolve` and `padding` bin with. */
+	/**
+	 * Whether the bins these arguments resolve are held at `maxBins`: the view
+	 * (or the step multiplier) asks for more than may be padded. For the
+	 * palette, since the cap stops shift+scroll and zoom from refining further
+	 * without saying so.
+	 */
+	capped(
+		fieldInfo: Record<string, FieldInfo>,
+		scaleType: string,
+		currentDomain: [number, number] | null,
+		binStepMultiplier: number,
+		maxBins: number
+	): boolean {
+		return this.#plan(fieldInfo, scaleType, currentDomain, binStepMultiplier, maxBins).capped;
+	}
+
+	/**
+	 * The column, extent and options both `resolve` and `padding` bin with.
+	 *
+	 * `maxBins` bounds bins that follow the view (`followsView`): a mark that is
+	 * only right when padded (a path) must keep its bins × series × facets under
+	 * the padding's row limit, which finer bins over the whole extent pass. The
+	 * steps come down until the bins they give fit; a `step` or an `interval` of
+	 * the mark's own is not touched.
+	 */
 	#plan(
 		fieldInfo: Record<string, FieldInfo>,
 		scaleType: string,
 		currentDomain: [number, number] | null,
-		binStepMultiplier: number
-	): { col: ExprValue; min: number; max: number; isTemporal: boolean; binOptions: BinOptions } {
+		binStepMultiplier: number,
+		maxBins: number = Infinity
+	): {
+		col: ExprValue;
+		min: number;
+		max: number;
+		isTemporal: boolean;
+		binOptions: BinOptions;
+		capped: boolean;
+	} {
 		const fieldName = typeof this.field === 'string' ? this.field : this.field.toString();
 		const info = fieldInfo[fieldName] || {};
 		const { min, max, type } = info;
@@ -371,7 +424,23 @@ export class AutoBinNode {
 			}
 		}
 
-		return { col, min, max, isTemporal, binOptions };
+		let capped = false;
+		if (Number.isFinite(maxBins) && binOptions.steps && this.followsView && max !== min) {
+			// Against the bins the steps actually give: a nice step can give more
+			// bins than were asked for.
+			let steps = binOptions.steps;
+			// Down by a fifth at least each time: a step one smaller often rounds to
+			// the same nice step, and the same count.
+			for (let i = 0; i < 200 && steps > 1; i++) {
+				const count = binCount(min, max, isTemporal, { ...binOptions, steps });
+				if (count <= maxBins) break;
+				capped = true;
+				steps = Math.max(1, Math.floor(steps * Math.min(maxBins / count, 0.8)));
+			}
+			if (capped) binOptions = { ...binOptions, steps };
+		}
+
+		return { col, min, max, isTemporal, binOptions, capped };
 	}
 
 	withOffset(offset: number): AutoBinNode {

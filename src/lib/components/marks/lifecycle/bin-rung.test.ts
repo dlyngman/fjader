@@ -90,10 +90,10 @@ describe('the rebin watch of a binned mark', () => {
 		expect(gpu.addFrameCallback).not.toHaveBeenCalled();
 	});
 
-	it('is not started for a path mark yet, which must stay padded', () => {
+	it('is started for a path mark too, whose bins are bounded so it stays padded', () => {
 		const gpu = coordinator();
 		lifecycle(gpu, { x: bin('v'), y: count() }, { _rowLayouts: [] }).destroy();
-		expect(gpu.addFrameCallback).not.toHaveBeenCalled();
+		expect(gpu.addFrameCallback).toHaveBeenCalledTimes(1);
 	});
 
 	it('is left out where the chart has no coordinator', () => {

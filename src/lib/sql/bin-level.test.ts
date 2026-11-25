@@ -124,3 +124,60 @@ describe('a bin() that does not follow the view', () => {
 		expect(bin('missing').extentWidth(INFO, 'linear')).toBeNaN();
 	});
 });
+
+describe('a bound on the bins (a path mark, which must stay padded)', () => {
+	const count = (domain: [number, number] | null, maxBins: number, multiplier = 1) =>
+		(bin('v').padding(INFO, 'linear', domain, multiplier, null, maxBins) as { count: number })
+			.count;
+
+	it('holds view-scaled bins under the bound at any zoom', () => {
+		for (let width = 1000; width > 0.5; width /= 1.4) {
+			expect(count([0, width], 200)).toBeLessThanOrEqual(200);
+		}
+		// Unbounded, the same zoom passes it.
+		expect(count([0, 1], Infinity)).toBeGreaterThan(200);
+	});
+
+	it('leaves the bins alone while they fit', () => {
+		expect(bin('v').padding(INFO, 'linear', [0, 300], 1, null, 500)).toEqual(
+			bin('v').padding(INFO, 'linear', [0, 300], 1)
+		);
+		expect(bin('v').capped(INFO, 'linear', [0, 300], 1, 500)).toBe(false);
+	});
+
+	it('says when it holds, under zoom and under the step multiplier', () => {
+		expect(bin('v').capped(INFO, 'linear', [0, 2], 1, 200)).toBe(true);
+		expect(bin('v').capped(INFO, 'linear', null, 1, 200)).toBe(false);
+		expect(bin('v').capped(INFO, 'linear', null, 40, 200)).toBe(true);
+		expect(count(null, 200, 40)).toBeLessThanOrEqual(200);
+	});
+
+	it('applies to the default bins too, when the bound is below them', () => {
+		expect(count(null, Infinity)).toBeGreaterThan(10);
+		expect(count(null, 10)).toBeLessThanOrEqual(10);
+		expect(bin('v').capped(INFO, 'linear', null, 1, 10)).toBe(true);
+	});
+
+	it('gives the expression and its padding the same bins', () => {
+		const node = bin('v');
+		const pad = node.padding(INFO, 'linear', [0, 3], 1, null, 150) as { alpha: number };
+		expect(String(node.resolve(INFO, 'linear', null, [0, 3], 1, 150))).toContain(
+			`CAST(${JSON.stringify(pad.alpha)} AS DOUBLE)`
+		);
+	});
+
+	it('does not touch a bin() with a step or an interval of its own', () => {
+		const fixed = bin('v', { step: 1 });
+		expect(fixed.padding(INFO, 'linear', null, 1, null, 50)).toEqual(
+			fixed.padding(INFO, 'linear', null, 1)
+		);
+		expect(fixed.capped(INFO, 'linear', null, 1, 50)).toBe(false);
+	});
+
+	it('holds time buckets under the bound as they are counted for padding', () => {
+		const time = (domain: [number, number], maxBins: number) =>
+			(bin('t').padding(TIME_INFO, 'time', domain, 1, T0, maxBins) as { count: number }).count;
+		expect(time([0, 3600], Infinity)).toBeGreaterThan(300);
+		expect(time([0, 3600], 300)).toBeLessThanOrEqual(300);
+	});
+});

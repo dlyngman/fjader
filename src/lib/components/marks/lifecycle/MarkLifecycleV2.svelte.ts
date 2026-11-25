@@ -38,7 +38,7 @@ import {
 import type { ExprNode, ExprValue, FilterExpr, GroupByExpr } from '@uwdata/mosaic-sql';
 import type { ScaleRequirement } from '$lib/scales/ScalePriorities';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
-import { withDenseCategories, withoutOtherMembers, withRanking } from '$lib/transforms';
+import { binLimit, withDenseCategories, withoutOtherMembers, withRanking } from '$lib/transforms';
 import { markValueAxis } from '$lib/transforms/value-axis';
 import { ArrowDataAccessor } from '$lib/data/DataAccessor';
 import type { DataAccessor } from '$lib/data/DataAccessor';
@@ -345,8 +345,15 @@ export class MarkLifecycleV2 {
 		if (this.#autoBinNodes.size > 0 && this.#fieldStats) {
 			for (const [ch, value] of Object.entries(resolvedSelect)) {
 				if (isBinExpression(value)) {
-					const { fieldInfo, scaleType, currentDomain, multiplier } = this.#binArgs(ch);
-					resolvedSelect[ch] = value.resolve(fieldInfo, scaleType, null, currentDomain, multiplier);
+					const { fieldInfo, scaleType, currentDomain, multiplier, maxBins } = this.#binArgs(ch);
+					resolvedSelect[ch] = value.resolve(
+						fieldInfo,
+						scaleType,
+						null,
+						currentDomain,
+						multiplier,
+						maxBins
+					);
 				}
 			}
 		}
@@ -431,8 +438,61 @@ export class MarkLifecycleV2 {
 			fieldInfo: this.#fieldStats as Record<string, { min?: number; max?: number; type?: string }>,
 			scaleType: axis === 'x' ? this.actualXScaleType : this.actualYScaleType,
 			currentDomain: this.#lastBinDomain[axis] ?? null,
-			multiplier: this.#chartContext.binStepMultiplier || 1.0
+			multiplier: this.#chartContext.binStepMultiplier || 1.0,
+			maxBins: this.#maxBins()
 		} as const;
+	}
+
+	/**
+	 * The most bins this mark's binned axis may have: a bound for a PATH mark,
+	 * which is only right when padded. An unpadded stacked area skips the series
+	 * with no row in a bin and its bands overlap; an unpadded line of means draws
+	 * across the gap its empty bin was. Padding refuses past its row limit, and
+	 * bins that follow the view pass it under zoom, so they are held where bins
+	 * × series × facets still fits (transforms' binLimit, the limit's own
+	 * arithmetic). Applied always, not only under zoom: a path with so many
+	 * series that its default bins pass the limit gets fewer bins, and is padded.
+	 *
+	 * Infinity for a mark that draws each row on its own (bars survive missing
+	 * rows, and a windowed histogram pads only its view), before identity setup,
+	 * and where the series alone pass the limit. Read from the deriveds that
+	 * resolve the bins, so it follows identity setup.
+	 */
+	#maxBins(): number {
+		if (!this.#config._rowLayouts) return Infinity;
+		const identity = this.#identity;
+		if (!identity) return Infinity;
+		const keys: string[] = [];
+		const binned = new Set<string>();
+		for (const [channel, value] of Object.entries(this.#config.select)) {
+			if (value == null) continue;
+			if (isBinExpression(value)) {
+				binned.add(channel);
+			} else if (
+				!isRollingAvgExpression(value) &&
+				!(isNode(value) && (isAggregateExpression(value as ExprNode) || isWindowExpression(value)))
+			) {
+				keys.push(channel);
+			}
+		}
+		if (binned.size === 0) return Infinity;
+		// The chart's facet is a group key the select does not hold.
+		if ('__facet' in identity) keys.push('__facet');
+		return binLimit(keys, identity, binned);
+	}
+
+	/**
+	 * Whether a binned axis's bins are held at #maxBins: the view or the step
+	 * multiplier asks for more than can be padded. For the palette's readout.
+	 */
+	get binsAtCap(): boolean {
+		const maxBins = this.#maxBins();
+		if (!Number.isFinite(maxBins) || !this.#fieldStats) return false;
+		for (const [channel, node] of this.#autoBinNodes) {
+			const { fieldInfo, scaleType, currentDomain, multiplier } = this.#binArgs(channel);
+			return node.capped(fieldInfo, scaleType, currentDomain, multiplier, maxBins);
+		}
+		return false;
 	}
 
 	/**
@@ -447,13 +507,14 @@ export class MarkLifecycleV2 {
 		let out: Record<string, BinPadding> | null = null;
 		for (const [ch, value] of Object.entries(this.#config.select)) {
 			if (!isBinExpression(value)) continue;
-			const { axis, fieldInfo, scaleType, currentDomain, multiplier } = this.#binArgs(ch);
+			const { axis, fieldInfo, scaleType, currentDomain, multiplier, maxBins } = this.#binArgs(ch);
 			const padding = value.padding(
 				fieldInfo,
 				scaleType,
 				at?.axis === axis ? at.domain : currentDomain,
 				multiplier,
-				this.#timeOrigin(axis)
+				this.#timeOrigin(axis),
+				maxBins
 			);
 			if (padding) (out ??= {})[ch] = padding;
 		}
@@ -761,17 +822,16 @@ export class MarkLifecycleV2 {
 
 		// AdaptiveBinRung for binned marks (watches viewport domain, triggers rebin).
 		// For any mark with a bin() channel: the chart gives the coordinator, so no
-		// mark has to ask for it.
-		// Not for a path mark yet: finer bins over its whole extent pass the
-		// padding's row limit, and an unpadded path is drawn wrongly (a stacked
-		// area's bands overlap, a gap closes) where an unpadded bar is not.
+		// mark has to ask for it. A path mark's bins are bounded so that it stays
+		// padded (#maxBins).
 		const gpuCoordinator = chartContext.gpuCoordinator ?? null;
-		if (this.#autoBinNodes.size > 0 && gpuCoordinator && !config._rowLayouts) {
+		if (this.#autoBinNodes.size > 0 && gpuCoordinator) {
 			const binAxes = [...this.#autoBinNodes.keys()].map(
 				(ch) => (ch.startsWith('x') ? 'x' : 'y') as 'x' | 'y'
 			);
 			this.#adaptiveBinRung = new AdaptiveBinRung(gpuCoordinator, chartContext, {
 				binAxes,
+				atCap: () => this.binsAtCap,
 				levelOf: (axis, lo, hi) => this.#viewLevel(axis, lo, hi),
 				binsDiffer: (axis, lo, hi) => this.#binsDifferAt(axis, lo, hi),
 				setParam: (_key, value) => {

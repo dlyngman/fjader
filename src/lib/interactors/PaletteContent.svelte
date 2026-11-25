@@ -1292,7 +1292,9 @@
 										>{densityCtx.shouldDecimate ? 'on' : 'off'}</span
 									>
 								</div>
-							{:else if binsRung}
+							{/if}
+							<!-- Beside the density readouts on a binned line, which has both. -->
+							{#if binsRung}
 								<div class="group-row">
 									<span class="group-label">bins</span>
 									<span class="lod-readout"
@@ -1311,6 +1313,13 @@
 										>{((binsRung.props.binStep as number) ?? 0).toPrecision(3)}</span
 									>
 								</div>
+								{#if binsRung.props.atCap}
+									<!-- Zoom and shift+scroll stop refining here, and say nothing. -->
+									<div class="group-row">
+										<span class="group-label">finest</span>
+										<span class="lod-readout lod-active">at the padding limit</span>
+									</div>
+								{/if}
 							{/if}
 							<!-- Editable tunables (group navigation) -->
 							{#each lodGroupItems as item, gi (item.key)}
