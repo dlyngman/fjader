@@ -36,6 +36,35 @@ function observe(engine: QueryEngine) {
 }
 
 describe('QueryEngine #send funnel', () => {
+	it('sends nothing to a connection it has closed', async () => {
+		// A page loading several tables is left after the first: the rest of
+		// its statements must not reach a connection DuckDB has freed.
+		const events: string[] = [];
+		let releaseFirst!: () => void;
+		const first = new Promise<void>((resolve) => (releaseFirst = resolve));
+		const conn: DuckDBConnection = {
+			async query() {
+				return { numRows: 0, get: () => undefined } as never;
+			},
+			async exec(sql: string) {
+				events.push(sql);
+				if (sql === 'LOAD 1') await first;
+			},
+			async close() {
+				events.push('close');
+			}
+		};
+		const engine = new QueryEngine(conn);
+
+		const loading = engine.exec(['LOAD 1', 'LOAD 2', 'LOAD 3']);
+		await vi.waitFor(() => expect(events).toContain('LOAD 1'));
+		await engine.destroy();
+		releaseFirst();
+
+		await expect(loading).rejects.toMatchObject({ name: 'AbortError' });
+		expect(events.slice(events.indexOf('close') + 1)).toEqual([]);
+	});
+
 	it('sends queries, statements, DESCRIBE and Arrow inserts through the observer', async () => {
 		const { conn } = fakeConnection();
 		const engine = new QueryEngine(conn);

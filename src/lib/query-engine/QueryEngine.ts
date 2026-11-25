@@ -714,6 +714,11 @@ export class QueryEngine {
 		// The main connection cannot interrupt a statement once sent: a signal
 		// only stops one that has not gone yet. A lane cancels (SlicedLane).
 		if (!lane && signal?.aborted) throw new DOMException('Statement aborted', 'AbortError');
+		// destroy() closes the connection, and DuckDB frees it: a statement sent
+		// after reads freed memory in the worker. The public methods refuse a
+		// destroyed engine at their entry; this stops what entered before it and
+		// waited, such as the later statements of an exec() list.
+		if (this.#destroyed) throw new DOMException('Engine destroyed', 'AbortError');
 		const conn = this.#conn!;
 		const interaction = cls === 'interaction';
 		if (interaction) this.#interactionInFlight++;
