@@ -104,6 +104,28 @@ export function timeBinEdgeSQL(start: string, interval: string, offset: number):
 	return `${lower} + (${upper} - ${lower}) * ${share}`;
 }
 
+/**
+ * The ratio between two rebin levels: a view this much narrower than another
+ * has this many times the bins over the field's extent.
+ */
+export const REBIN_RATIO = 1.5;
+const LOG_REBIN_RATIO = Math.log(REBIN_RATIO);
+
+/**
+ * The rebin level of a view `viewWidth` wide on a field `extentWidth` wide:
+ * 0 for a view of the whole extent, one more for each REBIN_RATIO it is
+ * narrower, rounded to the nearest. View-scaled bins are resolved from the
+ * level, not from the view's width itself, and a mark re-bins when the level of
+ * its view changes. So the bins are a function of the view alone: two marks on
+ * one field have the same bins on every frame, whenever each of them last
+ * re-binned, and a pan (the width does not change) never re-bins.
+ */
+export function rebinLevel(viewWidth: number, extentWidth: number): number {
+	if (!(viewWidth > 0) || !(extentWidth > 0)) return 0;
+	// + 0: a view a little wider than the extent rounds to -0.
+	return Math.round(Math.log(extentWidth / viewWidth) / LOG_REBIN_RATIO) + 0;
+}
+
 /** A JS number as a DOUBLE literal: a bare 0.1 would be read as a DECIMAL. */
 function sqlDouble(n: number): string {
 	return `CAST(${JSON.stringify(n)} AS DOUBLE)`;
@@ -197,6 +219,33 @@ export class AutoBinNode {
 	}
 
 	/**
+	 * Whether the bins follow the view: a `bin()` given `steps` (or none, the
+	 * default) has that many across the view. One given a `step` or an `interval`
+	 * keeps it at any zoom.
+	 */
+	get followsView(): boolean {
+		return !this.options.step && !this.options.interval;
+	}
+
+	/**
+	 * The field's extent in the units of the axis's domain (seconds on a time
+	 * axis), which a view's width is compared with for its rebin level
+	 * (`rebinLevel`). NaN without the field's statistics.
+	 */
+	extentWidth(fieldInfo: Record<string, FieldInfo>, scaleType: string): number {
+		const fieldName = typeof this.field === 'string' ? this.field : this.field.toString();
+		const { min, max, type } = fieldInfo[fieldName] || {};
+		if (min === undefined || max === undefined) return NaN;
+		return this.#isTemporal(type, scaleType)
+			? (new Date(max).getTime() - new Date(min).getTime()) / 1000
+			: max - min;
+	}
+
+	#isTemporal(type: string | undefined, scaleType: string): boolean {
+		return this.options.interval !== undefined || type === 'date' || isTemporalScale(scaleType);
+	}
+
+	/**
 	 * The bins `resolve` produces with the same arguments: every bin a value of
 	 * the field can fall in. What `dense()` pads a histogram from, so a bin
 	 * emptied by a filter stays as a zero row and the bars can morph.
@@ -275,8 +324,7 @@ export class AutoBinNode {
 
 		const col: ExprValue = typeof this.field === 'string' ? column(this.field) : this.field;
 
-		const isTemporal =
-			this.options.interval !== undefined || type === 'date' || isTemporalScale(scaleType);
+		const isTemporal = this.#isTemporal(type, scaleType);
 
 		let binOptions = { ...this.options };
 
@@ -288,13 +336,12 @@ export class AutoBinNode {
 
 		if (currentDomain && binOptions.steps && !binOptions.step && !binOptions.interval) {
 			const viewportWidth = currentDomain[1] - currentDomain[0];
-			const globalWidth = isTemporal
-				? (new Date(max).getTime() - new Date(min).getTime()) / 1000
-				: max - min;
+			const globalWidth = this.extentWidth(fieldInfo, scaleType);
 
 			if (viewportWidth > 0 && globalWidth > 0) {
-				const viewportFraction = viewportWidth / globalWidth;
-				const scaledSteps = Math.max(1, Math.round(binOptions.steps / viewportFraction));
+				// From the view's level, not its width: see rebinLevel.
+				const level = rebinLevel(viewportWidth, globalWidth);
+				const scaledSteps = Math.max(1, Math.round(binOptions.steps * REBIN_RATIO ** level));
 				binOptions = { ...binOptions, steps: scaledSteps };
 			}
 		}
