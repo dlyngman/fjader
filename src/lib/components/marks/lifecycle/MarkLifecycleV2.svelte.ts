@@ -2362,9 +2362,18 @@ export class MarkLifecycleV2 {
 			}
 		}
 
+		// Getters: a scale is read, and so tracked, only by a transform that uses
+		// it (dodge, x's bandwidth; the stacks, none). Read here, both scales were
+		// dependencies of every mark with a JS transform, and one animating (a
+		// pan, a zoom) reran the transforms every frame with no data changed.
+		const chart = this.#chartContext;
 		return this.#transformCompiler.applyToData(accessor, this.#transformConfig, {
-			x: this.#chartContext.xScale,
-			y: this.#chartContext.yScale
+			get x() {
+				return chart.xScale;
+			},
+			get y() {
+				return chart.yScale;
+			}
 		});
 	});
 
