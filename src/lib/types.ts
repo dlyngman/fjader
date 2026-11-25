@@ -786,7 +786,10 @@ export interface ChartContext {
 	readonly config: ChartConfig;
 
 	// Pointer hooks (mutable slots set by interactors)
-	onChartClick: ((event: PointerEvent) => void) | null;
+	/** A click on the chart; `point` is the pointer relative to the chart's SVG (a shared
+	 *  buffer: read it before calling back into the layout). Not the event's offsetX, which
+	 *  is measured from the event's target. */
+	onChartClick: ((event: PointerEvent, point: Point) => void) | null;
 	/**
 	 * A press, offered to the interactor before the chart pans. `target` is the
 	 * element under the pointer, which a brush reads for the handle it is on

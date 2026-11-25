@@ -48,9 +48,6 @@
 		() => chart.reroutePress()
 	);
 
-	// Reused for pointer conversion.
-	const point = { x: 0, y: 0 };
-
 	// The range in this cell's pixels. Reads chart.xScale/yScale directly so the
 	// domain getter registers as a dependency (the D3 scale object's identity
 	// never changes, so an intermediate $derived would swallow updates).
@@ -89,12 +86,11 @@
 		return true;
 	}
 
-	function handlePointerMove(event: PointerEvent) {
+	function handlePointerMove(event: PointerEvent, inner: Point) {
 		// Another pointer's (a second finger or pen) is not this drag's: ChartCell handles it.
 		if (!drag.owns(chart, event.pointerId)) return false;
-		point.x = event.offsetX;
-		point.y = event.offsetY;
-		const inner = chart.toInnerCoordinates(point);
+		// The cell's point, not the event's offsetX: that is measured from the event's
+		// target, which is not always the chart's SVG.
 		return drag.move(chart, event.pointerId, isX ? inner.x : inner.y, scale());
 	}
 

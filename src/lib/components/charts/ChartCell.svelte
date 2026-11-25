@@ -694,7 +694,12 @@
 	}
 
 	function handleClick(event: MouseEvent) {
-		chartContext.onChartClick?.(event as unknown as PointerEvent);
+		// Read afresh: a click can follow a scroll with no frame in between to re-read it.
+		refreshSvgOrigin();
+		chartContext.onChartClick?.(
+			event as unknown as PointerEvent,
+			setPointer(ptrX(event), ptrY(event))
+		);
 	}
 
 	function handleContextMenu(event: MouseEvent) {
