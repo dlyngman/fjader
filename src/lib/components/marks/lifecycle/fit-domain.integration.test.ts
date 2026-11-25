@@ -104,6 +104,40 @@ function jsFit(window: [number, number] | null): [number, number] | null {
 	);
 }
 
+describe('a NaN value (a gap) is skipped by both fits', () => {
+	it('the SQL fit ignores it, as the JS pass does, where a plain MAX would be NaN', async () => {
+		// A line of means with gaps: every fourth bin has no value in y.
+		await db.run(
+			`CREATE OR REPLACE TABLE gaps AS
+			 SELECT * REPLACE (CASE WHEN (x1 / ${WIDTH})::INT % 4 = 0 THEN 'NaN'::REAL ELSE y END AS y)
+			 FROM res`
+		);
+		const plain = await db.all(`SELECT MAX(y) AS m FROM gaps`);
+		expect(plain[0].m).toBeNaN();
+
+		const [row] = await db.all(
+			Query.from('gaps')
+				.select(fitSelect(['y']))
+				.toString()
+		);
+		const sqlExtent = extentFromFitRow(row);
+		const [reference] = await db.all(
+			`SELECT MIN(y) AS lo, MAX(y) AS hi FROM gaps WHERE NOT isnan(y)`
+		);
+		expect(sqlExtent).toEqual([reference.lo, reference.hi]);
+	});
+
+	it('a channel that is all gaps gives no extent, not NaN', async () => {
+		await db.run(`CREATE OR REPLACE TABLE allgaps AS SELECT 'NaN'::REAL AS y FROM range(8)`);
+		const [row] = await db.all(
+			Query.from('allgaps')
+				.select(fitSelect(['y']))
+				.toString()
+		);
+		expect(extentFromFitRow(row)).toBeNull();
+	});
+});
+
 describe('windowedFit against the SQL fit', () => {
 	it('reads the rows as the dense layout', () => {
 		expect(fitted).toEqual(['y', 'y0', 'y1']);

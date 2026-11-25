@@ -119,6 +119,9 @@ import { binRowsMoved, binSpecKey, heldCoversView, isRebin, rebinTweens } from '
 import {
 	buildQueryParts,
 	assembleQuery,
+	isPositionalChannel,
+	measureChannels,
+	pathGapChannels,
 	tipExtrasStatement,
 	ident,
 	castReal,
@@ -357,6 +360,22 @@ export class MarkLifecycleV2 {
 
 		return resolvedSelect;
 	});
+
+	/**
+	 * What a padded row holds on a mark that draws rows as points along a path
+	 * (MarkConfig.gaps, absentSeriesGap): a gap for a positional measure with no
+	 * value over no rows, and nothing for the absent series when it is empty. Nothing for a
+	 * mark whose rows span their bins (it shrinks them to zero), or under a SQL
+	 * stack, which sums the rows of a bin: there a padded row stays 0.
+	 */
+	#pathPadding(config: MarkLifecycleV2Config): Pick<MarkConfig, 'gaps' | 'absentSeriesGap'> {
+		if (!config._rowLayouts) return {};
+		const stacked = (config.transforms ?? []).some(
+			(transform) => transform.type === 'stack' && transform.stage === 'sql'
+		);
+		if (stacked) return {};
+		return { gaps: pathGapChannels(config.select), absentSeriesGap: true };
+	}
 
 	// --- Structural query parts ($derived — recomputes on bin/scale/config changes) ---
 	#resolvedQueryParts: QueryParts | null = $derived.by(() => {
@@ -630,7 +649,8 @@ export class MarkLifecycleV2 {
 			table: config.table,
 			x: this.#getFieldName('x'),
 			y: this.#getFieldName('y'),
-			fill: this.#getFieldName('fill')
+			fill: this.#getFieldName('fill'),
+			...this.#pathPadding(config)
 		};
 		// A getter: transforms read it when they build their SQL, by when the
 		// chart has resolved its scales.
@@ -2584,9 +2604,21 @@ export class MarkLifecycleV2 {
 				// the rest are scalars (the rank, id columns), cheap to keep, and the
 				// lists are the only ones whose size grows with the field.
 				const withoutMembers = withoutOtherMembers(tooltipQuery);
+				// A path's gaps are rows with a NaN positional measure (a mean with no
+				// data, the absent series when it is empty): nothing is drawn there,
+				// so nothing is there to hover. Left in, a lookup by x alone would find
+				// one and show NaN. Only the positional measures: they decide whether
+				// a point is drawn, and a drawn point must stay hoverable.
+				const measures = this.#transformConfig.gaps
+					? measureChannels(selectConfig).filter(isPositionalChannel)
+					: [];
+				const gapWhere =
+					measures.length > 0
+						? ` WHERE NOT (${measures.map((c) => `isnan(${ident(c)})`).join(' OR ')})`
+						: '';
 				// One statement: a hover query never finds the table missing.
 				await this.#queryEngine.exec(
-					`CREATE OR REPLACE TEMP TABLE "${tableName}" AS SELECT *${replaceClause} FROM (${withoutMembers})${orderClause}`,
+					`CREATE OR REPLACE TEMP TABLE "${tableName}" AS SELECT *${replaceClause} FROM (${withoutMembers})${gapWhere}${orderClause}`,
 					{ class: cls, connectionLocal: true }
 				);
 			} else {

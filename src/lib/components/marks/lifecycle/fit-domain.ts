@@ -8,10 +8,10 @@
  * the window predicate and the baseline are defined here so the two cannot
  * drift: the SQL builder and the JS pass read the same definitions.
  *
- * One difference is left on purpose: a NaN value (an empty bin of an `avg`)
- * is skipped by the JS pass, while DuckDB orders NaN above every number, so
- * its MAX of a channel holding one is NaN and the caller drops that channel
- * entirely. The JS answer is the one meant.
+ * A NaN value (an empty bin of an `avg`, a gap in a line) is skipped by both.
+ * DuckDB orders NaN above every number, so a plain MAX over a channel holding
+ * one is NaN, which lost the fit for that channel: the SQL filters them out,
+ * as the JS pass always did.
  */
 
 import { cast, column, max, min, sql, type ExprValue, type FilterExpr } from '@uwdata/mosaic-sql';
@@ -55,8 +55,8 @@ export function windowEdges(
 export function fitSelect(fitted: readonly string[]): Record<string, ExprValue> {
 	const select: Record<string, ExprValue> = {};
 	for (const ch of fitted) {
-		select[`min_${ch}`] = min(column(ch));
-		select[`max_${ch}`] = max(column(ch));
+		select[`min_${ch}`] = sql`${min(column(ch))} FILTER (WHERE NOT isnan(${column(ch)}))`;
+		select[`max_${ch}`] = sql`${max(column(ch))} FILTER (WHERE NOT isnan(${column(ch)}))`;
 	}
 	return select;
 }

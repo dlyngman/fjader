@@ -327,7 +327,11 @@ describe('a histogram padded to every bin', () => {
 				x: 'x',
 				y: 'y',
 				fill: 'fill',
-				identity: { fill: { dim: engine.dimTableFor('cat'), size: kinds, positional: false } }
+				identity: { fill: { dim: engine.dimTableFor('cat'), size: kinds, positional: false } },
+				// As the lifecycle states them for an unstacked path mark: the
+				// empty absent series is left out, on both reads.
+				gaps: [],
+				absentSeriesGap: true
 			} as MarkConfig
 		};
 		const own = { table: view, baseTable: 'big', transforms: path, bins: pathBins };
@@ -359,8 +363,12 @@ describe('a histogram padded to every bin', () => {
 			expect(inBin.map((row) => row[0])).toEqual(Array(series).fill(50 * b));
 			const ids = inBin.map((row) => row[2]);
 			expect(ids).toEqual([...ids].sort((p, q) => p - q));
-			// g = 0 keeps x < 250: the bins past it are padding, at zero.
-			if (b >= 5) expect(inBin.every((row) => row[1] === 0)).toBe(true);
+			// The absent series (-1) sorts first and has no rows: left out, as NaN,
+			// from the preagg table's stored padding as from the base read's join.
+			expect(ids[0]).toBe(-1);
+			expect(inBin[0][1]).toBeNaN();
+			// g = 0 keeps x < 250: for the others, the bins past it are padding, at zero.
+			if (b >= 5) expect(inBin.slice(1).every((row) => row[1] === 0)).toBe(true);
 		}
 	});
 
