@@ -38,6 +38,9 @@ import {
 	assembleQuery,
 	castNumeric,
 	castReal,
+	sharedBinKeys,
+	BIN_KEY_PREFIX,
+	type BinKey,
 	type QueryParts
 } from '$lib/components/marks/lifecycle/query-builder';
 import type { MarkHandle, QueryParams } from '../MarkHandle.svelte';
@@ -132,6 +135,13 @@ export interface PreaggCreation {
 	 * those bins are never drawn, and padding a base read drops them too.
 	 */
 	pad: { rows: string; dims: string[]; partials: string[] } | null;
+	/**
+	 * The mark's bins held as keys: one column each (`alias`), grouped by, in
+	 * place of a column per edge channel. A read derives the edges from the key
+	 * with the formula a base read uses (query-builder's sharedBinKeys), so a
+	 * mark's rows are the same bits from either. Empty for every other table.
+	 */
+	binKeys: BinKey[];
 }
 
 /** The column marking a preagg table's padding rows; real rows hold false. */
@@ -217,7 +227,8 @@ export function planPreagg(
 	if (descriptor.transformCompiler.hasHaving()) return null;
 
 	// Analyze selectDef for preagg compatibility
-	const analysis = rewriteForPreagg(parts.selectDef, parts.passthroughChannels);
+	const binKeys = sharedBinKeys(parts);
+	const analysis = rewriteForPreagg(parts.selectDef, parts.passthroughChannels, binKeys);
 	if (!analysis) return null; // unsupported (window/distinct)
 	const { preaggCols, outputSelect, preaggGroupBy } = analysis;
 
@@ -284,12 +295,14 @@ export function planPreagg(
 		activeKeys.push({ column: null, groups: null });
 	});
 
-	const pad = analysis.windowChannels ? null : padPlan(descriptor, preaggCols);
+	const pad = analysis.windowChannels ? null : padPlan(descriptor, preaggCols, binKeys);
 
 	// CAST-wrap dimension preaggCols (bake CAST into the preagg table).
 	// Partial-aggregate and active columns stay raw for recombination.
 	for (const [ch, expr] of Object.entries(preaggCols)) {
 		if (ch.startsWith('__ps') || ch.startsWith('__active') || ch.startsWith('__raw')) continue;
+		// A bin key keeps its own type: the edges are computed from it.
+		if (ch.startsWith(BIN_KEY_PREFIX)) continue;
 		if (isAggregateExpression(expr)) continue;
 		preaggCols[ch] = castNumeric(expr, schema) as ExprNode;
 	}
@@ -303,7 +316,8 @@ export function planPreagg(
 			orderby: binOrder,
 			where: [...descriptor.transformCompiler.rowFilters(), ...(pad?.where ?? [])],
 			joins,
-			pad: pad?.pad ?? null
+			pad: pad?.pad ?? null,
+			binKeys
 		},
 		outputSelect,
 		activeMeta,
@@ -320,7 +334,8 @@ export function planPreagg(
  */
 function padPlan(
 	descriptor: QueryDescriptor,
-	preaggCols: Record<string, ExprNode>
+	preaggCols: Record<string, ExprNode>,
+	binKeys: BinKey[]
 ): { pad: NonNullable<PreaggCreation['pad']>; where: ExprNode[] } | null {
 	const { parts, transformCompiler } = descriptor;
 	for (const expr of Object.values(parts.selectDef)) {
@@ -330,9 +345,13 @@ function padPlan(
 			if (agg.isDistinct || (name !== 'count' && name !== 'sum')) return null;
 		}
 	}
+	// Padding enumerates one binned axis, so it can carry one key.
+	if (binKeys.length > 1) return null;
+	const key = binKeys[0] ?? null;
 	const rows = transformCompiler.padRows(Object.keys(parts.selectDef), {
 		groupKeys: parts.groupKeys,
-		bins: parts.bins ?? null
+		bins: parts.bins ?? null,
+		padKey: key && { alias: key.alias, sql: key.sql }
 	});
 	if (!rows) return null;
 	const dims: string[] = [];
@@ -346,6 +365,7 @@ function padPlan(
 	// pushed below the GROUP BY and compute every row's bin twice (measured:
 	// half again the build time), where a NULL test on the column is free.
 	const sources = new Set(dims.flatMap((col) => parts.bins?.[col]?.source ?? []));
+	for (const [, bin] of key?.channels ?? []) sources.add(bin.source);
 	const where = [...sources].map(
 		(source) => sqlTag([`(${source}) IS NOT NULL`] as unknown as TemplateStringsArray) as ExprNode
 	);
@@ -639,8 +659,15 @@ export function preaggQuerySQL(
 		nonAggregateGroupBy: preaggGroupBy,
 		hasAggregates: true,
 		groupKeys: preaggGroupKeys,
-		// The table keeps the bin channels as columns of the same bins, so the
-		// read pads exactly as the base read does, or is padded already.
+		groupByChannels: preaggGroupKeys,
+		// The table holds each key as a column.
+		binKeys: preagg.creation.binKeys.map((key) => ({
+			...key,
+			sql: column(key.alias).toString()
+		})),
+		// The table keeps the mark's bins (as edge columns, or as a key the read
+		// derives the edges from), so the read pads exactly as the base read
+		// does, or is padded already.
 		bins: parts.bins,
 		padded: !!preagg.creation.pad,
 		hasWindowAggregates: false,

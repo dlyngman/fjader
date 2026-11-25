@@ -302,6 +302,15 @@ describe('a histogram padded to every bin', () => {
 			const types = await conn.all(`DESCRIBE ${read}`);
 			expect(types.map((t) => t.column_type)).toEqual(['FLOAT', 'FLOAT', 'FLOAT']);
 		}
+
+		// The table holds the bin once, as its key, and the read derives both
+		// edges from it, as the base read does.
+		const table = /__dplot_preagg_[0-9a-f]+/.exec(preaggRead)![0];
+		const columns = (await conn.all(`DESCRIBE "${table}"`)).map((c) => c.column_name);
+		expect(columns).toContain('__bin0');
+		expect(columns).not.toContain('x1');
+		expect(columns).not.toContain('x2');
+		expect(nonDDL().at(-1)).toContain('"__bin0"');
 	});
 
 	it('a path mark with a series reads the same grid, bin first, through a preagg table', async () => {

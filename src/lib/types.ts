@@ -259,6 +259,12 @@ export interface MarkConfig {
 	 * that moves it re-queries without counting as a rebin. Per query.
 	 */
 	binWindow?: BinWindow | null;
+	/**
+	 * For the padding rows of a table keyed by its bin (`padRows`): the alias to
+	 * write the binned axis's key under, beside the channels, and the key's SQL,
+	 * which names the bin it is of. Per query.
+	 */
+	padKey?: { alias: string; sql: string } | null;
 	[key: string]: unknown;
 }
 

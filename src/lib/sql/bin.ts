@@ -53,6 +53,35 @@ export function numericBinEdgeSQL(
 	return `(${sqlDouble(min)} + ${sqlDouble(alpha)} * (${index} + ${offset}))`;
 }
 
+/**
+ * A bin's key (SQL): what a row is grouped by, once, whatever number of edges
+ * the mark draws of it. A numeric bin's index, `floor((source - min) / alpha)`,
+ * a DOUBLE; a time bin's bucket start, `time_bucket(interval, source)`. Every
+ * edge of the bin is `binEdgeSQL` of it.
+ */
+export function binKeySQL(bin: BinPadding): string {
+	if (bin.kind === 'number') return numericBinIndexSQL(bin.source, bin.min, bin.alpha);
+	return `time_bucket(${bin.interval}, ${bin.source})`;
+}
+
+/** The index of the numeric bin a value of `source` falls in (SQL, a DOUBLE). */
+function numericBinIndexSQL(source: string, min: number, alpha: number): string {
+	return `floor((CAST(${source} AS DOUBLE) - ${sqlDouble(min)}) / ${sqlDouble(alpha)})`;
+}
+
+/**
+ * Bin `k`'s edge as the REAL the query draws, `k` a bin key (`binKeySQL`) or
+ * the padding's enumeration of one. Numeric: `min + alpha * (k + offset)`, in
+ * DOUBLE arithmetic. Time: the bucket start plus `offset` intervals, as seconds
+ * from `t0`, the form the mark's time channels take.
+ */
+export function binEdgeSQL(bin: BinPadding, k: string): string {
+	if (bin.kind === 'number') {
+		return `CAST(${numericBinEdgeSQL(bin.min, bin.alpha, bin.offset, k)} AS REAL)`;
+	}
+	return `CAST((epoch(${k} + (${bin.interval}) * ${bin.offset}) - ${bin.t0}) AS REAL)`;
+}
+
 /** A JS number as a DOUBLE literal: a bare 0.1 would be read as a DECIMAL. */
 function sqlDouble(n: number): string {
 	return `CAST(${JSON.stringify(n)} AS DOUBLE)`;
@@ -130,7 +159,7 @@ export class AutoBinNode {
 		// real row's edge and a padded row's are the same bits (see
 		// numericBinEdgeSQL).
 		const { min: lo, alpha } = numericBins(min, max, binOptions);
-		const index = `floor((CAST(${col} AS DOUBLE) - ${sqlDouble(lo)}) / ${sqlDouble(alpha)})`;
+		const index = numericBinIndexSQL(String(col), lo, alpha);
 		return sqlFragment(numericBinEdgeSQL(lo, alpha, binOptions.offset ?? 0, index));
 	}
 

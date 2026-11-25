@@ -1755,6 +1755,7 @@ export class QueryEngine {
 					...parts,
 					selectDef: split.innerSelect,
 					nonAggregateGroupBy: split.innerGroupBy,
+					groupByChannels: split.innerGroupChannels,
 					hasAggregates: true
 				},
 				filter,

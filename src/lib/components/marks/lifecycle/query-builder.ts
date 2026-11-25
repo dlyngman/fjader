@@ -20,11 +20,13 @@ import {
 	Query,
 	WindowNode,
 	type AggregateNode,
-	type ExprNode
+	type ExprNode,
+	type SelectQuery
 } from '@uwdata/mosaic-sql';
 import { isWindowExpression, isVerbatimWindowExpression } from '$lib/sql/expression-utils';
 import type { TransformCompiler } from '$lib/transforms/TransformCompiler';
 import type { ColumnSchema } from '$lib/query-engine/QueryEngine';
+import { binEdgeSQL, binKeySQL } from '$lib/sql/bin';
 import type { BinPadding, BinWindow } from '$lib/types';
 
 // ---------------------------------------------------------------------------
@@ -39,6 +41,18 @@ interface OrderConfig {
 export interface QueryParts {
 	selectDef: Record<string, unknown>;
 	nonAggregateGroupBy: unknown[];
+	/**
+	 * The channel each `nonAggregateGroupBy` entry groups by, in the same order.
+	 * With it a bin's edge channels can be taken out of the GROUP BY and derived
+	 * from one key (`sharedBinKeys`); without it the query groups by every entry.
+	 */
+	groupByChannels?: string[];
+	/**
+	 * The bin keys the table read already holds as columns (a preagg table keyed
+	 * by them): grouped by as they are, in place of `sharedBinKeys`' own, which
+	 * compute each from the source rows.
+	 */
+	binKeys?: BinKey[];
 	hasAggregates: boolean;
 	hasWindowAggregates: boolean;
 	hasSQLTransforms: boolean;
@@ -222,6 +236,8 @@ export interface WindowSplit {
 	innerSelect: Record<string, unknown>;
 	/** Inner GROUP BY: one column ref per dimension channel. */
 	innerGroupBy: ExprNode[];
+	/** The channel of each `innerGroupBy` entry (QueryParts.groupByChannels). */
+	innerGroupChannels: string[];
 	/** Outer window functions keyed by channel. */
 	windowChannels: Record<string, WindowNode>;
 }
@@ -244,6 +260,7 @@ export function splitWindowSelect(
 ): WindowSplit {
 	const innerSelect: Record<string, unknown> = {};
 	const innerGroupBy: ExprNode[] = [];
+	const innerGroupChannels: string[] = [];
 	const windowChannels: Record<string, WindowNode> = {};
 
 	const fieldToChannel = new Map<string, string>();
@@ -274,10 +291,11 @@ export function splitWindowSelect(
 		} else {
 			innerSelect[ch] = castNumeric(expr, schema);
 			innerGroupBy.push(sqlColumn(ch));
+			innerGroupChannels.push(ch);
 		}
 	}
 
-	return { innerSelect, innerGroupBy, windowChannels };
+	return { innerSelect, innerGroupBy, innerGroupChannels, windowChannels };
 }
 
 // ---------------------------------------------------------------------------
@@ -298,6 +316,7 @@ export function buildQueryParts(
 ): QueryParts {
 	const selectDef: Record<string, unknown> = {};
 	const nonAggregateGroupBy: unknown[] = [];
+	const groupByChannels: string[] = [];
 	const groupByKeys = new Set<string>();
 	let hasAggregates = false;
 	let hasWindowAggregates = false;
@@ -340,6 +359,7 @@ export function buildQueryParts(
 			if (!groupByKeys.has(sqlAlias)) {
 				groupByKeys.add(sqlAlias);
 				nonAggregateGroupBy.push(exprNode);
+				groupByChannels.push(channel);
 			}
 		} else {
 			// Window expressions: skip GROUP BY but flag for preagg routing
@@ -369,6 +389,7 @@ export function buildQueryParts(
 	return {
 		selectDef,
 		nonAggregateGroupBy,
+		groupByChannels,
 		hasAggregates,
 		groupKeys: hasAggregates ? keyChannels : null,
 		hasWindowAggregates,
@@ -377,6 +398,106 @@ export function buildQueryParts(
 		aliasMap,
 		passthroughChannels
 	};
+}
+
+// ---------------------------------------------------------------------------
+// Bins — grouped once, by a key
+// ---------------------------------------------------------------------------
+
+/** A bin that several of a mark's channels are edges of, and the key it is grouped by. */
+export interface BinKey {
+	/** The key's column in the grouped query. */
+	alias: string;
+	/** The key as SQL over the source rows (`binKeySQL`). */
+	sql: string;
+	/** The channels that are edges of this bin, each with its own offset. */
+	channels: [channel: string, bin: BinPadding][];
+}
+
+/**
+ * The bins a query groups by ONCE: each bin that two or more group channels are
+ * edges of (a histogram's `x1` and `x2`; a binned path's `x`, `x1` and `x2`).
+ * Grouping by every edge evaluates every edge's expression for every source
+ * row, to arrive at the same groups; measured on native DuckDB, a histogram's
+ * query costs 1.5 to 1.8 times the keyed form for numeric bins, 2.3 to 2.8 for
+ * time bins.
+ *
+ * Channels share a bin when their padding has the same source and the same
+ * bins, whatever their offsets. A bin with one channel is left as it is: its
+ * edge is one expression either way. Empty when the parts do not say which
+ * channel each GROUP BY entry is (`groupByChannels`).
+ */
+export function sharedBinKeys(parts: QueryParts): BinKey[] {
+	const { bins, groupByChannels } = parts;
+	if (!bins || !groupByChannels || !parts.hasAggregates) return [];
+	const byBin = new Map<string, BinKey>();
+	for (const channel of groupByChannels) {
+		const bin = bins[channel];
+		if (!bin) continue;
+		const id =
+			bin.kind === 'number'
+				? `n|${bin.source}|${bin.min}|${bin.alpha}`
+				: `t|${bin.source}|${bin.interval}|${bin.t0}`;
+		let key = byBin.get(id);
+		if (!key) byBin.set(id, (key = { alias: '', sql: binKeySQL(bin), channels: [] }));
+		key.channels.push([channel, bin]);
+	}
+	const shared = [...byBin.values()].filter((key) => key.channels.length > 1);
+	shared.forEach((key, i) => (key.alias = `${BIN_KEY_PREFIX}${i}`));
+	return shared;
+}
+
+/** The prefix of a bin key's column, in a grouped query and in a preagg table. */
+export const BIN_KEY_PREFIX = '__bin';
+
+/**
+ * The grouped base of a query whose bins are grouped by key, in two levels:
+ *
+ *   SELECT edge(k) AS x1, edge(k) AS x2, y            -- over the groups
+ *   FROM (SELECT <key> AS k, <aggregates> AS y FROM t WHERE ... GROUP BY <key>)
+ *
+ * The edges are `binEdgeSQL` of the key, the formula `dense()` writes a padded
+ * row's with, so a row's edges are the same bits as before and as its padding.
+ * The outer level has exactly the select's aliases, in its order, so the
+ * transforms that wrap it see what they saw.
+ */
+function groupedByBinKeys(
+	table: string,
+	parts: QueryParts,
+	binKeys: BinKey[],
+	filters: ExprNode[]
+): SelectQuery {
+	const { selectDef, nonAggregateGroupBy, groupByChannels = [] } = parts;
+	const edgeOf = new Map<string, string>();
+	const inner: Record<string, ExprNode> = {};
+	const groupBy: ExprNode[] = [];
+	for (const key of binKeys) {
+		const keyExpr = sql([key.sql] as unknown as TemplateStringsArray) as ExprNode;
+		inner[key.alias] = keyExpr;
+		groupBy.push(keyExpr);
+		const k = sqlColumn(key.alias).toString();
+		for (const [channel, bin] of key.channels) edgeOf.set(channel, binEdgeSQL(bin, k));
+	}
+	nonAggregateGroupBy.forEach((expr, i) => {
+		if (!edgeOf.has(groupByChannels[i])) groupBy.push(expr as ExprNode);
+	});
+	const outer: Record<string, ExprNode> = {};
+	for (const [channel, expr] of Object.entries(selectDef)) {
+		if (expr == null) continue;
+		const edge = edgeOf.get(channel);
+		if (edge === undefined) {
+			inner[channel] = expr as ExprNode;
+			outer[channel] = sqlColumn(channel) as ExprNode;
+		} else {
+			// NULL (a NULL source) to NaN, as castReal gives every channel.
+			outer[channel] = sql([
+				`coalesce(${edge}, 'NaN'::REAL)`
+			] as unknown as TemplateStringsArray) as ExprNode;
+		}
+	}
+	const grouped = Query.from(table).select(inner).groupby(groupBy);
+	if (filters.length > 0) grouped.where(and(filters));
+	return Query.from({ __binned: grouped }).select(outer);
 }
 
 // ---------------------------------------------------------------------------
@@ -539,18 +660,29 @@ export function assembleQuery(opts: AssembleOptions): Query {
 	} = opts;
 	const { selectDef, nonAggregateGroupBy, hasAggregates, hasSQLTransforms, orderChannels } = parts;
 
-	const q = Query.from(table).select(selectDef as Record<string, ExprNode>);
-
-	if (hasAggregates && nonAggregateGroupBy.length > 0) {
-		q.groupby(nonAggregateGroupBy as ExprNode[]);
-	}
-
 	const allFilters = [
 		...(filter as ExprNode[]),
 		...nullDropPredicates(parts.nullDrops ?? [], selectDef)
 	];
-	if (allFilters.length > 0) {
-		q.where(and(allFilters));
+
+	// A having() names aggregates over the source rows and is added to the query
+	// it is handed: it needs the one-level form.
+	const binKeys = transformCompiler.hasHaving() ? [] : (parts.binKeys ?? sharedBinKeys(parts));
+	let q: SelectQuery;
+	// The row filters are in the query already: inside, with the other filters.
+	let rowFiltersApplied = skipRowFilters;
+	if (binKeys.length > 0) {
+		if (!skipRowFilters) allFilters.push(...transformCompiler.rowFilters());
+		rowFiltersApplied = true;
+		q = groupedByBinKeys(table, parts, binKeys, allFilters);
+	} else {
+		q = Query.from(table).select(selectDef as Record<string, ExprNode>);
+		if (hasAggregates && nonAggregateGroupBy.length > 0) {
+			q.groupby(nonAggregateGroupBy as ExprNode[]);
+		}
+		if (allFilters.length > 0) {
+			q.where(and(allFilters));
+		}
 	}
 
 	let result: Query = q;
@@ -563,7 +695,7 @@ export function assembleQuery(opts: AssembleOptions): Query {
 				padded: parts.padded ?? false,
 				binWindow
 			},
-			{ skipRowFilters }
+			{ skipRowFilters: rowFiltersApplied }
 		);
 	}
 
