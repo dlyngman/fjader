@@ -387,9 +387,6 @@ export class BaseGPURenderer {
 			// Initial empty bind group
 			this.#rebuildBindGroup();
 
-			// The specialisation is named because it is otherwise invisible: a mark
-			// compiled against the wrong axis logic renders, silently and wrongly.
-
 			// The types were read when this compile started; if the chart's moved
 			// while it ran, the change that announced them was compared against
 			// this compile's types or found no compile to compare against (the
