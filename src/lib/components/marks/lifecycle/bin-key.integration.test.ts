@@ -61,12 +61,16 @@ const NUM_INFO = { v: { min: -60, max: 179.39 } };
 const TIME_INFO = { t: { min: MIN_MS, max: MAX_MS, type: 'date' } };
 
 /** A channel and its padding, as the lifecycle resolves a `bin()`. */
-function edge(kind: 'number' | 'time', offset: number): { expr: ExprNode; pad: BinPadding } {
+function edge(
+	kind: 'number' | 'time',
+	offset: number,
+	interval = 'day'
+): { expr: ExprNode; pad: BinPadding } {
 	if (kind === 'number') {
 		const node = bin('v', { step: 10, offset });
 		return { expr: node.resolve(NUM_INFO, 'linear'), pad: node.padding(NUM_INFO, 'linear')! };
 	}
-	const node = bin('t', { interval: 'day', offset });
+	const node = bin('t', { interval: interval as never, offset });
 	const bucket = node.resolve(TIME_INFO, 'time');
 	return {
 		// As #inlineTimeOffsets rewrites a time channel.
@@ -77,6 +81,8 @@ function edge(kind: 'number' | 'time', offset: number): { expr: ExprNode; pad: B
 
 interface Case {
 	kind: 'number' | 'time';
+	/** A time bin's unit; a day when left out. */
+	interval?: string;
 	/** Channel → offset of the bin's edge. */
 	edges: Record<string, number>;
 	measures: Record<string, ExprNode>;
@@ -93,7 +99,7 @@ function build(c: Case, keyed: boolean): { sql: string; parts: QueryParts } {
 	const select: Record<string, unknown> = {};
 	const bins: Record<string, BinPadding> = {};
 	for (const [channel, offset] of Object.entries(c.edges)) {
-		const { expr, pad } = edge(c.kind, offset);
+		const { expr, pad } = edge(c.kind, offset, c.interval);
 		select[channel] = expr;
 		bins[channel] = pad;
 	}
@@ -145,6 +151,20 @@ const CASES: [string, Case][] = [
 	['a numeric histogram', { kind: 'number', edges: HIST, measures: { y: count() } }],
 	['a time histogram', { kind: 'time', edges: HIST, measures: { y: count() } }],
 	['a numeric path: centre and edges', { kind: 'number', edges: PATH, measures: { y: avg('w') } }],
+	[
+		'a monthly path: the centre between its bucket’s edges',
+		{ kind: 'time', interval: 'month', edges: PATH, measures: { y: avg('w') } }
+	],
+	[
+		'a monthly path, padded',
+		{
+			kind: 'time',
+			interval: 'month',
+			edges: PATH,
+			measures: { y: avg('w') },
+			transforms: [dense()]
+		}
+	],
 	[
 		'numeric, padded',
 		{ kind: 'number', edges: HIST, measures: { y: count() }, transforms: [dense()] }
@@ -268,6 +288,21 @@ describe('a bin grouped once by its key', () => {
 			expect(bits(a)).toEqual(bits(b));
 		});
 	}
+
+	it('puts a month’s centre halfway between its own edges, not 15 days in', async () => {
+		const { sql: text } = build(
+			{ kind: 'time', interval: 'month', edges: PATH, measures: { y: count() } },
+			true
+		);
+		const rows = (await db.all(text)).filter((row) => !Number.isNaN(row.x as number));
+		expect(rows.length).toBeGreaterThan(1);
+		for (const row of rows) {
+			expect(row.x).toBeCloseTo(((row.x1 as number) + (row.x2 as number)) / 2, 0);
+		}
+		// January has 31 days: its centre is 15.5 days in.
+		const january = rows.find((row) => row.x1 === 0)!;
+		expect(january.x).toBe(15.5 * 86_400);
+	});
 
 	it('groups by the key alone, and by the series beside it', () => {
 		const { sql: text } = build(
