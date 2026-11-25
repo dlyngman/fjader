@@ -6,6 +6,7 @@
 	 *   ?mount=all  every chart mounts (default)
 	 *   ?mount=visible  the first eight, the ones on screen in a typical window
 	 *   ?mount=top  only the first four
+	 *   ?dots=0  without the raw-row scatters (charts 4, 5 and 9)
 	 *   ?slow=1  adds dots on a slow view, filtered by the brush
 	 *   ?share=N  the lanes' slice share: one slice per N ms (default 10)
 	 *   ?cat=1  adds two categorical columns (band: 4 values; route: ~300) and
@@ -182,8 +183,12 @@
 			table: 'slow_flights'
 		});
 	}
-	const shown =
+	// ?dots=0: without the raw-row scatters, which read every row on every update
+	// and at ?scale=10 swamp what the aggregated marks' queries cost.
+	const noDots = page.url.searchParams.get('dots') === '0';
+	const mounted =
 		mount === 'top' ? charts.slice(0, 4) : mount === 'visible' ? charts.slice(0, 8) : charts;
+	const shown = noDots ? mounted.filter((chart) => chart.kind !== 'dots') : mounted;
 
 	onMount(async () => {
 		await queryEngine.exec(
@@ -228,7 +233,7 @@
 		<button
 			onclick={() =>
 				log.download(
-					`qlog-${mount}${scale > 1 ? `-x${scale}` : ''}${slow ? '-slow' : ''}${cat ? '-cat' : ''}${sliceShareMs ? `-share${sliceShareMs}` : ''}${tooltipSort ? `-sort-${tooltipSort}` : ''}.json`,
+					`qlog-${mount}${scale > 1 ? `-x${scale}` : ''}${noDots ? '-nodots' : ''}${slow ? '-slow' : ''}${cat ? '-cat' : ''}${sliceShareMs ? `-share${sliceShareMs}` : ''}${tooltipSort ? `-sort-${tooltipSort}` : ''}.json`,
 					{
 						mountedAt,
 						entrances,
