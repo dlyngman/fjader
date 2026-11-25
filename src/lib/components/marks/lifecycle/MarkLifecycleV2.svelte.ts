@@ -119,8 +119,9 @@ import { binRowsMoved, binSpecKey, heldCoversView, isRebin, rebinTweens } from '
 import {
 	buildQueryParts,
 	assembleQuery,
-	gapChannels,
+	isPositionalChannel,
 	measureChannels,
+	pathGapChannels,
 	tipExtrasStatement,
 	ident,
 	castReal,
@@ -362,8 +363,8 @@ export class MarkLifecycleV2 {
 
 	/**
 	 * What a padded row holds on a mark that draws rows as points along a path
-	 * (MarkConfig.gaps, absentSeriesGap): a gap for a measure with no value over
-	 * no rows, and nothing for the absent series when it is empty. Nothing for a
+	 * (MarkConfig.gaps, absentSeriesGap): a gap for a positional measure with no
+	 * value over no rows, and nothing for the absent series when it is empty. Nothing for a
 	 * mark whose rows span their bins (it shrinks them to zero), or under a SQL
 	 * stack, which sums the rows of a bin: there a padded row stays 0.
 	 */
@@ -373,7 +374,7 @@ export class MarkLifecycleV2 {
 			(transform) => transform.type === 'stack' && transform.stage === 'sql'
 		);
 		if (stacked) return {};
-		return { gaps: gapChannels(config.select), absentSeriesGap: true };
+		return { gaps: pathGapChannels(config.select), absentSeriesGap: true };
 	}
 
 	// --- Structural query parts ($derived — recomputes on bin/scale/config changes) ---
@@ -2603,11 +2604,14 @@ export class MarkLifecycleV2 {
 				// the rest are scalars (the rank, id columns), cheap to keep, and the
 				// lists are the only ones whose size grows with the field.
 				const withoutMembers = withoutOtherMembers(tooltipQuery);
-				// A path's gaps are rows with a NaN measure (a mean with no data, the
-				// absent series when it is empty): nothing is drawn there, so nothing
-				// is there to hover. Left in, a lookup by x alone would find one and
-				// show NaN.
-				const measures = this.#transformConfig.gaps ? measureChannels(selectConfig) : [];
+				// A path's gaps are rows with a NaN positional measure (a mean with no
+				// data, the absent series when it is empty): nothing is drawn there,
+				// so nothing is there to hover. Left in, a lookup by x alone would find
+				// one and show NaN. Only the positional measures: they decide whether
+				// a point is drawn, and a drawn point must stay hoverable.
+				const measures = this.#transformConfig.gaps
+					? measureChannels(selectConfig).filter(isPositionalChannel)
+					: [];
 				const gapWhere =
 					measures.length > 0
 						? ` WHERE NOT (${measures.map((c) => `isnan(${ident(c)})`).join(' OR ')})`

@@ -15,7 +15,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import duckdb from 'duckdb';
 import { avg, column, count, sql, type ExprNode } from '@uwdata/mosaic-sql';
 import { stackY, withDenseCategories, TransformCompiler } from '$lib/transforms';
-import { buildQueryParts, assembleQuery, castReal, gapChannels } from './query-builder';
+import { buildQueryParts, assembleQuery, castReal, pathGapChannels } from './query-builder';
 import { rowLayoutOf, type RowLayout } from './row-layout';
 import type { BinPadding, MarkConfig, Transform } from '$lib/types';
 
@@ -115,7 +115,7 @@ async function run(c: Case): Promise<{
 		fill: 'fill',
 		identity: c.identity,
 		// As the lifecycle states them for an unstacked path mark.
-		...(c.path ? { gaps: gapChannels(c.select), absentSeriesGap: true } : {})
+		...(c.path ? { gaps: pathGapChannels(c.select), absentSeriesGap: true } : {})
 	} as MarkConfig;
 	const compiler = new TransformCompiler(transforms, config);
 	const query = assembleQuery({ table, parts, transformCompiler: compiler });
@@ -357,6 +357,27 @@ describe('what a padded row holds on a path', () => {
 		}
 		// The empty absent series is all gaps already.
 		expect(ofSeries(rows, -1).every((row) => Number.isNaN(row.y))).toBe(true);
+	});
+
+	it('a count coloured by a mean keeps its padded points: y 0, and a colour that is not NaN', async () => {
+		const { rows } = await run({
+			select: {
+				x: HOUR_BIN,
+				y: castReal(count()),
+				stroke: castReal(avg(column('hour'))),
+				fill: castReal(column('band_idx'))
+			},
+			transforms: [],
+			bins: HOUR_BINS,
+			identity: BAND_IDENTITY,
+			path: true
+		});
+		const longAfternoon = ofSeries(rows, 0).filter((row) => row.x >= 12);
+		expect(longAfternoon).toHaveLength(12);
+		expect(longAfternoon.every((row) => row.y === 0 && row.stroke === 0)).toBe(true);
+		// The empty absent series is left out by its position alone.
+		const absent = ofSeries(rows, -1);
+		expect(absent.every((row) => Number.isNaN(row.y) && row.stroke === 0)).toBe(true);
 	});
 
 	it('without the path facts (a bar, a stack) a padded row is 0, as before', async () => {

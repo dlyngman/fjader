@@ -428,6 +428,25 @@ function unwrapCast(expr: unknown): unknown {
 	}
 }
 
+/** The channels that place a row: where its point is drawn. */
+const POSITIONAL = new Set(['x', 'x1', 'x2', 'y', 'y1', 'y2']);
+
+/** Whether `channel` places a row, as opposed to colouring or sizing it. */
+export function isPositionalChannel(channel: string): boolean {
+	return POSITIONAL.has(channel);
+}
+
+/**
+ * The gap channels of a mark that draws rows as points along a path: the
+ * POSITIONAL measures with no value over no rows (`gapChannels`). Only those
+ * decide whether a point is drawn. A colour that is a mean keeps its padded 0:
+ * a count line coloured by a mean still draws its padded points, at 0, and
+ * a NaN colour on a drawn point is nothing the colour scale has an answer for.
+ */
+export function pathGapChannels(select: Record<string, unknown>): string[] {
+	return gapChannels(select).filter(isPositionalChannel);
+}
+
 /** The channels of `select` that are aggregates: its measures, in select order. */
 export function measureChannels(select: Record<string, unknown>): string[] {
 	const measures: string[] = [];

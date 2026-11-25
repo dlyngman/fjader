@@ -232,9 +232,10 @@ export interface MarkConfig {
 	/**
 	 * A mark that draws each row as a point along a path (lines, unstacked
 	 * areas), where a padded row with no data is a GAP, not a zero:
-	 * - `gaps`: the measure channels `dense()` pads with NaN, where it pads the
-	 *   others with 0. A mean, minimum or maximum of no rows is no value; a
-	 *   count or sum of none is 0.
+	 * - `gaps`: the positional measure channels `dense()` pads with NaN, where
+	 *   it pads the others with 0. A mean, minimum or maximum of no rows is no
+	 *   value; a count or sum of none is 0. Positional only: they decide whether
+	 *   a point is drawn, and a colour or a size on a drawn point keeps its 0.
 	 * - `absentSeriesGap`: the series `dense()` adds for a value its dim does not
 	 *   hold (id -1) is left out, as NaN, when it has no data at all: on a path
 	 *   it would be a line along the baseline that no legend names.

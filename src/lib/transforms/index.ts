@@ -238,6 +238,9 @@ const BAND_SOURCE_COLUMN = '__dplot_band_src';
 /** The facet channel of a faceted mark's query: a crossed key that is not a series. */
 const FACET_CHANNEL = '__facet';
 
+/** The channels that place a row (query-builder's isPositionalChannel). */
+const POSITIONAL_MEASURES = new Set(['x', 'x1', 'x2', 'y', 'y1', 'y2']);
+
 /**
  * The channels of a padded result that hold measures: what `densify` pads
  * with a value (0, or NaN for a gap), as opposed to the bins, the band, the
@@ -274,6 +277,14 @@ function measureAliases(aliases: string[], plan: DensePlan): string[] {
  *
  * -1 is still crossed in, always, so the number of series per bin does not
  * change with the data: the row layout stays what it was.
+ *
+ * Only the positional measures, which decide whether a point is drawn: a
+ * colour or a size is left as it is.
+ *
+ * WITHIN THE WINDOW. With windowed padding the result holds the window's bins
+ * only, so "empty" is "empty in the bins returned": an absent series with data
+ * outside the window is left out until a pan brings its data in, where a
+ * series of the dim that is zero in the window draws along the baseline.
  */
 function hideEmptyAbsentSeries(
 	padded: SelectQuery,
@@ -283,7 +294,9 @@ function hideEmptyAbsentSeries(
 ): SelectQuery {
 	const series = plan.cross.map(([key]) => key).filter((key) => key !== FACET_CHANNEL);
 	// A gap channel is already NaN wherever the series has no data.
-	const zeroed = measureAliases(aliases, plan).filter((alias) => !gaps.includes(alias));
+	const zeroed = measureAliases(aliases, plan).filter(
+		(alias) => POSITIONAL_MEASURES.has(alias) && !gaps.includes(alias)
+	);
 	if (series.length === 0 || zeroed.length === 0) return padded;
 	const absent = series.map((key) => `${column(key)} = -1`).join(' OR ');
 	const partition = plan.cross.map(([key]) => `${column(key)}`).join(', ');

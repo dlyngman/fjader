@@ -22,6 +22,7 @@ import {
 	outerOrder,
 	gapChannels,
 	measureChannels,
+	pathGapChannels,
 	castReal
 } from './query-builder';
 
@@ -443,6 +444,23 @@ describe('gapChannels: measures with no value over no rows', () => {
 		expect(gapChannels(wrapped)).toEqual(['mean']);
 	});
 
+	it('on a path, only a positional measure is a gap: a colour that is a mean keeps its 0', () => {
+		// A line of counts coloured by a mean: its padded points are drawn, at 0,
+		// so their colour must not be NaN and they must stay hoverable.
+		const counted = { x: sqlColumn('hour'), y: count(), stroke: avg(sqlColumn('fare')) };
+		expect(gapChannels(counted)).toEqual(['stroke']);
+		expect(pathGapChannels(counted)).toEqual([]);
+		// A line of means coloured by a count: the position is the gap.
+		const meant = { x: sqlColumn('hour'), y: avg(sqlColumn('fare')), stroke: count() };
+		expect(pathGapChannels(meant)).toEqual(['y']);
+		// An area's two edges are both positional.
+		const area = { x: sqlColumn('hour'), y: avg(sqlColumn('fare')), y2: avg(sqlColumn('fare')) };
+		expect(pathGapChannels(area)).toEqual(['y', 'y2']);
+	});
+
+	// A smoothed overlay is a window over the mark's aggregate. The window is not
+	// a measure, so its channel is no gap channel and its input is padded with 0
+	// as before: the moving average is not widened into NaN around a gap.
 	it('leaves out window expressions, plain columns and strings', () => {
 		const windowed = {
 			x: sqlColumn('hour'),
