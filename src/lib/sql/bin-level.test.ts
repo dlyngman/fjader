@@ -142,20 +142,20 @@ describe('a bound on the bins (a path mark, which must stay padded)', () => {
 		expect(bin('v').padding(INFO, 'linear', [0, 300], 1, null, 500)).toEqual(
 			bin('v').padding(INFO, 'linear', [0, 300], 1)
 		);
-		expect(bin('v').capped(INFO, 'linear', [0, 300], 1, 500)).toBe(false);
+		expect(bin('v').held(INFO, 'linear', [0, 300], 1, 500)).toBeNull();
 	});
 
 	it('says when it holds, under zoom and under the step multiplier', () => {
-		expect(bin('v').capped(INFO, 'linear', [0, 2], 1, 200)).toBe(true);
-		expect(bin('v').capped(INFO, 'linear', null, 1, 200)).toBe(false);
-		expect(bin('v').capped(INFO, 'linear', null, 40, 200)).toBe(true);
+		expect(bin('v').held(INFO, 'linear', [0, 2], 1, 200)).toBe('finest');
+		expect(bin('v').held(INFO, 'linear', null, 1, 200)).toBeNull();
+		expect(bin('v').held(INFO, 'linear', null, 40, 200)).toBe('finest');
 		expect(count(null, 200, 40)).toBeLessThanOrEqual(200);
 	});
 
 	it('applies to the default bins too, when the bound is below them', () => {
 		expect(count(null, Infinity)).toBeGreaterThan(10);
 		expect(count(null, 10)).toBeLessThanOrEqual(10);
-		expect(bin('v').capped(INFO, 'linear', null, 1, 10)).toBe(true);
+		expect(bin('v').held(INFO, 'linear', null, 1, 10)).toBe('finest');
 	});
 
 	it('gives the expression and its padding the same bins', () => {
@@ -171,7 +171,7 @@ describe('a bound on the bins (a path mark, which must stay padded)', () => {
 		expect(fixed.padding(INFO, 'linear', null, 1, null, 50)).toEqual(
 			fixed.padding(INFO, 'linear', null, 1)
 		);
-		expect(fixed.capped(INFO, 'linear', null, 1, 50)).toBe(false);
+		expect(fixed.held(INFO, 'linear', null, 1, 50)).toBeNull();
 	});
 
 	it('holds time buckets under the bound as they are counted for padding', () => {
@@ -179,5 +179,46 @@ describe('a bound on the bins (a path mark, which must stay padded)', () => {
 			(bin('t').padding(TIME_INFO, 'time', domain, 1, T0, maxBins) as { count: number }).count;
 		expect(time([0, 3600], Infinity)).toBeGreaterThan(300);
 		expect(time([0, 3600], 300)).toBeLessThanOrEqual(300);
+	});
+});
+
+describe('a floor on the steps (a path mark, which two points do not make)', () => {
+	const count = (domain: [number, number] | null, multiplier: number, minSteps = 1) =>
+		(
+			bin('v').padding(INFO, 'linear', domain, multiplier, null, Infinity, minSteps) as {
+				count: number;
+			}
+		).count;
+
+	it('the step multiplier alone takes the bins down to a few', () => {
+		expect(count(null, 0.1)).toBeLessThanOrEqual(4);
+	});
+
+	it('holds them at about the floor, at any zoom', () => {
+		expect(count(null, 0.1, 8)).toBeGreaterThanOrEqual(5);
+		// Zoomed in: the floor is across the view, so more across the extent.
+		expect(count([0, 100], 0.1, 8)).toBeGreaterThan(count(null, 0.1, 8) * 4);
+	});
+
+	it('holds them for a view far wider than the data', () => {
+		expect(count([-50_000, 50_000], 1)).toBeLessThanOrEqual(3);
+		expect(count([-50_000, 50_000], 1, 8)).toBeGreaterThanOrEqual(5);
+	});
+
+	it('says so, leaves bins above it alone, and gives way to the upper bound', () => {
+		const node = bin('v');
+		expect(node.held(INFO, 'linear', null, 0.1, Infinity, 8)).toBe('coarsest');
+		expect(node.held(INFO, 'linear', null, 1, Infinity, 8)).toBeNull();
+		expect(node.padding(INFO, 'linear', null, 1, null, Infinity, 8)).toEqual(
+			node.padding(INFO, 'linear', null, 1)
+		);
+		expect(node.held(INFO, 'linear', null, 0.1, 3, 8)).toBe('finest');
+	});
+
+	it('does not touch a bin() with a step of its own', () => {
+		const fixed = bin('v', { step: 500 });
+		expect(fixed.padding(INFO, 'linear', null, 1, null, Infinity, 8)).toEqual(
+			fixed.padding(INFO, 'linear', null, 1)
+		);
 	});
 });

@@ -1313,11 +1313,15 @@
 										>{((binsRung.props.binStep as number) ?? 0).toPrecision(3)}</span
 									>
 								</div>
-								{#if binsRung.props.atCap}
-									<!-- Zoom and shift+scroll stop refining here, and say nothing. -->
+								{#if binsRung.props.held}
+									<!-- Zoom and shift+scroll stop here, and say nothing. -->
 									<div class="group-row">
-										<span class="group-label">finest</span>
-										<span class="lod-readout lod-active">at the padding limit</span>
+										<span class="group-label">{binsRung.props.held}</span>
+										<span class="lod-readout lod-active"
+											>{binsRung.props.held === 'finest'
+												? 'at the padding limit'
+												: 'the fewest a path draws'}</span
+										>
 									</div>
 								{/if}
 							{/if}

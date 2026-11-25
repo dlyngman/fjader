@@ -163,6 +163,14 @@ function middleBinWidth(side: TakenSide): number {
 // Config (same shape as MarkLifecycleConfig — shared during transition)
 // ---------------------------------------------------------------------------
 
+/**
+ * The fewest steps across the view a path mark's view-scaled bins may have
+ * (AutoBinNode's `minSteps`). The chart's step multiplier goes down to a tenth,
+ * and a view far wider than the data coarsens the bins further: a histogram of
+ * two bars is still a histogram, a line of two points is a segment.
+ */
+const PATH_MIN_STEPS = 8;
+
 export interface MarkLifecycleV2Config {
 	markType: string;
 	supportedScaleTypes: { x: string[]; y: string[] };
@@ -345,14 +353,16 @@ export class MarkLifecycleV2 {
 		if (this.#autoBinNodes.size > 0 && this.#fieldStats) {
 			for (const [ch, value] of Object.entries(resolvedSelect)) {
 				if (isBinExpression(value)) {
-					const { fieldInfo, scaleType, currentDomain, multiplier, maxBins } = this.#binArgs(ch);
+					const { fieldInfo, scaleType, currentDomain, multiplier, maxBins, minSteps } =
+						this.#binArgs(ch);
 					resolvedSelect[ch] = value.resolve(
 						fieldInfo,
 						scaleType,
 						null,
 						currentDomain,
 						multiplier,
-						maxBins
+						maxBins,
+						minSteps
 					);
 				}
 			}
@@ -439,7 +449,9 @@ export class MarkLifecycleV2 {
 			scaleType: axis === 'x' ? this.actualXScaleType : this.actualYScaleType,
 			currentDomain: this.#lastBinDomain[axis] ?? null,
 			multiplier: this.#chartContext.binStepMultiplier || 1.0,
-			maxBins: this.#maxBins()
+			maxBins: this.#maxBins(),
+			// A path of two points is not a line of anything: see PATH_MIN_STEPS.
+			minSteps: this.#config._rowLayouts ? PATH_MIN_STEPS : 1
 		} as const;
 	}
 
@@ -482,17 +494,18 @@ export class MarkLifecycleV2 {
 	}
 
 	/**
-	 * Whether a binned axis's bins are held at #maxBins: the view or the step
-	 * multiplier asks for more than can be padded. For the palette's readout.
+	 * Whether a binned axis's bins are held at a bound: `finest` at #maxBins (the
+	 * view or the step multiplier asks for more than can be padded), `coarsest`
+	 * at a path's fewest steps. For the palette's readout.
 	 */
-	get binsAtCap(): boolean {
-		const maxBins = this.#maxBins();
-		if (!Number.isFinite(maxBins) || !this.#fieldStats) return false;
+	get binsHeld(): 'finest' | 'coarsest' | null {
+		if (!this.#fieldStats) return null;
 		for (const [channel, node] of this.#autoBinNodes) {
-			const { fieldInfo, scaleType, currentDomain, multiplier } = this.#binArgs(channel);
-			return node.capped(fieldInfo, scaleType, currentDomain, multiplier, maxBins);
+			const { fieldInfo, scaleType, currentDomain, multiplier, maxBins, minSteps } =
+				this.#binArgs(channel);
+			return node.held(fieldInfo, scaleType, currentDomain, multiplier, maxBins, minSteps);
 		}
-		return false;
+		return null;
 	}
 
 	/**
@@ -507,14 +520,16 @@ export class MarkLifecycleV2 {
 		let out: Record<string, BinPadding> | null = null;
 		for (const [ch, value] of Object.entries(this.#config.select)) {
 			if (!isBinExpression(value)) continue;
-			const { axis, fieldInfo, scaleType, currentDomain, multiplier, maxBins } = this.#binArgs(ch);
+			const { axis, fieldInfo, scaleType, currentDomain, multiplier, maxBins, minSteps } =
+				this.#binArgs(ch);
 			const padding = value.padding(
 				fieldInfo,
 				scaleType,
 				at?.axis === axis ? at.domain : currentDomain,
 				multiplier,
 				this.#timeOrigin(axis),
-				maxBins
+				maxBins,
+				minSteps
 			);
 			if (padding) (out ??= {})[ch] = padding;
 		}
@@ -831,7 +846,7 @@ export class MarkLifecycleV2 {
 			);
 			this.#adaptiveBinRung = new AdaptiveBinRung(gpuCoordinator, chartContext, {
 				binAxes,
-				atCap: () => this.binsAtCap,
+				held: () => this.binsHeld,
 				levelOf: (axis, lo, hi) => this.#viewLevel(axis, lo, hi),
 				binsDiffer: (axis, lo, hi) => this.#binsDifferAt(axis, lo, hi),
 				setParam: (_key, value) => {
