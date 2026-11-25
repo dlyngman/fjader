@@ -429,10 +429,6 @@ export class ScaleRegistry {
 					const scaleType = config.type || 'sequential';
 					const defaultScheme = scaleType === 'ordinal' ? 'tableau10' : 'viridis';
 
-					console.log(
-						`[ScaleRegistry] Creating color scale for ${name}: type=${scaleType}, scheme=${config.scheme || defaultScheme}`
-					);
-
 					this.scales[type].set(
 						key,
 						new ColorScaleState(

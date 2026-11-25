@@ -703,8 +703,6 @@ export class GPUCoordinator {
 			this.#initialized = true;
 			this.#handleScaleTopologyChange();
 			// this.#createColorScaleBuffers();
-
-			console.log('GPUCoordinator initialized with Registry Pattern');
 		} catch (error) {
 			console.error('GPUCoordinator initialization failed:', error);
 			throw error;
@@ -3296,8 +3294,6 @@ export class GPUCoordinator {
 	}
 
 	destroy(): void {
-		console.log('Destroying GPUCoordinator');
-
 		this.#destroyed = true;
 
 		// Stop animation loop
@@ -3364,7 +3360,6 @@ export class GPUCoordinator {
 		this.#device = null;
 
 		this.#initialized = false;
-		console.log('GPUCoordinator destruction complete');
 	}
 }
 

@@ -412,7 +412,6 @@
 	// Clean up retained renderer from a previous instance once this renderer has data
 	$effect(() => {
 		if (renderer?.resourcesCreated && markId) {
-			console.log(`[Dots:${markId}] releaseRetained (resourcesCreated)`);
 			gpuCoordinator?.releaseRetained(markId);
 		}
 	});
@@ -425,12 +424,10 @@
 			markId &&
 			gpuCoordinator?.retainRenderer(markId, {
 				destroy() {
-					console.log(`[Dots:${markId}] retained.destroy()`);
 					qgb?.destroy();
 					r.destroy();
 				}
 			});
-		console.log(`[Dots:${markId}] onDestroy retained=${!!retained} hasRenderer=${!!r}`);
 		if (retained) return;
 		if (qgb) qgb.destroy();
 		if (r) r.destroy();

@@ -67,8 +67,6 @@ export function setScalesReady(
 		const domainsReady = globalAggregatesSet || dataDerivedDomainsSet;
 		if (!needsDataDomain || domainsReady) {
 			scale.setReady();
-		} else {
-			console.log(`⏳ [${axis}] Deferring scale ready - waiting for domain`);
 		}
 	}
 }
@@ -92,7 +90,6 @@ export function markDeferredScalesReady(
 		// Only mark continuous scales that were waiting for data-derived domains
 		if (needsDataDomain && isContinuousScale(scaleType)) {
 			if (!scale.ready) {
-				console.log(`✅ Marking ${axis} scale ready (data-derived domain set)`);
 				scale.setReady();
 			}
 		}
@@ -152,9 +149,6 @@ export function setInitialContinuousDomains(
 			}
 
 			if (found) {
-				console.log(
-					`📐 [${markId}] Domain ${alias}: fieldInfo path → [${combinedMin}, ${combinedMax}]`
-				);
 				const placed =
 					alias === 'x' || alias === 'y'
 						? place(alias, scaleState)
@@ -266,7 +260,7 @@ export function registerDataDerivedDomains(
 
 			const instant = !!xScaleState && (instantFor?.(xScaleState) ?? false);
 			if (xScaleState && place('x', xScaleState))
-				registerExtentOnScale(xScaleState, actualXScaleType, extent, markId, instant, 'X');
+				registerExtentOnScale(xScaleState, actualXScaleType, extent, markId, instant);
 		}
 	}
 
@@ -286,7 +280,7 @@ export function registerDataDerivedDomains(
 
 			const instant = !!yScaleState && (instantFor?.(yScaleState) ?? false);
 			if (yScaleState && place('y', yScaleState))
-				registerExtentOnScale(yScaleState, actualYScaleType, extent, markId, instant, 'Y');
+				registerExtentOnScale(yScaleState, actualYScaleType, extent, markId, instant);
 		}
 	}
 
@@ -368,15 +362,12 @@ function registerExtentOnScale(
 	scaleType: string,
 	extent: [number, number],
 	markId: string,
-	instant: boolean,
-	axisLabel: string
+	instant: boolean
 ): void {
 	if (scaleType === 'time' && (scaleState as TimeScaleState | null)?.addOffsetExtent) {
 		// Time scale: data is in offset form, use addOffsetExtent
-		console.log(`📊 [${markId}] Registering ${axisLabel} domain from data (time offsets):`, extent);
 		(scaleState as TimeScaleState).addOffsetExtent(extent, markId, { instant });
 	} else if (scaleState?.addMark) {
-		console.log(`📊 [${markId}] Registering ${axisLabel} domain from data:`, extent);
 		scaleState.addMark(extent, markId, { instant });
 	}
 }

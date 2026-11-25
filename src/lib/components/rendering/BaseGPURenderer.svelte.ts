@@ -389,7 +389,6 @@ export class BaseGPURenderer {
 
 			// The specialisation is named because it is otherwise invisible: a mark
 			// compiled against the wrong axis logic renders, silently and wrongly.
-			console.log(`${this.#markType} renderer initialized (x=${scaleTypes.x}, y=${scaleTypes.y})`);
 
 			// The types were read when this compile started; if the chart's moved
 			// while it ran, the change that announced them was compared against

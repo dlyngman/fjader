@@ -277,10 +277,6 @@ export class ColorScaleState {
 		this.#renderType = resolved.renderType;
 		this.#transformType = resolved.transformType;
 
-		console.log(
-			`[ColorScaleState] Created for ${this.#field}: type=${this.#scaleType}, render=${this.#renderType}, transform=${this.#transformType}, scheme=${this.#scheme}`
-		);
-
 		// Set initial domain
 		// Copied, not adopted: the domain array's identity is what #categoryMap
 		// keys its cache on, so it has to be ours to promise it changes only
