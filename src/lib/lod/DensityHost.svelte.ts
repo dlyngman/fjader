@@ -5,6 +5,11 @@
 // reactive $state. Consumers (rung classes like DotsRung) read
 // ctx and shouldDecimate via $derived/$effect.
 //
+// A mark that already holds its points (an aggregated result: a binned line's
+// grid) counts them itself (`countInView`) and no query is sent: the count
+// query runs the mark's whole query again, over the base table, to learn a
+// number the result on screen has.
+//
 // Fire-and-forget: updates ctx and shouldDecimate, then it's done.
 // No callbacks, no hooks, no spring concerns.
 //
@@ -26,10 +31,22 @@ export interface DensityContext {
 	shouldDecimate: boolean;
 }
 
+/** A mark's own count of its points in a view, or why it has none (DensityHostConfig.countInView). */
+export type HeldCount = number | 'ask' | 'wait';
+
 export interface DensityHostConfig {
 	/** Unique identifier for cancel-on-supersede in QueryEngine (use markId). */
 	callerId: string;
 	countQueryBuilder: (xLo: number, xHi: number, yLo: number, yHi: number) => string | null;
+	/**
+	 * The points in the view, when the mark holds them all and can count them
+	 * (see `countRowsInView`). `'ask'`: it does not, the database counts.
+	 * `'wait'`: it will once its first result is in, so nothing is asked
+	 * meanwhile. With it, `version` says when the rows changed, so the count
+	 * follows a new result under a view that did not move.
+	 */
+	countInView?: (xLo: number, xHi: number, yLo: number, yHi: number) => HeldCount;
+	version?: () => number;
 	decimate?: boolean | 'auto';
 	densityThreshold?: number; // default 4
 	hysteresis?: number; // default 0.5
@@ -46,6 +63,10 @@ export class DensityHost {
 	#queryEngine: QueryEngine;
 	#callerId: string;
 	#countQueryBuilder: (xLo: number, xHi: number, yLo: number, yHi: number) => string | null;
+	#countInView: ((xLo: number, xHi: number, yLo: number, yHi: number) => HeldCount) | null;
+	#version: (() => number) | null;
+	/** The rows' version the last held count was of. */
+	#countedVersion = -1;
 
 	// --- Decimation config ---
 	#decimate: boolean | 'auto';
@@ -96,6 +117,8 @@ export class DensityHost {
 		this.#queryEngine = queryEngine;
 		this.#callerId = `lod-${config.callerId}`;
 		this.#countQueryBuilder = config.countQueryBuilder;
+		this.#countInView = config.countInView ?? null;
+		this.#version = config.version ?? null;
 		this.#decimate = config.decimate ?? 'auto';
 		this.#densityThreshold = config.densityThreshold ?? 4;
 		this.#hysteresis = config.hysteresis ?? 0.5;
@@ -122,7 +145,12 @@ export class DensityHost {
 		if (!target) return;
 		const lo = target[0];
 		const hi = target[1];
-		if (lo === this.#lastSeenLo && hi === this.#lastSeenHi) return;
+		if (lo === this.#lastSeenLo && hi === this.#lastSeenHi) {
+			// The same view: nothing to count again, unless the mark counts its own
+			// rows and they are other rows now (a new result).
+			if (this.#version && this.#version() !== this.#countedVersion) this.#countHeld(lo, hi);
+			return;
+		}
 
 		// Domain changed — run full check.
 		// Only update lastSeen after a successful query attempt — if the
@@ -155,9 +183,73 @@ export class DensityHost {
 			}
 		}
 
+		// Held by the mark: counted on every change of the view, with no query.
+		if (this.#countHeldIn(lo, hi, yLo, yHi)) return;
+
 		if (this.#shouldQueryCount(lo, hi)) {
 			this.#issueCountQuery(lo, hi, yLo, yHi);
 		}
+	}
+
+	/** The y view, then #countHeldIn: for a frame whose view did not move. */
+	#countHeld(lo: number, hi: number): boolean {
+		if (!isFinite(lo) || !isFinite(hi) || lo >= hi) return false;
+		let yLo = -Infinity;
+		let yHi = Infinity;
+		const yTarget = (this.#chartContext.yScaleState as { domain?: { target?: unknown[] } } | null)
+			?.domain?.target;
+		if (yTarget) {
+			const y0 = yTarget[0];
+			const y1 = yTarget[1];
+			if (typeof y0 === 'number' && typeof y1 === 'number' && isFinite(y0) && isFinite(y1)) {
+				yLo = y0;
+				yHi = y1;
+			}
+		}
+		return this.#countHeldIn(lo, hi, yLo, yHi);
+	}
+
+	/**
+	 * Take the count from the mark, when it holds its points. True when it did:
+	 * no query is to be sent. One pass over the mark's rows, a grid's at most.
+	 */
+	#countHeldIn(lo: number, hi: number, yLo: number, yHi: number): boolean {
+		const count = this.#countInView?.(lo, hi, yLo, yHi) ?? 'ask';
+		// Its first result is on its way: asked again next frame, nothing sent.
+		if (count === 'wait') return true;
+		if (count === 'ask') {
+			// Not asked again for these rows on a frame whose view did not move.
+			this.#countedVersion = this.#version?.() ?? -1;
+			return false;
+		}
+		// A query still out is of a result the mark no longer needs counted.
+		this.#querySequence++;
+		this.#countQueryPending = false;
+		this.#lastSeenLo = lo;
+		this.#lastSeenHi = hi;
+		this.#countedVersion = this.#version?.() ?? -1;
+		this.#applyCount(count, lo, hi);
+		return true;
+	}
+
+	/** A count of the view [lo, hi]: the diagnostics, the context, the decimation. */
+	#applyCount(count: number, lo: number, hi: number): void {
+		this.visibleCount = count;
+		this.#lastCountTime = performance.now();
+		this.#lastCountDomainLo = lo;
+		this.#lastCountDomainHi = hi;
+
+		const pw = this.#getPixelWidth();
+		const density = pw > 0 ? count / pw : 0;
+		const avgSpacing = count > 0 ? pw / count : Infinity;
+
+		this.ctx.visibleCount = count;
+		this.ctx.pixelWidth = pw;
+		this.ctx.density = density;
+		this.ctx.avgSpacing = avgSpacing;
+
+		// Evaluate decimation with hysteresis
+		this.#evaluateDecimation(density);
 	}
 
 	#shouldQueryCount(lo: number, hi: number): boolean {
@@ -207,25 +299,9 @@ export class DensityHost {
 			const count = Number(row?.cnt ?? 0);
 
 			// Update diagnostics (non-reactive)
-			this.visibleCount = count;
 			this.queryLatencyMs = t1 - t0;
 			this.queriesIssued++;
-			this.#lastCountTime = t1;
-			this.#lastCountDomainLo = lo;
-			this.#lastCountDomainHi = hi;
-
-			// Update reactive context
-			const pw = this.#getPixelWidth();
-			const density = pw > 0 ? count / pw : 0;
-			const avgSpacing = count > 0 ? pw / count : Infinity;
-
-			this.ctx.visibleCount = count;
-			this.ctx.pixelWidth = pw;
-			this.ctx.density = density;
-			this.ctx.avgSpacing = avgSpacing;
-
-			// Evaluate decimation with hysteresis
-			this.#evaluateDecimation(density);
+			this.#applyCount(count, lo, hi);
 		} catch (e) {
 			console.warn('[DensityHost] Count query failed:', e);
 		} finally {
@@ -273,4 +349,32 @@ export class DensityHost {
 			this.#frameCallback = null;
 		}
 	}
+}
+
+/**
+ * The rows of a result inside a view: `x` in [xLo, xHi] and, with a finite y
+ * view, `y` in [yLo, yHi]. What the count query asks the database of the mark's
+ * own query, for a mark whose result holds every point it draws. A NaN (a
+ * padded row with no value) is in no range, as in SQL. One pass, no allocation.
+ */
+export function countRowsInView(
+	x: ArrayLike<number>,
+	y: ArrayLike<number> | null,
+	xLo: number,
+	xHi: number,
+	yLo: number,
+	yHi: number
+): number {
+	const withY = y !== null && isFinite(yLo) && isFinite(yHi);
+	let count = 0;
+	for (let i = 0; i < x.length; i++) {
+		const xv = x[i];
+		if (!(xv >= xLo && xv <= xHi)) continue;
+		if (withY) {
+			const yv = y[i];
+			if (!(yv >= yLo && yv <= yHi)) continue;
+		}
+		count++;
+	}
+	return count;
 }

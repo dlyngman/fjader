@@ -406,6 +406,10 @@
 			callerId: markId,
 			countQueryBuilder: (xLo: number, xHi: number, yLo: number, yHi: number) =>
 				setup.buildViewportCountQuery(xLo, xHi, yLo, yHi),
+			// A grid holds every point it draws: counted from the result, no query.
+			countInView: (xLo: number, xHi: number, yLo: number, yHi: number) =>
+				setup.countInView(xLo, xHi, yLo, yHi),
+			version: () => setup.dataVersion,
 			decimate
 		});
 		densityHost = host;

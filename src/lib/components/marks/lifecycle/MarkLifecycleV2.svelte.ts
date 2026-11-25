@@ -81,6 +81,7 @@ import {
 } from '$lib/components/rendering/activity-reads';
 
 import { AdaptiveBinRung } from '$lib/lod/AdaptiveBinRung.svelte';
+import { countRowsInView, type HeldCount } from '$lib/lod/DensityHost.svelte';
 import type { LODRung, MarkLODParts, MarkLODSurface } from '$lib/lod/rung-types';
 import { generateMarkId, buildChannelFieldMap, resolveSortChannel } from '../utils';
 import { buildExpressionLabel, isLabeledTipEntry } from '../utils/channel-field-map';
@@ -2396,6 +2397,26 @@ export class MarkLifecycleV2 {
 			limit: this.#reactiveConfig.limit
 		});
 		return q ? q.toString() : null;
+	}
+
+	/**
+	 * The mark's points inside a view, counted from the result it holds: for a
+	 * grid, whose rows are every point the mark draws. `'ask'` for any other
+	 * layout (raw rows are decimated before they are drawn; the database counts
+	 * those, buildViewportCountQuery). `'wait'` for a binned mark before its
+	 * first result: its result is a grid unless padding refuses it, which only a
+	 * result can say, and asking the database meanwhile is the query this saves.
+	 * The same rows the count query would count, without running the mark's
+	 * query again to count them.
+	 */
+	countInView(xLo: number, xHi: number, yLo: number, yHi: number): HeldCount {
+		if (this.#autoBinNodes.size > 0 && this.dataVersion === 0) return 'wait';
+		if (this.rowLayout.kind !== 'grid') return 'ask';
+		const data = this.data;
+		const x = data?.getColumn('x') as ArrayLike<number> | null | undefined;
+		if (!data || !x) return 'ask';
+		const y = (data.getColumn('y') as ArrayLike<number> | null) ?? null;
+		return countRowsInView(x, y, xLo, xHi, yLo, yHi);
 	}
 
 	/**
