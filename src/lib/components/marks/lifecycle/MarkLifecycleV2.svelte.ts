@@ -3070,6 +3070,11 @@ export class MarkLifecycleV2 {
 	 */
 	#takeBinStep(): boolean {
 		if (!this.#binnedAxis()) return false;
+		// Not for a path mark yet: its renderers replace a rebin's rows, they do
+		// not ride it. The value axis tweening to the new unit under a line
+		// already at its new values would show it at the wrong height for the
+		// tween's length. The axis re-registers as for any other result.
+		if (this.#config._rowLayouts) return false;
 		const key = this.#handle?.resultParts?.binKey ?? null;
 		const last = this.#lastBinSpec;
 		this.#lastBinSpec = key;
@@ -3086,6 +3091,10 @@ export class MarkLifecycleV2 {
 	#windowedAxis(): 'x' | 'y' | null {
 		const axis = this.#binnedAxis();
 		if (!axis || this.#transformCompiler.hasJSTransforms()) return null;
+		// Not for a path mark yet: its curve reads a point past each end of what
+		// it draws, so its window needs a wider margin than a bar's, which is
+		// not built. It pads its whole extent.
+		if (this.#config._rowLayouts) return null;
 		const fit = this.#reactiveConfig.fitDomain;
 		return fit === true || fit === (axis === 'x' ? 'y' : 'x') ? axis : null;
 	}

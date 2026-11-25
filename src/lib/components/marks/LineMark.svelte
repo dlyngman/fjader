@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { pathDimChannels, pathDimTooltipColumns } from './utils/path-dim';
 	import { isBinExpression } from '$lib/sql/bin';
 	import { READS_RUNS_AND_GRIDS } from './lifecycle/row-layout';
 	import { getContext, onDestroy, untrack } from 'svelte';
@@ -178,7 +179,8 @@
 	// Config with _orderConfig for automatic ORDER BY (series, dimension) — reads from entry
 	const channelSelect = $derived(
 		buildSelectFromChannels({
-			x: entry.x,
+			// A bin() draws at its bins' centres and brings their edges (path-dim.ts).
+			...pathDimChannels('x', entry.x),
 			y: entry.y,
 			...(markColor.selectField && { stroke: markColor.selectField }),
 			...(entry.z != null && markSeries.selectField && { z: markSeries.selectField }),
@@ -555,6 +557,8 @@
 					channelFields: setup!.channelFieldMap,
 					colorColumn: 'stroke',
 					...(entry.z != null && { seriesColumn: 'z', markSeries }),
+					// A bin() shows as its range, not as one of its three values.
+					...(isBinExpression(entry.x) && { columns: pathDimTooltipColumns('x', entry.x) }),
 					markColor,
 					proximityAxis: entry.tooltipProximity,
 					constantRadius: entry.dotRadius ? Number(entry.dotRadius) : undefined,
