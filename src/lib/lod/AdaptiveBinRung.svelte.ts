@@ -80,6 +80,22 @@ export class AdaptiveBinRung implements LODRung {
 
 	// --- Diagnostics (non-reactive, polled) ---
 	frameCallbackCount: number = 0;
+	/**
+	 * The last re-bins, oldest first: when, on which axis, the view and its
+	 * level, the level before, the step multiplier, and what asked (`level`: the
+	 * view reached another level; `multiplier`: shift+scroll). For a test page's
+	 * log: a re-bin nobody asked for shows here with the view that caused it.
+	 */
+	readonly history: Array<{
+		t: number;
+		axis: 'x' | 'y';
+		lo: number;
+		hi: number;
+		level: number;
+		from: number;
+		multiplier: number;
+		why: 'level' | 'multiplier';
+	}> = [];
 
 	/** The first bin's width in data units, from the rows on screen. For the palette. */
 	get binStep(): number {
@@ -155,7 +171,7 @@ export class AdaptiveBinRung implements LODRung {
 		if (multiplier !== this.#prevMultiplier) {
 			this.#prevMultiplier = multiplier;
 			const axis = this.#binAxes[0];
-			if (this.#readView(axis)) this.#reBin(axis);
+			if (this.#readView(axis)) this.#reBin(axis, 'multiplier');
 			return;
 		}
 
@@ -211,14 +227,26 @@ export class AdaptiveBinRung implements LODRung {
 				this.#level[axis] = level;
 				return;
 			}
-			this.#reBin(axis);
+			this.#reBin(axis, 'level');
 		}, 16);
 	}
 
 	/** Re-bin at the view in `#view[axis]`, and take its level. */
-	#reBin(axis: 'x' | 'y'): void {
+	#reBin(axis: 'x' | 'y', why: 'level' | 'multiplier'): void {
 		const view = this.#view[axis];
+		const from = this.#level[axis];
 		this.#level[axis] = this.#levelOf(axis, view[0], view[1]);
+		if (this.history.length >= 64) this.history.shift();
+		this.history.push({
+			t: performance.now(),
+			axis,
+			lo: view[0],
+			hi: view[1],
+			level: this.#level[axis],
+			from,
+			multiplier: this.#chartContext.binStepMultiplier ?? 1.0,
+			why
+		});
 		this.#triggerReBin(axis, [view[0], view[1]]);
 	}
 
