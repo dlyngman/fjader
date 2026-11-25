@@ -338,6 +338,15 @@ export interface DuckDBConnection {
 	openSlicedLane?(options?: { hold?: LaneHold }): Promise<SlicedLane>;
 }
 
+/**
+ * What every call on a destroyed engine gets, whether it arrives after
+ * destroy() or was under way when it ran: one error to tell apart, an
+ * AbortError like any other work cut short by a teardown.
+ */
+function engineDestroyed(): DOMException {
+	return new DOMException('Engine destroyed', 'AbortError');
+}
+
 // ---------------------------------------------------------------------------
 // v3 Registration types
 // ---------------------------------------------------------------------------
@@ -544,9 +553,7 @@ export class QueryEngine {
 		table: string,
 		fields: { categorical?: (string | IdentityField)[] }
 	): Promise<void> {
-		if (this.#destroyed) {
-			throw new Error('QueryEngine has been destroyed');
-		}
+		if (this.#destroyed) return Promise.reject(engineDestroyed());
 		return this.#identity.ensureColumns(table, fields);
 	}
 
@@ -718,7 +725,7 @@ export class QueryEngine {
 		// after reads freed memory in the worker. The public methods refuse a
 		// destroyed engine at their entry; this stops what entered before it and
 		// waited, such as the later statements of an exec() list.
-		if (this.#destroyed) throw new DOMException('Engine destroyed', 'AbortError');
+		if (this.#destroyed) throw engineDestroyed();
 		const conn = this.#conn!;
 		const interaction = cls === 'interaction';
 		if (interaction) this.#interactionInFlight++;
@@ -1039,7 +1046,7 @@ export class QueryEngine {
 	 */
 	async query(sql: string | { toString(): string }, opts?: QueryOpts): Promise<Table> {
 		if (this.#destroyed) {
-			throw new Error('QueryEngine has been destroyed');
+			throw engineDestroyed();
 		}
 		if (!this.#conn) await this.#ensureConnection();
 
@@ -1222,7 +1229,7 @@ export class QueryEngine {
 	 * `QueryEngineOptions.unbatch`, the statements go one by one.
 	 */
 	async execBatch(statements: string[]): Promise<Table> {
-		if (this.#destroyed) throw new Error('QueryEngine has been destroyed');
+		if (this.#destroyed) throw engineDestroyed();
 		if (statements.length === 0) throw new Error('execBatch: no statements');
 		if (!this.#conn) await this.#ensureConnection();
 		const place: StatementPlacement = { class: 'interaction' };
@@ -1251,7 +1258,7 @@ export class QueryEngine {
 		opts?: { class?: StatementClass; connectionLocal?: boolean; signal?: AbortSignal }
 	): Promise<void> {
 		if (this.#destroyed) {
-			throw new Error('QueryEngine has been destroyed');
+			throw engineDestroyed();
 		}
 		const place: StatementPlacement = {
 			class: opts?.class ?? 'interaction',
@@ -1314,9 +1321,7 @@ export class QueryEngine {
 	 * Results are cached — same table returns the same promise.
 	 */
 	describe(table: string): Promise<ColumnInfo[]> {
-		if (this.#destroyed) {
-			throw new Error('QueryEngine has been destroyed');
-		}
+		if (this.#destroyed) return Promise.reject(engineDestroyed());
 		const cached = this.#describeCache.get(table);
 		if (cached) return cached;
 
@@ -1818,7 +1823,7 @@ export class QueryEngine {
 		}
 		this.#inflight.clear();
 		for (const pending of this.#pending.values()) {
-			pending.reject(new DOMException('Engine destroyed', 'AbortError'));
+			pending.reject(engineDestroyed());
 		}
 		this.#pending.clear();
 		// The preagg drops above ran on the lane; close it, then the connection.

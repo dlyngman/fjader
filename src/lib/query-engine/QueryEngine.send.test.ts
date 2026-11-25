@@ -65,6 +65,23 @@ describe('QueryEngine #send funnel', () => {
 		expect(events.slice(events.indexOf('close') + 1)).toEqual([]);
 	});
 
+	it('rejects every call after destroy() with the same AbortError', async () => {
+		// A page loading with one call per table is left during the first: the
+		// next call arrives after the destroy, and reads like the one cut short.
+		const { conn, sent } = fakeConnection();
+		const engine = new QueryEngine(conn);
+		await engine.destroy();
+		sent.length = 0;
+
+		const aborted = { name: 'AbortError', message: 'Engine destroyed' };
+		await expect(engine.exec('CREATE TABLE t (a INT)')).rejects.toMatchObject(aborted);
+		await expect(engine.query('SELECT 1')).rejects.toMatchObject(aborted);
+		await expect(engine.execBatch(['SELECT 1'])).rejects.toMatchObject(aborted);
+		await expect(engine.describe('t')).rejects.toMatchObject(aborted);
+		await expect(engine.ensureColumns('t', { categorical: ['a'] })).rejects.toMatchObject(aborted);
+		expect(sent).toEqual([]);
+	});
+
 	it('sends queries, statements, DESCRIBE and Arrow inserts through the observer', async () => {
 		const { conn } = fakeConnection();
 		const engine = new QueryEngine(conn);
