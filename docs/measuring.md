@@ -111,6 +111,13 @@ Every step is recorded with its time (`events` in the log), and since 2026-11 al
 Timing mark named `fjader:<kind>:<label>` (`fjader:phase:brush`, `fjader:drag:start`), so a
 performance trace shows the session's phases.
 
+A scripted brush measured the wrong thing before #159 (2026-11-25): on a 2x display Chrome
+reports a synthetic event's `offsetX` wrong, the brush selected a range outside the plot, and
+the queries fell back to the base table. On `/test/dashboard-30` no brush-phase statement read
+a preagg table. Brush numbers from a scripted session before that change are not comparable
+with later ones. When a brush phase looks cheap or odd, check the selected range and the tables
+read in the log's `statements` first.
+
 To add a session to a page: copy the pointer helpers from `/test/dashboard-30` (`pointer`,
 `frame`, `sleep`, `mark`, `phase`), keep one run per page load, and save the events with the
 log.
