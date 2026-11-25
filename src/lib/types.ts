@@ -792,13 +792,13 @@ export interface ChartContext {
 	// Configuration store
 	readonly config: ChartConfig;
 
-	// Pointer hooks (mutable slots set by interactors)
 	/**
 	 * The coordinator the chart renders through, for what a mark's lifecycle runs
 	 * on its frame loop (a binned mark's rebin watch). Null without WebGPU.
 	 */
 	readonly gpuCoordinator?: GPUCoordinator | null;
 
+	// Pointer hooks (mutable slots set by interactors)
 	/** A click on the chart; `point` is the pointer relative to the chart's SVG (a shared
 	 *  buffer: read it before calling back into the layout). Not the event's offsetX, which
 	 *  is measured from the event's target. */
