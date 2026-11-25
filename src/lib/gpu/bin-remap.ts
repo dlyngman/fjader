@@ -1,4 +1,5 @@
 import type { BinLayout } from '$lib/components/marks/lifecycle/bin-layout';
+import type { RowLayout } from '$lib/components/marks/lifecycle/row-layout';
 
 /**
  * The map a rebin morphs through: for each new bin, the old bins it overlaps
@@ -83,6 +84,12 @@ export interface RebinSource {
 	takeRebin(canHold: boolean): RebinDecision;
 	/** The renderer has written the current result's layout to the GPU. */
 	commitLayout(): void;
+	/**
+	 * How the current result's rows are laid out (row-layout.ts): what a
+	 * renderer that joins rows into a path addresses them by. Reactive: read in
+	 * an effect, it follows each result.
+	 */
+	layout(): RowLayout;
 }
 
 /** One side of a rebin: its rows' bin edges, their layout, and the crossed keys' ids per row. */

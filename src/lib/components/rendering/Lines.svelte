@@ -5,7 +5,10 @@
 	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { getCurveWGSL, getCurveResolution } from '$lib/gpu/CurveShaderLib';
-	import { NAN_WGSL, isNegativeOrNanExpr } from '$lib/gpu/NanShaderLib';
+	import { NAN_WGSL } from '$lib/gpu/NanShaderLib';
+	import { PATH_WGSL, pathFacetWGSL } from '$lib/gpu/PathShaderLib';
+	import type { RebinSource } from '$lib/gpu/bin-remap';
+	import { RUNS } from '$lib/components/marks/lifecycle/row-layout';
 	import { DEFAULT_STROKE_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, WebGPUCanvasContext, CurveType } from '$lib/types';
 	import type { M4Decimator } from '$lib/gpu/decimation/M4Decimator.svelte';
@@ -41,7 +44,9 @@
 		ACTIVITY_COLOR_SCALE_INDEX: 48, // u32
 		ACTIVITY_SERIES_MODE: 52, // u32
 		ACTIVITY_SERIES_SCALE_INDEX: 56, // u32
-		ENTRANCE_AXIS: 60 // u32 (0 fades, 1 grows along x, 2 along y)
+		ENTRANCE_AXIS: 60, // u32 (0 fades, 1 grows along x, 2 along y)
+		GRID_BINS: 64, // u32 (0: the rows are runs)
+		GRID_SERIES: 68 // u32
 	};
 
 	interface Props {
@@ -83,6 +88,13 @@
 		 * in. A line mark fades; an area's outline grows with its fill.
 		 */
 		grow?: 'x' | 'y' | null;
+		/**
+		 * The mark's rebin source (MarkLifecycleV2.rebinSource), read here for
+		 * how the rows are laid out: a grid's rows are ordered bin first, and a
+		 * point's neighbour is then a series count away, not the next row.
+		 * Absent, the rows are runs.
+		 */
+		rebinSource?: RebinSource | null;
 	}
 
 	let {
@@ -108,8 +120,19 @@
 		dotsRung = null,
 		globalAlpha = 1.0,
 		markId = '',
-		grow = null
+		grow = null,
+		rebinSource = null
 	}: Props = $props();
+
+	/** How the rows are laid out; a refused layout draws nothing (the lifecycle says why). */
+	const rowLayout = $derived(rebinSource?.layout() ?? RUNS);
+	/**
+	 * The decimator, for runs only. It reads rows as runs and takes over the
+	 * draw (its bind group, its instance count) by existing, decimating or not,
+	 * so a grid never goes through one: not even one still alive in the frames
+	 * a mark's results cross from runs to a grid.
+	 */
+	const decimator = $derived(rowLayout.kind === 'runs' ? m4Decimator : null);
 
 	const chartContext = getContext<ChartContext>('chart');
 	const webGPUContext = getContext<WebGPUCanvasContext>('webgpu-canvas');
@@ -121,29 +144,8 @@
 	/** The selection activity this shader reads; routing reads the same table. */
 	const ACTIVITY_READS = activityReads('lines');
 
-	// --- Facet compile-time specialization ---
-	// Lines uses a storage buffer (not a vertex attribute) for facet indices because
-	// the boundary check needs random access: facetIndices[nextIdx] to detect when
-	// consecutive points span different facet cells. Vertex attributes only provide
-	// the current instance's value. (Dots/Rects use vertex attributes since they
-	// only need their own instance's facet index.)
-	const FACET_BINDING_WGSL = `\n  @group(1) @binding(${BINDINGS.FACET}) var<storage, read> facetIndices: array<f32>;`;
-	const FACET_DISCARD_WGSL = `
-    // Facet filtering: discard vertices not belonging to this cell
-    // A negative or NaN facet (a NULL facet: -1 when padded, NaN when kept) is no cell; u32() would put it in cell 0.
-    if ((${isNegativeOrNanExpr('facetIndices[instanceIdx]')} || u32(facetIndices[instanceIdx]) != frameUniforms.activeFacetIdx)) {
-      var degen: VertexOutput;
-      degen.position = DISCARD_POS;
-      return degen;
-    }`;
-	const FACET_BOUNDARY_WGSL = `
-    // Facet boundary: discard segment if next point is in a different facet
-    // A negative or NaN facet (a NULL facet: -1 when padded, NaN when kept) is no cell; u32() would put it in cell 0.
-    if ((${isNegativeOrNanExpr('facetIndices[nextIdx]')} || u32(facetIndices[nextIdx]) != frameUniforms.activeFacetIdx)) {
-      var output: VertexOutput;
-      output.position = DISCARD_POS;
-      return output;
-    }`;
+	// Faceted: the facet index buffer and its two discards (PathShaderLib).
+	const FACET_WGSL = pathFacetWGSL(BINDINGS.FACET);
 
 	const host = new RendererHost({
 		markType: effectiveMarkType,
@@ -189,7 +191,10 @@
     // reads nothing.
     activitySeriesMode: u32,
     activitySeriesScaleIndex: u32,
-    entranceAxis: u32 // 0 fades in, 1 grows along x, 2 along y
+    entranceAxis: u32, // 0 fades in, 1 grows along x, 2 along y
+    // A grid's bins and series per facet (PathShaderLib); gridBins 0 for runs.
+    gridBins: u32,
+    gridSeries: u32
   };
   @group(1) @binding(4) var<uniform> markConstants: MarkConstants;
 
@@ -213,6 +218,7 @@
   {{FACET_BINDING}}
 
   ${NAN_WGSL}
+  ${PATH_WGSL}
 
   const DISCARD_POS = vec4<f32>(2.0, 2.0, 2.0, 1.0);
 
@@ -222,6 +228,9 @@
     @builtin(instance_index) instanceIdx: u32,
     @builtin(vertex_index) vertexIdx: u32
   ) -> VertexOutput {
+    // The row this instance draws from: itself in runs, by bin and series in a grid.
+    let path = pathRow(instanceIdx);
+    let rowIdx = path.row;
     {{FACET_DISCARD}}
     let pointCount = markConstants.pointCount;
     let halfWidth = markConstants.strokeWidth * frameUniforms.devicePixelRatio * 0.5;
@@ -234,8 +243,8 @@
         output.position = DISCARD_POS;
         return output;
       }
-      let x = xValues[instanceIdx];
-      let y = yValues[instanceIdx];
+      let x = xValues[rowIdx];
+      let y = yValues[rowIdx];
       if (isNaN(x) || isNaN(y)) {
         var output: VertexOutput;
         output.position = DISCARD_POS;
@@ -250,13 +259,13 @@
 
       var output: VertexOutput;
       output.position = pixelsToClip(pos);
-      output.colorValue = colorValues[instanceIdx];
+      output.colorValue = colorValues[rowIdx];
       output.alpha = markConstants.globalAlpha * entranceAlpha(markConstants.entranceAxis) * selectionDim(
         ${connectedActivityWGSL(ACTIVITY_READS, {
 					color:
-						'markConstants.activityColorMode, markConstants.activityColorScaleIndex, colorValues[instanceIdx]',
+						'markConstants.activityColorMode, markConstants.activityColorScaleIndex, colorValues[rowIdx]',
 					series:
-						'markConstants.activitySeriesMode, markConstants.activitySeriesScaleIndex, seriesValues[instanceIdx]',
+						'markConstants.activitySeriesMode, markConstants.activitySeriesScaleIndex, seriesValues[rowIdx]',
 					group: 'markConstants.groupIndex'
 				})}
       );
@@ -266,10 +275,11 @@
     }
 
     // === LINE SEGMENT SUB-QUADS (vertices 0 .. 6N-1) ===
-    let currIdx = instanceIdx;
-    let nextIdx = instanceIdx + 1u;
+    let currIdx = rowIdx;
+    let nextIdx = rowIdx + path.step;
 
-    if (nextIdx >= pointCount) {
+    // The last point along its path has no next segment
+    if (pathEnds(path)) {
       var output: VertexOutput;
       output.position = DISCARD_POS;
       return output;
@@ -311,11 +321,9 @@
       return output;
     }
 
-    // Compute neighbor indices with series-aware boundary clamping
-    let prevIdx = select(currIdx - 1u, currIdx,
-      currIdx == 0u || seriesValues[currIdx - 1u] != seriesCurr);
-    let afterIdx = select(nextIdx + 1u, nextIdx,
-      nextIdx + 1u >= pointCount || seriesValues[nextIdx + 1u] != seriesNext);
+    // Neighbour indices for the curve, clamped at the ends of the series
+    let prevIdx = pathPrev(path, seriesCurr);
+    let afterIdx = pathAfter(path, seriesNext);
 
     // Project neighbor control points
     let pPrev = enterPx(vec2<f32>(xValues[prevIdx], yValues[prevIdx]));
@@ -400,9 +408,9 @@
 	}
 
 	const linesShaderCode = buildShaderCode()
-		.replace('{{FACET_BINDING}}', faceted ? FACET_BINDING_WGSL : '')
-		.replace('{{FACET_DISCARD}}', faceted ? FACET_DISCARD_WGSL : '')
-		.replace('{{FACET_BOUNDARY}}', faceted ? FACET_BOUNDARY_WGSL : '');
+		.replace('{{FACET_BINDING}}', faceted ? FACET_WGSL.binding : '')
+		.replace('{{FACET_DISCARD}}', faceted ? FACET_WGSL.discard : '')
+		.replace('{{FACET_BOUNDARY}}', faceted ? FACET_WGSL.boundary : '');
 
 	const vertexBufferLayout: GPUVertexBufferLayout[] = [
 		{
@@ -467,8 +475,8 @@
 			const rawCount = xData ? xData.length : 0;
 			// With drawIndirect, GPU controls instance count. pointCount in MarkConstants
 			// is used for bounds checking only — set to max of both modes.
-			const pointCount = m4Decimator?.configured
-				? Math.max(m4Decimator.outputSize, rawCount)
+			const pointCount = decimator?.configured
+				? Math.max(decimator.outputSize, rawCount)
 				: rawCount;
 			view.setFloat32(UNIFORM_OFFSETS.STROKE_WIDTH, strokeWidth, LE);
 			view.setUint32(UNIFORM_OFFSETS.POINT_COUNT, pointCount, LE);
@@ -486,15 +494,18 @@
 			view.setFloat32(UNIFORM_OFFSETS.CONSTANT_COLOR + 12, constantColor[3], LE);
 			view.setFloat32(UNIFORM_OFFSETS.DOT_RADIUS, dotRadius, LE);
 			view.setFloat32(UNIFORM_OFFSETS.GLOBAL_ALPHA, globalAlpha, LE);
+			const grid = rowLayout.kind === 'grid' ? rowLayout : null;
+			view.setUint32(UNIFORM_OFFSETS.GRID_BINS, grid?.bins ?? 0, LE);
+			view.setUint32(UNIFORM_OFFSETS.GRID_SERIES, grid?.series ?? 0, LE);
 
 			renderer.writeUniform(BINDINGS.CONSTANTS, new Uint8Array(buffer));
 
 			// Rebuild M4 render bind group (references current output buffers + markConstants)
-			if (m4Decimator?.configured) {
+			if (decimator?.configured) {
 				const perDataLayout = renderer.pipeline.getBindGroupLayout(1);
 				const markConstantsBuffer = renderer.getBuffer(BINDINGS.CONSTANTS);
 				if (perDataLayout && markConstantsBuffer) {
-					m4Decimator.createRenderBindGroup(perDataLayout, markConstantsBuffer);
+					decimator.createRenderBindGroup(perDataLayout, markConstantsBuffer);
 				}
 			}
 		}
@@ -526,11 +537,12 @@
 
 	// Instance count — with drawIndirect the GPU controls the actual count,
 	// but we still set a CPU-side value so the renderer.instanceCount === 0 guard works.
+	// None for a layout the lifecycle refused: its rows cannot be joined.
 	$effect(() => {
 		if (renderer?.resourcesCreated) {
-			if (xData && xData.length > 1) {
-				const count = m4Decimator?.configured
-					? Math.max(m4Decimator.outputSize, xData.length)
+			if (rowLayout.kind !== 'refused' && xData && xData.length > 1) {
+				const count = decimator?.configured
+					? Math.max(decimator.outputSize, xData.length)
 					: xData.length;
 				renderer.updateInstanceCount(count);
 			} else {
@@ -541,13 +553,14 @@
 
 	// M4 compute work: register/unregister with GPUCoordinator
 	$effect(() => {
-		if (!renderer?.resourcesCreated || !m4Decimator?.configured) {
+		const m4 = decimator;
+		if (!renderer?.resourcesCreated || !m4?.configured) {
 			gpuCoordinator.removeComputeWork(m4ComputeKey);
 			return;
 		}
 
 		// Ensure decimator knows the vertex count for drawIndirect
-		m4Decimator.setVertexCount(quadVertexCount);
+		m4.setVertexCount(quadVertexCount);
 
 		const chartId = chartContext.chartId;
 		gpuCoordinator.registerComputeWork(
@@ -560,7 +573,7 @@
 
 				if (!xBuf || !yBuf || !seriesBuf || !colorBuf) return;
 
-				m4Decimator.encode(
+				m4.encode(
 					commandEncoder,
 					{ x: xBuf, y: yBuf, series: seriesBuf, color: colorBuf },
 					xData?.length ?? 0
@@ -619,12 +632,14 @@
 
 	function drawLines(passEncoder: GPURenderPassEncoder) {
 		if (!quadGeometryBuffer || renderer.instanceCount === 0) return;
-		if (m4Decimator?.renderBindGroup) {
-			passEncoder.setBindGroup(1, m4Decimator.renderBindGroup);
+		// By the current result's layout, not by whether a decimator exists.
+		const m4 = decimator;
+		if (m4?.renderBindGroup) {
+			passEncoder.setBindGroup(1, m4.renderBindGroup);
 		}
 		passEncoder.setVertexBuffer(0, quadGeometryBuffer);
-		if (m4Decimator?.indirectBuffer) {
-			passEncoder.drawIndirect(m4Decimator.indirectBuffer, 0);
+		if (m4?.indirectBuffer) {
+			passEncoder.drawIndirect(m4.indirectBuffer, 0);
 		} else {
 			passEncoder.draw(quadVertexCount, renderer.instanceCount);
 		}

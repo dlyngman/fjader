@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { isBinExpression } from '$lib/sql/bin';
+	import { READS_RUNS_AND_GRIDS } from './lifecycle/row-layout';
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { Lines } from '../rendering';
@@ -222,6 +224,8 @@
 		transforms: entry.transforms ?? [],
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		colorChannel: 'stroke',
+		// Lines read a padded grid as well as runs (PathShaderLib's row addressing).
+		_rowLayouts: READS_RUNS_AND_GRIDS,
 		// Connected topology config - ensures data is ordered for line connectivity
 		_orderConfig: {
 			seriesChannel: markSeries.selectField ? seriesChannelKey : null,
@@ -317,10 +321,19 @@
 		return cfg.onLODChange ?? null;
 	});
 
-	// M4 created only when LOD is active and decimation isn't disabled.
+	// M4 created only when LOD is active and decimation isn't disabled, and
+	// never for a grid: it reads rows as runs, and a grid has at most one point
+	// per bin, so there is nothing to decimate. The layout is the current
+	// result's, so a mark whose results cross the padding row limit gains or
+	// loses its decimator with them (Lines draws by the layout meanwhile).
 	const m4Eligible = $derived.by(() => {
 		if (!lodEnabled) return false;
 		if (lodDecimate === false || faceted) return false;
+		if (setup?.rowLayout.kind === 'grid') return false;
+		// A binned line's result is a grid unless padding refuses it, which only
+		// a result can say: not eligible until one has, or every binned line
+		// would build a decimator at mount to drop it on its first result.
+		if (isBinExpression(entry.x) && !setup?.dataVersion) return false;
 		const xType = chartContext.scaleTypes?.x;
 		if (xType === 'log' || xType === 'symlog') return false;
 		return true;
@@ -589,6 +602,7 @@
 			facetData={setup?.facetData}
 			dataVersion={setup?.dataVersion || 0}
 			m4Decimator={m4Eligible ? m4Decimator : null}
+			rebinSource={setup?.rebinSource ?? null}
 			{dotsRung}
 		/>
 	{/key}

@@ -93,7 +93,8 @@ function setup() {
 			log.push(`take ${version}${canHold ? ' canHold' : ''}`);
 			return next;
 		},
-		commitLayout: () => log.push(`commit ${version}`)
+		commitLayout: () => log.push(`commit ${version}`),
+		layout: () => ({ kind: 'runs' })
 	};
 	return {
 		renderer,
@@ -175,6 +176,7 @@ describe('the rebin decision, per data version', () => {
 		const other: RebinSource = {
 			dataVersion: () => 1,
 			takeRebin: () => (log.push('take'), null),
+			layout: () => ({ kind: 'runs' }),
 			commitLayout: () => log.push('commit')
 		};
 		first.renderer.setBinning(other, { geometry: 'interval' });

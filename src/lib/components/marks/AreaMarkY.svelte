@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { READS_RUNS_AND_GRIDS } from './lifecycle/row-layout';
 	import { outlineColor } from './utils/area-outline';
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
@@ -229,6 +230,8 @@
 		table: entry.table,
 		transforms: effectiveTransforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
+		// The fill and its outline read a padded grid as well as runs (PathShaderLib).
+		_rowLayouts: READS_RUNS_AND_GRIDS,
 		// Ensures SQL ORDER BY series, dimension for consistent stacking and path rendering
 		_orderConfig: {
 			seriesChannel: markSeries.selectField ? seriesChannelKey : null,
@@ -391,6 +394,7 @@
 			facetData={setup?.facetData}
 			dataVersion={setup?.dataVersion || 0}
 			grow={!hasExplicitBounds}
+			rebinSource={setup?.rebinSource ?? null}
 		/>
 		{#if (entry.strokeWidth ?? 0) > 0}
 			<Lines
@@ -412,6 +416,7 @@
 				facetData={setup?.facetData}
 				dataVersion={setup?.dataVersion || 0}
 				grow={hasExplicitBounds ? null : 'y'}
+				rebinSource={setup?.rebinSource ?? null}
 			/>
 			{#if showBothBoundaries}
 				<Lines
@@ -433,6 +438,7 @@
 					facetData={setup?.facetData}
 					dataVersion={setup?.dataVersion || 0}
 					grow={hasExplicitBounds ? null : 'y'}
+					rebinSource={setup?.rebinSource ?? null}
 				/>
 			{/if}
 		{/if}

@@ -22,6 +22,7 @@ import { TransformCompiler } from '$lib/transforms/TransformCompiler';
 import { dense, filter, having, topN } from '$lib/transforms';
 import { bin } from '$lib/sql/bin';
 import type { BinPadding, MarkConfig, Transform } from '$lib/types';
+import { rowLayoutOf } from '$lib/components/marks/lifecycle/row-layout';
 import {
 	buildQueryParts,
 	castReal,
@@ -300,6 +301,66 @@ describe('a histogram padded to every bin', () => {
 		for (const read of [preaggRead, nonDDL().at(-1)!]) {
 			const types = await conn.all(`DESCRIBE ${read}`);
 			expect(types.map((t) => t.column_type)).toEqual(['FLOAT', 'FLOAT', 'FLOAT']);
+		}
+	});
+
+	it('a path mark with a series reads the same grid, bin first, through a preagg table', async () => {
+		// A brush reads through preagg tables, and a line or area joins its rows
+		// by their order: the grid the base read returns (row-layout.ts) must be
+		// the grid the preagg read returns, row for row.
+		// On `big`: a table of bins × series × selected values has to stay under
+		// a quarter of its source's rows to be built at all.
+		await engine.ensureColumns('big', { categorical: ['g', 'cat'] });
+		const view = engine.identitySourceFor('big');
+		const pathSelect = {
+			x: castReal(lower.resolve(stats, 'linear')),
+			y: count(),
+			fill: castReal(column(idOf('cat')))
+		};
+		const pathBins = { x: lower.padding(stats, 'linear')! };
+		const kinds = engine.identityFor('cat').values.length;
+		const path = {
+			transforms: [dense()],
+			config: {
+				markType: 'line',
+				table: view,
+				x: 'x',
+				y: 'y',
+				fill: 'fill',
+				identity: { fill: { dim: engine.dimTableFor('cat'), size: kinds, positional: false } }
+			} as MarkConfig
+		};
+		const own = { table: view, baseTable: 'big', transforms: path, bins: pathBins };
+		const viaPreagg = await mark('path-padded', pathSelect, own);
+		const reference = new FilterGroup();
+		reference.setEngine(engine);
+		const viaBase = await mark('path-padded-ref', pathSelect, { ...own, into: reference });
+
+		await activateToggle(['g']);
+		const toggle = group.registerToggle('g');
+		const referenceToggle = reference.registerToggle('g');
+		await settle([viaPreagg], () => toggle.set([[0]]));
+		expect(nonDDL().at(-1)).toContain('__dplot_preagg_');
+		await settle([viaBase], () => referenceToggle.set([[0]]));
+		expect(nonDDL().at(-1)).not.toContain('__dplot_preagg_');
+
+		const rows = ordered(viaPreagg);
+		expect(rows).toEqual(ordered(viaBase));
+
+		// The layout the lifecycle declares for it: 20 bins, a row per category
+		// and one for -1, bin first.
+		const series = kinds + 1;
+		const layout = rowLayoutOf(['x', 'fill'], rows.length, (channel) =>
+			rows.map((row) => row[['x', 'y', 'fill'].indexOf(channel)])
+		);
+		expect(layout).toEqual({ kind: 'grid', facets: 1, bins: 20, series });
+		for (let b = 0; b < 20; b++) {
+			const inBin = rows.slice(b * series, (b + 1) * series);
+			expect(inBin.map((row) => row[0])).toEqual(Array(series).fill(50 * b));
+			const ids = inBin.map((row) => row[2]);
+			expect(ids).toEqual([...ids].sort((p, q) => p - q));
+			// g = 0 keeps x < 250: the bins past it are padding, at zero.
+			if (b >= 5) expect(inBin.every((row) => row[1] === 0)).toBe(true);
 		}
 	});
 
