@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { READS_RUNS } from './lifecycle/row-layout';
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { Lines } from '../rendering';
@@ -223,6 +224,8 @@
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		colorChannel: 'stroke',
 		// Connected topology config - ensures data is ordered for line connectivity
+		// Lines read runs only: a padded grid of several series is refused, loudly.
+		_rowLayouts: READS_RUNS,
 		_orderConfig: {
 			seriesChannel: markSeries.selectField ? seriesChannelKey : null,
 			dimensionChannel: entry.order != null ? '__order' : 'x'

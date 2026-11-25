@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { READS_RUNS_AND_GRIDS } from './lifecycle/row-layout';
 	import { outlineColor } from './utils/area-outline';
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
@@ -230,6 +231,8 @@
 		transforms: effectiveTransforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		// Connected topology - ordered by dimension (y)
+		// The fill reads a padded grid as well as runs (Areas' row addressing).
+		_rowLayouts: READS_RUNS_AND_GRIDS,
 		_orderConfig: {
 			seriesChannel: markSeries.selectField ? seriesChannelKey : null,
 			dimensionChannel: entry.order != null ? '__order' : 'y'
@@ -391,6 +394,7 @@
 			facetData={setup?.facetData}
 			dataVersion={setup?.dataVersion || 0}
 			grow={!hasExplicitBounds}
+			rebinSource={setup?.rebinSource ?? null}
 		/>
 		{#if (entry.strokeWidth ?? 0) > 0}
 			<Lines

@@ -96,6 +96,7 @@ import {
 	withBaseline
 } from './fit-domain';
 import { binLayout } from './bin-layout';
+import { layoutFor, rowLayoutOf, RUNS, type ReadableLayout, type RowLayout } from './row-layout';
 import {
 	buildBinCut,
 	buildBinRemap,
@@ -185,6 +186,13 @@ export interface MarkLifecycleV2Config {
 	colorChannel?: string;
 	sizeChannel?: string;
 	_orderConfig?: { seriesChannel: string | null; dimensionChannel: string };
+	/**
+	 * A mark that joins its rows into a path: the row layouts its renderer can
+	 * address (row-layout.ts). A result laid out any other way is refused, with
+	 * an error, instead of drawn wrongly or not at all. Absent for marks that
+	 * draw each row on its own.
+	 */
+	_rowLayouts?: readonly ReadableLayout[];
 	zeroBaseline?: { x?: boolean; y?: boolean };
 	/**
 	 * A rule's: whether it spans an extent on its cross axis (RuleX with
@@ -1034,6 +1042,13 @@ export class MarkLifecycleV2 {
 		// went with it. A click right after a data update found no row under the
 		// pointer, read as a click on empty space and cleared the selection, and
 		// the next click did nothing until the pointer moved.
+		// A path mark's layout is checked on every result, whether or not its
+		// renderer reads it: a refusal is reported from here (`rowLayout`), and a
+		// renderer that cannot read a layout does not ask for it.
+		$effect(() => {
+			if (this.#config._rowLayouts) void this.rowLayout;
+		});
+
 		$effect(() => {
 			const tooltipConfig = this.#reactiveConfig.tooltip;
 			const fitDomain = this.#reactiveConfig.fitDomain;
@@ -2847,8 +2862,51 @@ export class MarkLifecycleV2 {
 		takeRebin: (canHold) => this.#takeRebin(canHold),
 		commitLayout: () => {
 			this.#takenSide = this.#pendingSide;
-		}
+		},
+		layout: () => this.rowLayout
 	};
+
+	/**
+	 * How the current result's rows are laid out, for a renderer that joins
+	 * them into a path (row-layout.ts). Declared by the query: the order its
+	 * transforms promised for the parts this result was computed from, as
+	 * `#remapSide` reads it; the rows are checked against it at stride.
+	 *
+	 * A padded result that is not a whole grid is refused, loudly: read as
+	 * runs it would draw nothing and say nothing.
+	 */
+	readonly rowLayout: RowLayout = $derived.by(() => {
+		const data = this.data;
+		const parts = this.#handle?.resultParts;
+		if (!data || data.length === 0 || !parts) return RUNS;
+		const channels = Object.keys(parts.selectDef);
+		const aligned = this.#transformCompiler.alignment(channels, {
+			groupKeys: parts.groupKeys,
+			bins: parts.bins ?? null,
+			// The window this result was computed over, as with its parts.
+			binWindow: this.#handle?.resultWindow ?? null
+		});
+		const declared = rowLayoutOf(
+			aligned,
+			data.length,
+			(channel) => data.getColumn(channel) as ArrayLike<number> | null,
+			channels.includes('__facet')
+		);
+		const readable = this.#config._rowLayouts;
+		const layout = readable ? layoutFor(declared, readable, this.#config.markType) : declared;
+		const why = layout.kind === 'refused' ? layout.why : null;
+		// Once per reason, not per result: a brush would repeat it every frame.
+		if (why !== null && why !== this.#refusedLayout) {
+			console.error(
+				`fjader: ${this.#markId} draws nothing: ${why}. Its rows cannot be joined into ` +
+					'lines or areas as they are. This is a bug in fjader, not in the chart.'
+			);
+		}
+		this.#refusedLayout = why;
+		return layout;
+	});
+	/** The reason `rowLayout` last refused, so each is reported once. Plain: not state. */
+	#refusedLayout: string | null = null;
 
 	/**
 	 * The current result against the rows last committed: a hold when it
