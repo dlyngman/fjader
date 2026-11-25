@@ -416,6 +416,7 @@
 				facetData={setup?.facetData}
 				dataVersion={setup?.dataVersion || 0}
 				grow={hasExplicitBounds ? null : 'y'}
+				rebinSource={setup?.rebinSource ?? null}
 			/>
 			{#if showBothBoundaries}
 				<Lines
@@ -437,6 +438,7 @@
 					facetData={setup?.facetData}
 					dataVersion={setup?.dataVersion || 0}
 					grow={hasExplicitBounds ? null : 'y'}
+					rebinSource={setup?.rebinSource ?? null}
 				/>
 			{/if}
 		{/if}

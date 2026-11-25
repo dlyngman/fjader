@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { READS_RUNS } from './lifecycle/row-layout';
+	import { READS_RUNS_AND_GRIDS } from './lifecycle/row-layout';
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
 	import { Lines } from '../rendering';
@@ -224,8 +224,8 @@
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		colorChannel: 'stroke',
 		// Connected topology config - ensures data is ordered for line connectivity
-		// Lines read runs only: a padded grid of several series is refused, loudly.
-		_rowLayouts: READS_RUNS,
+		// Lines read a padded grid as well as runs (PathShaderLib's row addressing).
+		_rowLayouts: READS_RUNS_AND_GRIDS,
 		_orderConfig: {
 			seriesChannel: markSeries.selectField ? seriesChannelKey : null,
 			dimensionChannel: entry.order != null ? '__order' : 'x'
@@ -320,10 +320,15 @@
 		return cfg.onLODChange ?? null;
 	});
 
-	// M4 created only when LOD is active and decimation isn't disabled.
+	// M4 created only when LOD is active and decimation isn't disabled, and
+	// never for a grid: it reads rows as runs, and a grid has at most one point
+	// per bin, so there is nothing to decimate. The layout is the current
+	// result's, so a mark whose results cross the padding row limit gains or
+	// loses its decimator with them (Lines draws by the layout meanwhile).
 	const m4Eligible = $derived.by(() => {
 		if (!lodEnabled) return false;
 		if (lodDecimate === false || faceted) return false;
+		if (setup?.rowLayout.kind === 'grid') return false;
 		const xType = chartContext.scaleTypes?.x;
 		if (xType === 'log' || xType === 'symlog') return false;
 		return true;
@@ -592,6 +597,7 @@
 			facetData={setup?.facetData}
 			dataVersion={setup?.dataVersion || 0}
 			m4Decimator={m4Eligible ? m4Decimator : null}
+			rebinSource={setup?.rebinSource ?? null}
 			{dotsRung}
 		/>
 	{/key}

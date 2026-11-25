@@ -35,9 +35,7 @@ export const RUNS: RowLayout = { kind: 'runs' };
 /** The layouts a renderer that joins rows into a path can address. */
 export type ReadableLayout = 'runs' | 'grid';
 
-/** A renderer that joins each row to the next of its series, and nothing else. */
-export const READS_RUNS: readonly ReadableLayout[] = ['runs'];
-/** A renderer that also addresses a padded grid's rows by bin and series. */
+/** A renderer that addresses a padded grid's rows by bin and series, as well as runs. */
 export const READS_RUNS_AND_GRIDS: readonly ReadableLayout[] = ['runs', 'grid'];
 
 /**

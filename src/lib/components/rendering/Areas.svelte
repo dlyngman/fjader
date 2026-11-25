@@ -5,7 +5,8 @@
 	import { RendererHost } from './RendererHost.svelte';
 	import { getGPUContext } from '$lib/gpu';
 	import { getCurveWGSL, getCurveResolution } from '$lib/gpu/CurveShaderLib';
-	import { NAN_WGSL, isNegativeOrNanExpr } from '$lib/gpu/NanShaderLib';
+	import { NAN_WGSL } from '$lib/gpu/NanShaderLib';
+	import { PATH_WGSL, pathFacetWGSL } from '$lib/gpu/PathShaderLib';
 	import { DEFAULT_FILL_COLOR } from '$lib/scales/color-utils';
 	import type { ChartContext, WebGPUCanvasContext, CurveType } from '$lib/types';
 	import type { RebinSource } from '$lib/gpu/bin-remap';
@@ -129,29 +130,8 @@
 	/** The selection activity this shader reads; routing reads the same table. */
 	const ACTIVITY_READS = activityReads('areas');
 
-	// --- Facet compile-time specialization ---
-	// Areas uses a storage buffer (not a vertex attribute) for facet indices because
-	// the boundary check needs random access: facetIndices[nextIdx] to detect when
-	// consecutive points span different facet cells. Vertex attributes only provide
-	// the current instance's value. (Dots/Rects use vertex attributes since they
-	// only need their own instance's facet index.)
-	const FACET_BINDING_WGSL = `\n  @group(1) @binding(${BINDINGS.FACET}) var<storage, read> facetIndices: array<f32>;`;
-	const FACET_DISCARD_WGSL = `
-    // Facet filtering: discard vertices not belonging to this cell
-    // A negative or NaN facet (a NULL facet: -1 when padded, NaN when kept) is no cell; u32() would put it in cell 0.
-    if ((${isNegativeOrNanExpr('facetIndices[rowIdx]')} || u32(facetIndices[rowIdx]) != frameUniforms.activeFacetIdx)) {
-      var degen: VertexOutput;
-      degen.position = DISCARD_POS;
-      return degen;
-    }`;
-	const FACET_BOUNDARY_WGSL = `
-    // Facet boundary: discard segment if next point is in a different facet
-    // A negative or NaN facet (a NULL facet: -1 when padded, NaN when kept) is no cell; u32() would put it in cell 0.
-    if ((${isNegativeOrNanExpr('facetIndices[nextIdx]')} || u32(facetIndices[nextIdx]) != frameUniforms.activeFacetIdx)) {
-      var output: VertexOutput;
-      output.position = DISCARD_POS;
-      return output;
-    }`;
+	// Faceted: the facet index buffer and its two discards (PathShaderLib).
+	const FACET_WGSL = pathFacetWGSL(BINDINGS.FACET);
 
 	const host = new RendererHost({
 		markType: effectiveMarkType,
@@ -192,7 +172,7 @@
     activitySeriesMode: u32,
     activitySeriesScaleIndex: u32,
     entranceAxis: u32, // 0 fades in, 1 grows along x, 2 along y
-    // A grid's bins and series per facet (row-layout.ts); gridBins 0 for runs.
+    // A grid's bins and series per facet (PathShaderLib); gridBins 0 for runs.
     gridBins: u32,
     gridSeries: u32
   };
@@ -214,6 +194,7 @@
   {{FACET_BINDING}}
 
   ${NAN_WGSL}
+  ${PATH_WGSL}
 
   // Map (dimension, boundary) to (x, y) based on orientation
   fn makePoint(dimVal: f32, boundaryVal: f32) -> vec2<f32> {
@@ -242,24 +223,9 @@
   ) -> VertexOutput {
     let pointCount = markConstants.pointCount;
 
-    // Which row this instance is, and how far away its neighbour along the path.
-    // Runs: instance i is row i, joined to row i + 1 of the same series.
-    // A grid: the rows are ordered bin first, (f·B + b)·S + s, and the
-    // instances walk them series by series, so a series still draws whole
-    // before the next: within a facet, instance r is series r / B at bin r % B.
-    let isGrid = markConstants.gridBins > 0u;
-    var rowIdx = instanceIdx;
-    var rowStep = 1u;
-    var binIdx = 0u;
-    if (isGrid) {
-      let gridBins = markConstants.gridBins;
-      let gridSeries = markConstants.gridSeries;
-      let perFacet = gridBins * gridSeries;
-      let inFacet = instanceIdx % perFacet;
-      binIdx = inFacet % gridBins;
-      rowIdx = ((instanceIdx / perFacet) * gridBins + binIdx) * gridSeries + inFacet / gridBins;
-      rowStep = gridSeries;
-    }
+    // The row this instance draws from: itself in runs, by bin and series in a grid.
+    let path = pathRow(instanceIdx);
+    let rowIdx = path.row;
     {{FACET_DISCARD}}
     let circleStart = CURVE_RESOLUTION * 6u;
     let isTopCircle = vertexIdx >= circleStart && vertexIdx < circleStart + 6u;
@@ -308,7 +274,7 @@
         let frac = select(1.0, viewSpan / markConstants.fullDomainSpan,
           markConstants.fullDomainSpan > 0.0);
         // Points along the axis: a grid's bins, not its rows (every series has them all).
-        let pointsAlong = select(markConstants.pointCount, markConstants.gridBins, isGrid);
+        let pointsAlong = select(markConstants.pointCount, markConstants.gridBins, pathIsGrid());
         let pointsInView = f32(pointsAlong) * frac;
         let avgSpacing = pixelSpan / max(pointsInView, 1.0);
         let t = smoothstep(8.0, 30.0, avgSpacing);
@@ -336,11 +302,10 @@
 
     // === AREA FILL SUB-QUADS (vertices 0 .. 6N-1) ===
     let currIdx = rowIdx;
-    let nextIdx = rowIdx + rowStep;
+    let nextIdx = rowIdx + path.step;
 
-    // The last point has no next segment: of the data, or of its series in a
-    // grid, whose next row at that stride is another facet's first bin.
-    if (nextIdx >= pointCount || (isGrid && binIdx + 1u >= markConstants.gridBins)) {
+    // The last point along its path has no next segment
+    if (pathEnds(path)) {
       var output: VertexOutput;
       output.position = DISCARD_POS;
       return output;
@@ -396,19 +361,9 @@
       return output;
     }
 
-    // Neighbour indices for the curve, clamped at the ends of the series: by
-    // the bin index in a grid, by the series values in runs.
-    var prevIdx = currIdx;
-    var afterIdx = nextIdx;
-    if (isGrid) {
-      if (binIdx > 0u) { prevIdx = currIdx - rowStep; }
-      if (binIdx + 2u < markConstants.gridBins) { afterIdx = nextIdx + rowStep; }
-    } else {
-      if (currIdx > 0u && seriesValues[currIdx - 1u] == seriesCurr) { prevIdx = currIdx - 1u; }
-      if (nextIdx + 1u < pointCount && seriesValues[nextIdx + 1u] == seriesNext) {
-        afterIdx = nextIdx + 1u;
-      }
-    }
+    // Neighbour indices for the curve, clamped at the ends of the series
+    let prevIdx = pathPrev(path, seriesCurr);
+    let afterIdx = pathAfter(path, seriesNext);
 
     // Read neighbor dimension values and project control points
     let dimPrev = dimValues[prevIdx];
@@ -481,9 +436,9 @@
 	}
 
 	const areasShaderCode = buildShaderCode()
-		.replace('{{FACET_BINDING}}', faceted ? FACET_BINDING_WGSL : '')
-		.replace('{{FACET_DISCARD}}', faceted ? FACET_DISCARD_WGSL : '')
-		.replace('{{FACET_BOUNDARY}}', faceted ? FACET_BOUNDARY_WGSL : '');
+		.replace('{{FACET_BINDING}}', faceted ? FACET_WGSL.binding : '')
+		.replace('{{FACET_DISCARD}}', faceted ? FACET_WGSL.discard : '')
+		.replace('{{FACET_BOUNDARY}}', faceted ? FACET_WGSL.boundary : '');
 
 	const vertexBufferLayout: GPUVertexBufferLayout[] = [
 		{
