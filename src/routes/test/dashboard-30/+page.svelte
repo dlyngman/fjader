@@ -19,6 +19,7 @@
 	 *   ?mutations=1  count DOM mutation records per frame (observing costs too,
 	 *                 so leave it off for timing runs)
 	 *   ?scale=N      the flights table N times over (default 1: 200k rows)
+	 *   ?dots=0       without the three raw-row scatters (charts 26-28)
 	 *   ?stack=js     the stacked histogram and area charts (20 and 25) stack
 	 *                 in JS, not SQL, and every run of that transform is counted:
 	 *                 each event in the log carries the count so far (`jsApplies`),
@@ -103,9 +104,12 @@
 	const SCALE = Math.max(1, Number(params.get('scale')) || 1);
 	const CHART_COUNT = Math.min(30, Math.max(1, Number(params.get('charts')) || 30));
 	const STACK_JS = params.get('stack') === 'js';
+	// ?dots=0: without the raw-row scatters, which read every row on every update
+	// and at ?scale=N swamp what the aggregated marks cost.
+	const DOTS = params.get('dots') !== '0';
 	const VARIANT = `${LABEL_MODE === 'none' ? 'nolabels' : LABEL_MODE === 'text' ? 'textmark' : 'attached'}-${AXES ? 'axes' : 'noaxes'}${
 		CHART_COUNT < 30 ? `-c${CHART_COUNT}` : ''
-	}${SCALE > 1 ? `-x${SCALE}` : ''}${MUTATIONS ? '-mut' : ''}${STACK_JS ? '-stackjs' : ''}`;
+	}${SCALE > 1 ? `-x${SCALE}` : ''}${DOTS ? '' : '-nodots'}${MUTATIONS ? '-mut' : ''}${STACK_JS ? '-stackjs' : ''}`;
 
 	/** Runs of the JS stack transform so far (?stack=js), over every chart using it. */
 	let jsApplies = 0;
@@ -282,7 +286,7 @@
 		},
 		{ id: 30, kind: 'barY', cat: 'carrier', measure: 'distance', title: 'Mean distance by carrier' }
 	];
-	const charts = ALL_CHARTS.slice(0, CHART_COUNT);
+	const charts = ALL_CHARTS.slice(0, CHART_COUNT).filter((c) => DOTS || c.kind !== 'dots');
 
 	/** An x label: the field, unique per chart unless the chart shares x. */
 	/** The measure an axis shows: a mean, or a count. */
