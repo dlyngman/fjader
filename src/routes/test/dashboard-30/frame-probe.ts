@@ -110,6 +110,11 @@ interface SubmitTiming {
 	kinds: string;
 	/** Each pass's duration, in order. */
 	each: number[];
+	/**
+	 * Each pass's label, in order: a render pass's is its chart's id (the
+	 * coordinator labels it), a compute pass's its own name. '' without one.
+	 */
+	labels: string[];
 }
 
 class PassTimer {
@@ -119,7 +124,7 @@ class PassTimer {
 	readonly #resolve: GPUBuffer;
 	readonly #ring: { buffer: GPUBuffer; busy: boolean }[] = [];
 	/** The readback the last finished encoder copied into, its query count and pass kinds. */
-	#pending: { slot: number; count: number; kinds: string } | null = null;
+	#pending: { slot: number; count: number; kinds: string; labels: string[] } | null = null;
 	readonly #restore: () => void;
 	/**
 	 * Whether the query set exists. Its creation can fail: Metal has few counter
@@ -167,6 +172,7 @@ class PassTimer {
 			const encoder = original.call(device, descriptor);
 			let used = 0;
 			let kinds = '';
+			const labels: string[] = [];
 			const timed = <D extends { timestampWrites?: unknown }, R>(
 				begin: (d: D) => R,
 				kind: string
@@ -182,6 +188,7 @@ class PassTimer {
 					};
 					used += 2;
 					kinds += kind;
+					labels.push((desc as { label?: string }).label ?? '');
 					try {
 						return begin.call(encoder, desc);
 					} finally {
@@ -206,7 +213,7 @@ class PassTimer {
 					encoder.resolveQuerySet(querySet, 0, used, this.#resolve, 0);
 					encoder.copyBufferToBuffer(this.#resolve, 0, this.#ring[slot].buffer, 0, used * 8);
 					this.#ring[slot].busy = true;
-					this.#pending = { slot, count: used, kinds };
+					this.#pending = { slot, count: used, kinds, labels };
 				}
 				return finish.call(encoder, fd);
 			};
@@ -256,6 +263,7 @@ class PassTimer {
 					maxIndex: maxAt,
 					maxKind: pending.kinds[maxAt] ?? '?',
 					kinds: pending.kinds,
+					labels: pending.labels,
 					each
 				});
 			})

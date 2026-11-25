@@ -556,6 +556,14 @@
 			variant: VARIANT,
 			params: Object.fromEntries(params),
 			charts: charts.map((c) => c.id),
+			// Each chart's canvas id (a render pass's label in the probe's pass
+			// timings) to its number on this page.
+			chartIds: Object.fromEntries(
+				charts.flatMap((c) => {
+					const id = chartEl(c.id)?.querySelector('canvas')?.dataset.chartId;
+					return id ? [[id, c.id]] : [];
+				})
+			),
 			viewport: { w: innerWidth, h: innerHeight, dpr: devicePixelRatio },
 			userAgent: navigator.userAgent,
 			mountedAt,

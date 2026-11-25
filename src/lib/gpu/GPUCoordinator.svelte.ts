@@ -3091,6 +3091,9 @@ export class GPUCoordinator {
 			}
 
 			const desc: GPURenderPassDescriptor = {
+				// The chart, by name: in WebGPU's own errors, and for whatever times
+				// passes (the dashboard's frame probe). Built once per chart.
+				label: chartConfig.chartId,
 				colorAttachments: [
 					{
 						view: msaa.view,
@@ -3114,6 +3117,7 @@ export class GPUCoordinator {
 			}
 
 			const desc: GPURenderPassDescriptor = {
+				label: chartConfig.chartId,
 				colorAttachments: [
 					{
 						view: textureView,
