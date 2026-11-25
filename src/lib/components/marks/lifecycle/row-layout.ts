@@ -77,18 +77,31 @@ export function rowLayoutOf(
 ): RowLayout {
 	if (!aligned || aligned.length === 0 || rows === 0) return RUNS;
 	const band = aligned[0];
+	// Whether the padding crossed the bins with a series. Without one, bin
+	// order is run order: nothing is interleaved, so the rows are safe to read
+	// as runs whatever the check below finds, as they were before there was a
+	// check (two bin edges that collide in f32 are a run of two, for one).
+	const crossed = aligned.slice(1).some((channel) => channel !== FACET);
 	const edges = column(band);
 	if (!edges) {
+		if (!crossed) return RUNS;
 		return { kind: 'refused', why: `the result has no "${band}" column to read its bins from` };
 	}
 	const layout = binLayout(edges, rows);
 	if (!layout) {
+		if (!crossed) return RUNS;
 		return {
 			kind: 'refused',
 			why:
 				`the result was padded to one row per bin per series, ordered by "${band}", ` +
 				`but its ${rows} rows are not whole bins of equal size`
 		};
+	}
+	if (!crossed) {
+		// A grid of one series when it reads as one; runs otherwise.
+		return layout.series === 1 && (faceted || layout.facets === 1)
+			? { kind: 'grid', facets: layout.facets, bins: layout.bins, series: 1 }
+			: RUNS;
 	}
 	// Rows in another order still read as some grid: series-first rows as one
 	// facet per series, of one series each. What the query declares rules those
@@ -101,11 +114,16 @@ export function rowLayoutOf(
 				`${layout.facets} times over, as if it were ordered by series`
 		};
 	}
-	const crossed = aligned.slice(1).some((channel) => channel !== FACET);
-	if (!crossed && layout.series !== 1) {
+	// A crossed key always brings -1 with it (a value its dim does not hold
+	// yet), so a crossed result has at least two rows per bin. One row per bin
+	// is a faceted result in series order, read as a facet per series: it would
+	// draw, and then morph every series into another's rows.
+	if (layout.series === 1) {
 		return {
 			kind: 'refused',
-			why: `the result has ${layout.series} rows per bin, but no series to tell them apart`
+			why:
+				`the result should have a row per series in each bin of "${band}", but has one: ` +
+				`its ${layout.facets} runs of bins look ordered by series`
 		};
 	}
 	return { kind: 'grid', facets: layout.facets, bins: layout.bins, series: layout.series };

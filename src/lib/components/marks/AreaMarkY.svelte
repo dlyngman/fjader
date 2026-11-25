@@ -230,9 +230,9 @@
 		table: entry.table,
 		transforms: effectiveTransforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
-		// Ensures SQL ORDER BY series, dimension for consistent stacking and path rendering
-		// The fill reads a padded grid as well as runs (Areas' row addressing).
+		// The fill and its outline read a padded grid as well as runs (PathShaderLib).
 		_rowLayouts: READS_RUNS_AND_GRIDS,
+		// Ensures SQL ORDER BY series, dimension for consistent stacking and path rendering
 		_orderConfig: {
 			seriesChannel: markSeries.selectField ? seriesChannelKey : null,
 			dimensionChannel: entry.order != null ? '__order' : 'x'

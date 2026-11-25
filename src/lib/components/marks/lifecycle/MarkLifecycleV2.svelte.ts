@@ -1043,10 +1043,19 @@ export class MarkLifecycleV2 {
 		// pointer, read as a click on empty space and cleared the selection, and
 		// the next click did nothing until the pointer moved.
 		// A path mark's layout is checked on every result, whether or not its
-		// renderer reads it: a refusal is reported from here (`rowLayout`), and a
-		// renderer that cannot read a layout does not ask for it.
+		// renderer reads it, and a refusal reported: once per reason, not per
+		// result, which a brush would repeat every frame.
 		$effect(() => {
-			if (this.#config._rowLayouts) void this.rowLayout;
+			if (!this.#config._rowLayouts) return;
+			const layout = this.rowLayout;
+			const why = layout.kind === 'refused' ? layout.why : null;
+			if (why !== null && why !== this.#refusedLayout) {
+				console.error(
+					`fjader: ${this.#markId} draws nothing: ${why}. Its rows cannot be joined into ` +
+						'lines or areas as they are.'
+				);
+			}
+			this.#refusedLayout = why;
 		});
 
 		$effect(() => {
@@ -2872,8 +2881,8 @@ export class MarkLifecycleV2 {
 	 * transforms promised for the parts this result was computed from, as
 	 * `#remapSide` reads it; the rows are checked against it at stride.
 	 *
-	 * A padded result that is not a whole grid is refused, loudly: read as
-	 * runs it would draw nothing and say nothing.
+	 * A padded result that is not a whole grid is refused: read as runs it
+	 * would draw nothing and say nothing. Reported by the constructor's effect.
 	 */
 	readonly rowLayout: RowLayout = $derived.by(() => {
 		const data = this.data;
@@ -2893,17 +2902,7 @@ export class MarkLifecycleV2 {
 			channels.includes('__facet')
 		);
 		const readable = this.#config._rowLayouts;
-		const layout = readable ? layoutFor(declared, readable, this.#config.markType) : declared;
-		const why = layout.kind === 'refused' ? layout.why : null;
-		// Once per reason, not per result: a brush would repeat it every frame.
-		if (why !== null && why !== this.#refusedLayout) {
-			console.error(
-				`fjader: ${this.#markId} draws nothing: ${why}. Its rows cannot be joined into ` +
-					'lines or areas as they are. This is a bug in fjader, not in the chart.'
-			);
-		}
-		this.#refusedLayout = why;
-		return layout;
+		return readable ? layoutFor(declared, readable, this.#config.markType) : declared;
 	});
 	/** The reason `rowLayout` last refused, so each is reported once. Plain: not state. */
 	#refusedLayout: string | null = null;

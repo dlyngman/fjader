@@ -57,14 +57,39 @@ describe('rowLayoutOf', () => {
 		const x = runs(6, 3);
 		expect(rowLayoutOf(null, x.length, columns(x)).kind).toBe('runs');
 		expect(rowLayoutOf(['x', 'fill'], x.length, columns(x)).kind).toBe('refused');
-		// Only a faceted mark may repeat its bins.
-		expect(rowLayoutOf(['x', 'fill'], x.length, columns(x), true).kind).toBe('grid');
+		// Faceted, the bins may repeat, but a crossed series always has a row
+		// for -1 beside its own: one row per bin is still series order.
+		expect(rowLayoutOf(['x', 'fill'], x.length, columns(x), true).kind).toBe('refused');
+		// A faceted grid proper: bins repeat per cell, several rows in each.
+		const cells = grid(3, 6, 2);
+		expect(rowLayoutOf(['x', 'fill'], cells.length, columns(cells), true).kind).toBe('grid');
 	});
 
-	it('refuses several rows per bin when the query crossed no series', () => {
-		const x = grid(1, 6, 3);
-		expect(rowLayoutOf(['x'], x.length, columns(x)).kind).toBe('refused');
-		expect(rowLayoutOf(['x', '__facet'], x.length, columns(x), true).kind).toBe('refused');
+	it('without a crossed series never refuses: bin order is run order', () => {
+		// One series, whole bins: a grid of one, which reads as runs as well.
+		const one = grid(1, 12, 1);
+		expect(rowLayoutOf(['x'], one.length, columns(one))).toEqual({
+			kind: 'grid',
+			facets: 1,
+			bins: 12,
+			series: 1
+		});
+		// Two bin edges that collide in f32: a run of two, which no check needs.
+		const collided = Float32Array.from([0, 10, 20, 20, 30, 40]);
+		expect(rowLayoutOf(['x'], collided.length, columns(collided))).toBe(RUNS);
+		// Not whole bins, a column missing, bins that repeat unfaceted: all runs.
+		const ragged = grid(1, 6, 3).subarray(0, 16);
+		expect(rowLayoutOf(['x'], ragged.length, columns(ragged))).toBe(RUNS);
+		expect(rowLayoutOf(['x'], 12, columns(null))).toBe(RUNS);
+		const repeated = runs(6, 3);
+		expect(rowLayoutOf(['x'], repeated.length, columns(repeated))).toBe(RUNS);
+		// Faceted without a series: one row per bin per cell.
+		const cells = grid(3, 6, 1);
+		expect(rowLayoutOf(['x', '__facet'], cells.length, columns(cells), true)).toMatchObject({
+			kind: 'grid',
+			facets: 3,
+			series: 1
+		});
 	});
 
 	it('refuses padded rows that are not a whole grid, and never reads them as runs', () => {

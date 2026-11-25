@@ -230,9 +230,9 @@
 		table: entry.table,
 		transforms: effectiveTransforms,
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
-		// Connected topology - ordered by dimension (y)
-		// The fill reads a padded grid as well as runs (Areas' row addressing).
+		// The fill and its outline read a padded grid as well as runs (PathShaderLib).
 		_rowLayouts: READS_RUNS_AND_GRIDS,
+		// Connected topology - ordered by dimension (y)
 		_orderConfig: {
 			seriesChannel: markSeries.selectField ? seriesChannelKey : null,
 			dimensionChannel: entry.order != null ? '__order' : 'y'

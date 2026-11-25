@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { isBinExpression } from '$lib/sql/bin';
 	import { READS_RUNS_AND_GRIDS } from './lifecycle/row-layout';
 	import { getContext, onDestroy, untrack } from 'svelte';
 	import { MarkLifecycleV2 } from './lifecycle/MarkLifecycleV2.svelte';
@@ -223,9 +224,9 @@
 		transforms: entry.transforms ?? [],
 		select: { ...channelSelect, ...resolvedTip.extraSelect },
 		colorChannel: 'stroke',
-		// Connected topology config - ensures data is ordered for line connectivity
 		// Lines read a padded grid as well as runs (PathShaderLib's row addressing).
 		_rowLayouts: READS_RUNS_AND_GRIDS,
+		// Connected topology config - ensures data is ordered for line connectivity
 		_orderConfig: {
 			seriesChannel: markSeries.selectField ? seriesChannelKey : null,
 			dimensionChannel: entry.order != null ? '__order' : 'x'
@@ -329,6 +330,10 @@
 		if (!lodEnabled) return false;
 		if (lodDecimate === false || faceted) return false;
 		if (setup?.rowLayout.kind === 'grid') return false;
+		// A binned line's result is a grid unless padding refuses it, which only
+		// a result can say: not eligible until one has, or every binned line
+		// would build a decimator at mount to drop it on its first result.
+		if (isBinExpression(entry.x) && !setup?.dataVersion) return false;
 		const xType = chartContext.scaleTypes?.x;
 		if (xType === 'log' || xType === 'symlog') return false;
 		return true;
