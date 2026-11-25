@@ -64,7 +64,7 @@ import { MarkHandle } from '$lib/query-engine/MarkHandle.svelte';
 import type { FilterGroup } from '$lib/query-engine/FilterGroup.svelte';
 import { isContinuousScale, isTemporalScale } from '$lib/scales/scale-categories';
 import { buildSchemaMap, type ColumnSchema } from '$lib/query-engine/QueryEngine';
-import { type AutoBinNode, isBinExpression } from '$lib/sql/bin';
+import { type AutoBinNode, isBinExpression, rebinLevel } from '$lib/sql/bin';
 import { isRollingAvgExpression } from '$lib/sql/rolling-avg';
 import { isWindowExpression } from '$lib/sql/expression-utils';
 import { identityKeyFor } from '$lib/query-engine/identity-key';
@@ -433,8 +433,14 @@ export class MarkLifecycleV2 {
 		} as const;
 	}
 
-	/** The bins of each numeric bin channel, for dense() to pad from; null without any. */
-	#binPadding(): Record<string, BinPadding> | null {
+	/**
+	 * The bins of each numeric bin channel, for dense() to pad from; null without
+	 * any. With `at`, the bins they would have with that axis's view at `domain`.
+	 */
+	#binPadding(at?: {
+		axis: 'x' | 'y';
+		domain: [number, number];
+	}): Record<string, BinPadding> | null {
 		if (this.#autoBinNodes.size === 0 || !this.#fieldStats) return null;
 		let out: Record<string, BinPadding> | null = null;
 		for (const [ch, value] of Object.entries(this.#config.select)) {
@@ -443,13 +449,62 @@ export class MarkLifecycleV2 {
 			const padding = value.padding(
 				fieldInfo,
 				scaleType,
-				currentDomain,
+				at?.axis === axis ? at.domain : currentDomain,
 				multiplier,
 				this.#timeOrigin(axis)
 			);
 			if (padding) (out ??= {})[ch] = padding;
 		}
 		return out;
+	}
+
+	/** The binned field's extent per axis, for #viewLevel: recomputed when the stats change. */
+	#levelExtent: { stats: unknown; xType: string; yType: string; x: number; y: number } = {
+		stats: null,
+		xType: '',
+		yType: '',
+		x: NaN,
+		y: NaN
+	};
+
+	/**
+	 * The rebin level of a view [lo, hi] on a binned axis (sql/bin.ts,
+	 * rebinLevel): what the bins are resolved from, and what the rung compares to
+	 * decide a re-bin. 0 where the axis's bins do not follow the view, or before
+	 * the field's statistics. Called every frame by the rung: allocates nothing
+	 * once the extents are cached.
+	 */
+	#viewLevel(axis: 'x' | 'y', lo: number, hi: number): number {
+		const stats = this.#fieldStats;
+		if (!stats) return 0;
+		const cache = this.#levelExtent;
+		const xType = this.actualXScaleType;
+		const yType = this.actualYScaleType;
+		if (cache.stats !== stats || cache.xType !== xType || cache.yType !== yType) {
+			cache.stats = stats;
+			cache.xType = xType;
+			cache.yType = yType;
+			cache.x = NaN;
+			cache.y = NaN;
+			for (const [channel, node] of this.#autoBinNodes) {
+				const of = channel.startsWith('x') ? 'x' : 'y';
+				if (!node.followsView || !Number.isNaN(cache[of])) continue;
+				cache[of] = node.extentWidth(stats, of === 'x' ? xType : yType);
+			}
+		}
+		return rebinLevel(hi - lo, cache[axis]);
+	}
+
+	/**
+	 * Whether the bins resolved with `axis`'s view at [lo, hi] are other bins
+	 * than the current parts'. Neighbouring levels often round to the same nice
+	 * step, and those need no query. True when either cannot be told (no padding:
+	 * a time axis without an origin yet, a field with one value).
+	 */
+	#binsDifferAt(axis: 'x' | 'y', lo: number, hi: number): boolean {
+		const current = this.#resolvedQueryParts?.binKey ?? null;
+		const next = binSpecKey(this.#binPadding({ axis, domain: [lo, hi] }));
+		return current === null || next === null || current !== next;
 	}
 
 	/**
@@ -713,7 +768,8 @@ export class MarkLifecycleV2 {
 			);
 			this.#adaptiveBinRung = new AdaptiveBinRung(gpuCoordinator, chartContext, {
 				binAxes,
-				binningThreshold: 1.5,
+				levelOf: (axis, lo, hi) => this.#viewLevel(axis, lo, hi),
+				binsDiffer: (axis, lo, hi) => this.#binsDifferAt(axis, lo, hi),
 				setParam: (_key, value) => {
 					const e = chartContext.config.entries.get(markId);
 					if (!e) return;
