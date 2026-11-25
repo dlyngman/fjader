@@ -148,7 +148,13 @@ export function getDeclarationChart(component: string): DeclarationChart {
 }
 
 export class DeclarationRegistry {
-	declarations = $state<ChartDeclaration[]>([]);
+	/**
+	 * Raw: the list is replaced, never changed in place, and its declarations
+	 * must stay the objects that were registered. Deep state would hand them
+	 * back as proxies, which a release cannot match against what it registered
+	 * (it removed nothing), and the specs' live values are getters either way.
+	 */
+	declarations = $state.raw<ChartDeclaration[]>([]);
 
 	register(declaration: ChartDeclaration): () => void {
 		this.declarations = [...this.declarations, declaration];
