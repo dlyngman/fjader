@@ -177,6 +177,8 @@ export interface StatementRecord {
 	/** performance.now() when handed to the connection, and when it settled. */
 	start: number;
 	end: number;
+	/** Rows a query returned (its result's numRows), when it returned a table. */
+	rows?: number;
 	error?: unknown;
 }
 
@@ -731,10 +733,12 @@ export class QueryEngine {
 		if (interaction) this.#interactionInFlight++;
 		const start = performance.now();
 		let error: unknown;
+		let result: T | undefined;
 		// Paired with #mainIdle in the finally below.
 		if (!lane) this.#mainBusy();
 		try {
-			return lane ? await runSliced!(lane) : await run(conn);
+			result = lane ? await runSliced!(lane) : await run(conn);
+			return result;
 		} catch (e) {
 			error = e;
 			throw e;
@@ -751,6 +755,7 @@ export class QueryEngine {
 					caller: place.callerId,
 					start,
 					end: performance.now(),
+					rows: (result as { numRows?: unknown } | undefined)?.numRows as number | undefined,
 					error
 				};
 				// A listener is for debugging: one that throws must not fail the

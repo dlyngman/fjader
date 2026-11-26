@@ -32,8 +32,11 @@
 	import { Toggle, IntervalX } from '$lib/interactors';
 	import { Grid } from '$lib/components/guides';
 	import { bin } from '$lib/sql/bin';
+	import { attachQueryLog } from '$lib/query-engine/debug/query-log';
 
 	const { queryEngine } = initFjader();
+	// Every statement the engine sends, with the rows it returned: "Save log".
+	const log = attachQueryLog(queryEngine);
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 
@@ -45,6 +48,131 @@
 
 	// Case 9: remounts the line inside whatever view the chart has.
 	let remounts = $state(0);
+
+	// --- Scripted session (docs/measuring.md) ---------------------------------
+	// Zooms deep into case 1 (a line per carrier) and case 4 (faceted stacked
+	// areas, the largest cross), then pans each about three views, so a
+	// windowed path moves its window several times. The log names each phase
+	// (`windows`), for `qlog.py --window zoom-1` and the like.
+	let running = $state(false);
+	let windows = {};
+	const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+	const frame = () => new Promise((r) => requestAnimationFrame(() => r()));
+	const panel = (id) => document.querySelector(`[data-case="${id}"]`);
+	const foreground = (id) => panel(id).querySelector('svg.svg-foreground');
+	const plotRect = (id) =>
+		panel(id).querySelector('rect.interaction-target').getBoundingClientRect();
+	const moveType =
+		typeof window !== 'undefined' && 'onpointerrawupdate' in window
+			? 'pointerrawupdate'
+			: 'pointermove';
+
+	function pointer(target, type, x, y, buttons = 0) {
+		target.dispatchEvent(
+			new PointerEvent(type, {
+				bubbles: type !== 'pointerenter' && type !== 'pointerleave',
+				cancelable: true,
+				composed: true,
+				pointerId: 1,
+				pointerType: 'mouse',
+				isPrimary: true,
+				button: 0,
+				buttons,
+				clientX: x,
+				clientY: y
+			})
+		);
+	}
+
+	async function phase(name, run) {
+		performance.mark(`fjader:phase:${name}`);
+		const start = performance.now();
+		await run();
+		// Let the last queries land inside the phase.
+		await sleep(800);
+		windows[name] = { start, end: performance.now() };
+	}
+
+	async function drag(id, path, ms) {
+		const svg = foreground(id);
+		const [x0, y0] = path(0);
+		pointer(svg, 'pointerdown', x0, y0, 1);
+		const start = performance.now();
+		for (;;) {
+			await frame();
+			const t = Math.min(1, (performance.now() - start) / ms);
+			const [x, y] = path(t);
+			pointer(svg, moveType, x, y, 1);
+			if (t >= 1) break;
+		}
+		const [x1, y1] = path(1);
+		pointer(svg, 'pointerup', x1, y1, 0);
+	}
+
+	async function zoomAndPan(id) {
+		panel(id).scrollIntoView({ block: 'center' });
+		await sleep(500);
+		const r = plotRect(id);
+		const y = r.bottom + 10;
+		const at = (f) => r.left + r.width * f;
+		const svg = foreground(id);
+		pointer(svg.closest('.chart-cell') ?? svg, 'pointerenter', at(0.5), y);
+		pointer(svg, 'pointerenter', at(0.5), y);
+		// The wheel handler zooms only after the pointer has dwelt.
+		await sleep(400);
+		await phase(`zoom-${id}`, async () => {
+			for (let i = 0; i < 30; i++) {
+				svg.dispatchEvent(
+					new WheelEvent('wheel', {
+						bubbles: true,
+						cancelable: true,
+						clientX: at(0.5),
+						clientY: y,
+						deltaY: -100
+					})
+				);
+				await sleep(60);
+			}
+		});
+		await phase(`pan-${id}`, async () => {
+			for (let k = 0; k < 4; k++) {
+				await drag(id, (t) => [at(0.85 - 0.7 * t), y], 1500);
+				await sleep(300);
+			}
+		});
+		pointer(svg, 'pointerleave', r.right + 1, r.top - 1);
+	}
+
+	async function runSession() {
+		running = true;
+		// A synthetic pointer id has no active pointer: capture throws.
+		const capture = Element.prototype.setPointerCapture;
+		const release = Element.prototype.releasePointerCapture;
+		Element.prototype.setPointerCapture = function (id) {
+			try {
+				capture.call(this, id);
+			} catch {
+				// NotFoundError for the synthetic pointer.
+			}
+		};
+		Element.prototype.releasePointerCapture = function (id) {
+			try {
+				release.call(this, id);
+			} catch {
+				// As above.
+			}
+		};
+		try {
+			// Everything before the session: the page's load.
+			windows = { load: { start: 0, end: performance.now() } };
+			await zoomAndPan(1);
+			await zoomAndPan(4);
+		} finally {
+			Element.prototype.setPointerCapture = capture;
+			Element.prototype.releasePointerCapture = release;
+			running = false;
+		}
+	}
 
 	onMount(async () => {
 		try {
@@ -104,6 +232,16 @@
 			on the way, or opens a gap between a stack's bands, and a slow drag of the brush feels continuous.
 		</p>
 
+		<p>
+			<button onclick={runSession} disabled={running}>
+				{running ? "running… don't move the mouse" : 'Run session'}
+			</button>
+			<button onclick={() => log.download('qlog-pathgrid.json', { windows })} disabled={running}>
+				Save log
+			</button>
+			Reload between runs. The session zooms deep into cases 1 and 4 and pans each about three views.
+		</p>
+
 		<div class="grid sticky">
 			<div class="case">
 				<h3>Brush: distance</h3>
@@ -154,7 +292,7 @@
 					goes at once (it is left out, not drawn at zero); widen the brush past 1 500 and it is
 					back at once, with nothing to travel from.
 				</p>
-				<div class="panel">
+				<div class="panel" data-case="1">
 					<ChartContainer xLabel="delay" yLabel="count">
 						<Frame />
 						<AxisLeft />
@@ -231,7 +369,7 @@
 					right. B6 has no long flights: its cell shows two bands. Nothing leaks in from the next
 					cell at either edge.
 				</p>
-				<div class="panel">
+				<div class="panel" data-case="4">
 					<ChartContainer xLabel="delay" yLabel="count" fx="carrier">
 						<Frame />
 						<AxisLeft />
