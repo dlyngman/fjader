@@ -851,6 +851,7 @@ export class ChartScales {
 		}
 	};
 
+	/** Zoom the axes asked for that can zoom; whether any did. */
 	accumulateZoom = (
 		innerPoint: { x: number; y: number },
 		scaleFactor: number,
@@ -858,13 +859,17 @@ export class ChartScales {
 		doY: boolean,
 		innerWidth: number,
 		innerHeight: number
-	): void => {
+	): boolean => {
+		let zoomed = false;
 		if (doX && isPanZoomScale(this.#xScaleInstance)) {
 			this.#xScaleInstance.accumulateZoom(innerPoint.x / innerWidth, scaleFactor);
+			zoomed = true;
 		}
 		if (doY && isPanZoomScale(this.#yScaleInstance)) {
 			this.#yScaleInstance.accumulateZoom(1 - innerPoint.y / innerHeight, scaleFactor);
+			zoomed = true;
 		}
+		return zoomed;
 	};
 
 	applyZoom = (

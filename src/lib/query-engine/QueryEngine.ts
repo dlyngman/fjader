@@ -1695,6 +1695,7 @@ export class QueryEngine {
 		// And the selection filter: a brush moves it while this flies.
 		const filter = reg.filterGroup.selection.predicate(reg.descriptor.route ?? NO_ROUTE) ?? [];
 		handle.sentWindow = window;
+		handle.queriesInFlight++;
 		this.query(sqlStr, markReadOptions(markId, reg.descriptor, preagg?.table ?? null))
 			.catch((e) => {
 				if (!preagg || (e as Error)?.name === 'AbortError') throw e;
@@ -1713,6 +1714,9 @@ export class QueryEngine {
 			.catch((e) => {
 				if ((e as Error)?.name === 'AbortError') return;
 				handle._setError(e as Error);
+			})
+			.finally(() => {
+				handle.queriesInFlight--;
 			});
 	}
 

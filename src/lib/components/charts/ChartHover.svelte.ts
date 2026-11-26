@@ -1,10 +1,13 @@
 import { SvelteSet } from 'svelte/reactivity';
 
 /**
- * How long after its last wheel event a wheel zoom still counts as a gesture:
- * wheel events have no end. The tooltip table's debounce after a data change.
+ * How long things are let settle: a wheel zoom still counts as a gesture until
+ * this long after its last wheel event (wheel events have no end), and a
+ * mark's tooltip table is written this long after its data last changed
+ * (MarkLifecycleV2). One value, so a write is not held for a gesture and then
+ * for a debounce of another length.
  */
-export const WHEEL_GESTURE_MS = 300;
+export const SETTLE_MS = 300;
 
 /**
  * Whether the pointer is over any of a chart's cells: hover intent, for work
@@ -43,7 +46,7 @@ export class ChartHover {
 	}
 
 	/**
-	 * A wheel zoom on a cell: a gesture until WHEEL_GESTURE_MS after the last
+	 * A wheel zoom on a cell: a gesture until SETTLE_MS after the last
 	 * one. One timer per gesture, pushed back by the events that follow, so a
 	 * stream of wheel events sets no timer each.
 	 */
@@ -52,7 +55,7 @@ export class ChartHover {
 		if (this.#wheelTimer !== null) return;
 		this.#wheeling = true;
 		const settle = () => {
-			const left = this.#lastWheel + WHEEL_GESTURE_MS - performance.now();
+			const left = this.#lastWheel + SETTLE_MS - performance.now();
 			if (left > 0) {
 				this.#wheelTimer = setTimeout(settle, left);
 				return;
@@ -60,7 +63,7 @@ export class ChartHover {
 			this.#wheelTimer = null;
 			this.#wheeling = false;
 		};
-		this.#wheelTimer = setTimeout(settle, WHEEL_GESTURE_MS);
+		this.#wheelTimer = setTimeout(settle, SETTLE_MS);
 	}
 
 	/** True while a pan or zoom gesture is under way on any cell. Reactive. */

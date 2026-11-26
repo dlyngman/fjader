@@ -63,6 +63,12 @@ export class MarkHandle {
 	 */
 	resultFilter: unknown[] | null = null;
 	/**
+	 * This mark's queries sent and not yet settled (landed, failed or
+	 * superseded). Plain: read when deciding whether the data is settled, as
+	 * at a gesture's end, never reacted to.
+	 */
+	queriesInFlight = 0;
+	/**
 	 * The bin window the mark's last query went out with (or will, for an
 	 * inactive mark's catch-up, which reads the params when it is sent). Set by
 	 * the engine as it sends. A window in `params` that differs was never sent:

@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { ChartHover, WHEEL_GESTURE_MS } from './ChartHover.svelte';
+import { ChartHover, SETTLE_MS } from './ChartHover.svelte';
 
 describe('ChartHover', () => {
 	afterEach(() => {
 		vi.useRealTimers();
+		vi.restoreAllMocks();
 	});
 
 	it('is hovered while the pointer is over any cell', () => {
@@ -27,18 +28,18 @@ describe('ChartHover', () => {
 		expect(h.gesturing).toBe(false);
 	});
 
-	it('is gesturing until a wheel zoom has been quiet for WHEEL_GESTURE_MS', () => {
+	it('is gesturing until a wheel zoom has been quiet for SETTLE_MS', () => {
 		vi.useFakeTimers();
 		const h = new ChartHover();
 		h.wheel();
 		expect(h.gesturing).toBe(true);
 		// Wheel events keep coming: still one gesture.
 		for (let i = 0; i < 5; i++) {
-			vi.advanceTimersByTime(WHEEL_GESTURE_MS / 2);
+			vi.advanceTimersByTime(SETTLE_MS / 2);
 			h.wheel();
 		}
 		expect(h.gesturing).toBe(true);
-		vi.advanceTimersByTime(WHEEL_GESTURE_MS - 1);
+		vi.advanceTimersByTime(SETTLE_MS - 1);
 		expect(h.gesturing).toBe(true);
 		vi.advanceTimersByTime(1);
 		expect(h.gesturing).toBe(false);

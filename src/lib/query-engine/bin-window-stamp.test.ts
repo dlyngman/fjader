@@ -117,3 +117,31 @@ describe('the bin window stamp', () => {
 		});
 	});
 });
+
+describe('queries in flight', () => {
+	it('counts each mark query from its send until it lands', async () => {
+		const h = mark();
+		h.setBinWindow([0, 10], true);
+		h.setBinWindow([5, 15], true);
+		expect(h.queriesInFlight).toBe(2);
+		pending[0]({ numRows: 1 });
+		await settle();
+		expect(h.queriesInFlight).toBe(1);
+		pending[1]({ numRows: 2 });
+		await settle();
+		expect(h.queriesInFlight).toBe(0);
+	});
+
+	it('a failed or superseded query settles too, so the count does not stick', async () => {
+		const h = mark();
+		vi.mocked(engine.query).mockImplementation((_sql, opts) =>
+			opts?.callerId
+				? Promise.reject(new DOMException('superseded', 'AbortError'))
+				: Promise.resolve([] as never)
+		);
+		h.setBinWindow([0, 10], true);
+		expect(h.queriesInFlight).toBe(1);
+		await settle();
+		expect(h.queriesInFlight).toBe(0);
+	});
+});

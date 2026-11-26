@@ -118,6 +118,7 @@ import {
 	windowPaddedBins
 } from './bin-window';
 import { binRowsMoved, binSpecKey, heldCoversView, isRebin, rebinTweens } from './rebin';
+import { SETTLE_MS } from '$lib/components/charts/ChartHover.svelte';
 import {
 	buildQueryParts,
 	assembleQuery,
@@ -1326,10 +1327,15 @@ export class MarkLifecycleV2 {
 				};
 				// Sent from this effect, not a timer, so it goes out before a preagg
 				// build the same pointer enter queues (see Preagg.activate).
-				// A catch-up result is one result, with nothing to settle.
+				// A catch-up result is one result, with nothing to settle. A query
+				// still in flight (a gesture's last rebin or window move, as it ends)
+				// is about to replace these rows: debounced too, so its result restarts
+				// the wait and one write follows; a superseded one lets the timer write.
 				const catchUp = this.#handle?.resultCause === 'catchUp';
-				if (dataChanged && !catchUp) this.#tooltipWriteTimeout = setTimeout(write, 300);
-				else write();
+				const settling = (this.#handle?.queriesInFlight ?? 0) > 0;
+				if ((dataChanged || settling) && !catchUp) {
+					this.#tooltipWriteTimeout = setTimeout(write, SETTLE_MS);
+				} else write();
 			});
 			return () => clearTimeout(this.#tooltipWriteTimeout!);
 		});

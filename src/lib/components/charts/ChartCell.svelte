@@ -663,6 +663,8 @@
 		event.preventDefault();
 
 		if (event.shiftKey) {
+			// Re-binning changes the data as a zoom does: a gesture too.
+			chartHover.wheel();
 			// Per-mark routing via rung-based API
 			const lodSurface = tooltipManager?.currentMarkLOD;
 			if (lodSurface) {
@@ -675,13 +677,14 @@
 			return;
 		}
 
-		chartHover.wheel();
 		pointerBuffer.x = ptrX(event);
 		pointerBuffer.y = ptrY(event);
 		const { xInBounds, yInBounds, innerPoint } = layout.getActiveAxes(pointerBuffer);
 		const scaleFactor =
 			event.deltaY < 0 ? 1 + Math.abs(event.deltaY) * 0.0025 : 1 - Math.abs(event.deltaY) * 0.0025;
 		// Parallel axis zoom takes priority — yInBounds is sufficient (same margin logic as regular axes)
+		// A gesture only when an axis zoomed: a wheel over a band axis or a
+		// margin changes nothing, and need not hold back tooltip tables.
 		if (
 			yInBounds &&
 			!!scales.parallelScales &&
@@ -693,8 +696,8 @@
 				layout.innerHeight
 			)
 		) {
-			// handled by parallel axis
-		} else {
+			chartHover.wheel();
+		} else if (
 			scales.accumulateZoom(
 				innerPoint,
 				scaleFactor,
@@ -702,7 +705,9 @@
 				yInBounds,
 				layout.innerWidth,
 				layout.innerHeight
-			);
+			)
+		) {
+			chartHover.wheel();
 		}
 		tooltipManager?.suppress(100);
 	}
@@ -1060,6 +1065,10 @@
 		// the pointer now, and the one that had it reports the loss.
 		if (event.target !== pressTarget && pressTarget?.hasPointerCapture?.(event.pointerId)) return;
 		if (!isPanning) chartContext.onInteractorDragEnd?.();
+		// A capture lost with no pointerup (the element re-rendered or removed
+		// mid-pan, another element taking capture) ends the pan: left on, the
+		// chart would stay gesturing, and its marks' tooltip tables unwritten.
+		else stopPan();
 		pressPointerId = null;
 		pressRerouted = false;
 	}
