@@ -281,8 +281,8 @@
 			<button onclick={() => log.download('qlog-pathgrid.json', { windows })} disabled={running}>
 				Save log
 			</button>
-			Reload between runs. The session zooms deep into cases 1 and 4 at the median delay and pans each
-			about two views and back.
+			Reload between runs. The session zooms deep into cases 1 and 4 at the median delay, pans each about
+			two views and back in short drags, then in one long drag each way.
 		</p>
 
 		<div class="grid sticky">
