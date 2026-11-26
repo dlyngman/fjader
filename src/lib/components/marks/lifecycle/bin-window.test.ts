@@ -4,9 +4,13 @@ import {
 	binWindowFor,
 	binWindowNeedsMove,
 	insideBinWindow,
-	viewInBinUnits
+	MARGIN,
+	viewInBinUnits,
+	windowCoversRange,
+	windowPaddedBins
 } from './bin-window';
-import { intervalWidthMs } from '$lib/sql/bin';
+import { AutoBinNode, bin, intervalWidthMs, REBIN_RATIO } from '$lib/sql/bin';
+import { windowBinCount } from '$lib/transforms';
 import type { BinPadding } from '$lib/types';
 
 describe('a viewport in the bins’ units', () => {
@@ -135,5 +139,87 @@ describe('a window snapped to the bin grid', () => {
 		expect(intervalWidthMs('INTERVAL 1 month')).toBe(30 * DAY);
 		expect(intervalWidthMs('INTERVAL 2 days')).toBe(2 * DAY);
 		expect(intervalWidthMs('not an interval')).toBeNull();
+	});
+});
+
+describe('a path’s bin cap over a window (windowPaddedBins)', () => {
+	// The padding's row limit over one bin's rows: ten series (10 + 1), forty
+	// facets of ten series, and a few in between.
+	const caps = Array.from({ length: 140 }, (_, i) => 20 + i * 7);
+	const levels = [1, 2, 3, 4, 5, 6, 8, 10, 12, 15];
+	// Positions within a level (0: its widest view, 1: its narrowest) and
+	// across the extent (0: the start, 1: the end).
+	const within = [0.001, 0.25, 0.5, 0.75, 0.999];
+	const across = [0, 0.13, 0.3, 0.5, 0.71, 0.97, 1];
+
+	/** The views of rebin level `level` on an extent `width` wide, its widest first. */
+	function levelWidths(width: number, level: number): number[] {
+		return within.map((f) => width / REBIN_RATIO ** (level - 0.5 + f));
+	}
+
+	function check(
+		node: AutoBinNode,
+		fieldInfo: Record<string, { min: number; max: number; type?: string }>,
+		scaleType: string,
+		lo: number,
+		width: number,
+		t0: number | null
+	) {
+		for (const cap of caps) {
+			for (const level of levels) {
+				for (const w of levelWidths(width, level)) {
+					// The bins are planned at one view of the level (the rebin's)...
+					const at: [number, number] = [lo + (width - w) / 2, lo + (width + w) / 2];
+					const bins = node.padding(fieldInfo, scaleType, at, 1, t0, cap, 8, windowPaddedBins);
+					expect(bins).not.toBeNull();
+					// ...and padded over a window placed at any view of the level.
+					for (const other of levelWidths(width, level)) {
+						for (const f of across) {
+							const start = lo + f * (width - other);
+							const view = viewInBinUnits([start, start + other], t0);
+							const count = windowBinCount(bins!, binWindowFor(view, bins!));
+							expect(count, `cap ${cap}, level ${level}`).toBeLessThanOrEqual(cap);
+						}
+					}
+				}
+			}
+		}
+	}
+
+	it('numeric bins: a window at the cap never passes the row limit', () => {
+		const node = bin('v');
+		check(node, { v: { min: -37.5, max: 912.25 } }, 'linear', -37.5, 949.75, null);
+	});
+
+	it('time bins: a window at the cap never passes the row limit', () => {
+		const min = Date.UTC(2019, 0, 1);
+		const max = Date.UTC(2024, 6, 1);
+		const t0 = min / 1000;
+		const node = bin('t');
+		// Views are seconds from the scale's origin, as a time axis draws them.
+		check(node, { t: { min, max, type: 'date' } }, 'time', 0, (max - min) / 1000, t0);
+	});
+
+	it('whole extent: the window is clipped to it, so no more than its bins', () => {
+		expect(windowPaddedBins(500, 0, false)).toBe(500);
+		expect(windowPaddedBins(500, -2, true)).toBe(500);
+		expect(windowPaddedBins(500, 2, false)).toBe(500);
+	});
+
+	it('deep in: about (1 + 2·MARGIN) views of bins, plus the snapped ends', () => {
+		const share = (1 + 2 * MARGIN) * REBIN_RATIO ** (0.5 - 10);
+		expect(windowPaddedBins(10_000, 10, false)).toBe(Math.ceil(10_000 * share) + 3);
+	});
+});
+
+describe('whether a path needs a window yet (windowCoversRange)', () => {
+	it('not while the window would hold the whole extent', () => {
+		expect(windowCoversRange([0, 1000], 0, 1000)).toBe(true);
+		// A quarter of the extent: 1.5 views each side reach both ends.
+		expect(windowCoversRange([375, 625], 0, 1000)).toBe(true);
+	});
+	it('once the window would leave part of it out', () => {
+		expect(windowCoversRange([0, 250], 0, 1000)).toBe(false);
+		expect(windowCoversRange([400, 500], 0, 1000)).toBe(false);
 	});
 });

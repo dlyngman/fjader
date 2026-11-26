@@ -22,6 +22,7 @@ import { tableFromIPC, type Table } from '@uwdata/flechette';
 export type { BrushActivation } from './sufficient-statistics';
 import {
 	assembleQuery,
+	windowSourceFilter,
 	castNumeric,
 	splitWindowSelect,
 	type QueryParts
@@ -42,7 +43,6 @@ import {
 import type { FilterGroup } from './FilterGroup.svelte';
 import { NO_ROUTE, type Clause, type MarkRoute } from './CrossfilterSelection.svelte';
 import type { TransformCompiler } from '$lib/transforms/TransformCompiler';
-import { binWindowSourceFilter } from '$lib/transforms';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -177,6 +177,8 @@ export interface StatementRecord {
 	/** performance.now() when handed to the connection, and when it settled. */
 	start: number;
 	end: number;
+	/** Rows a query returned (its result's numRows), when it returned a table. */
+	rows?: number;
 	error?: unknown;
 }
 
@@ -731,10 +733,12 @@ export class QueryEngine {
 		if (interaction) this.#interactionInFlight++;
 		const start = performance.now();
 		let error: unknown;
+		let result: T | undefined;
 		// Paired with #mainIdle in the finally below.
 		if (!lane) this.#mainBusy();
 		try {
-			return lane ? await runSliced!(lane) : await run(conn);
+			result = lane ? await runSliced!(lane) : await run(conn);
+			return result;
 		} catch (e) {
 			error = e;
 			throw e;
@@ -751,6 +755,7 @@ export class QueryEngine {
 					caller: place.callerId,
 					start,
 					end: performance.now(),
+					rows: (result as { numRows?: unknown } | undefined)?.numRows as number | undefined,
 					error
 				};
 				// A listener is for debugging: one that throws must not fail the
@@ -1687,18 +1692,24 @@ export class QueryEngine {
 		const parts = reg.descriptor.parts;
 		// And the bin window, for the same reason: a pan moves it while this flies.
 		const window = handle.params.binWindow ?? null;
+		// And the selection filter: a brush moves it while this flies.
+		const filter = reg.filterGroup.selection.predicate(reg.descriptor.route ?? NO_ROUTE) ?? [];
 		handle.sentWindow = window;
 		this.query(sqlStr, markReadOptions(markId, reg.descriptor, preagg?.table ?? null))
 			.catch((e) => {
 				if (!preagg || (e as Error)?.name === 'AbortError') throw e;
 				this.#preagg.readFailed(markId, preagg.table, e);
-				const baseSQL = this.#baseSQL(markId, reg);
+				const baseSQL = this.#baseSQL(markId, reg, {
+					parts,
+					filter: filter as unknown[],
+					window
+				});
 				if (!baseSQL) throw e;
 				return this.query(baseSQL, markReadOptions(markId, reg.descriptor, null));
 			})
 			// With its parts, as `cause`: a re-registration lets a query in
 			// flight land after the mark has new parts.
-			.then((table) => handle._setResult(table, cause, parts, window))
+			.then((table) => handle._setResult(table, cause, parts, window, filter as unknown[]))
 			.catch((e) => {
 				if ((e as Error)?.name === 'AbortError') return;
 				handle._setError(e as Error);
@@ -1706,28 +1717,29 @@ export class QueryEngine {
 	}
 
 	/** The query a mark runs on its base table, applying every clause. */
-	#baseSQL(markId: string, reg: MarkRegistration): string | null {
-		const { descriptor, handle } = reg;
-		const filter = reg.filterGroup.selection.predicate(reg.descriptor.route ?? NO_ROUTE);
-		// A windowed binned mark aggregates only the rows its window can hold:
-		// the padding's join keeps the window's bins either way, but filtering
-		// first saves the GROUP BY over the rest of the extent. Not when a
-		// transform reads the whole extent: the filter is a row filter, so it
-		// precedes every transform. A topN would rank series over the window
-		// (its top and its Other changing as the view pans, and differing from
-		// a preagg read, which ranks the whole extent), and a window aggregate
-		// would lose the rows before the window's edge. Those keep the windowed
-		// padding over the full aggregate: correct, without the speed-up.
-		const range =
-			descriptor.transformCompiler.hasCategoryReducingTransforms() ||
-			descriptor.parts.hasWindowAggregates
-				? null
-				: binWindowSourceFilter(descriptor.parts.bins, handle.params.binWindow);
+	#baseSQL(
+		markId: string,
+		reg: MarkRegistration,
+		/**
+		 * The parts, filter and window a query was sent with, for its fallback:
+		 * it must answer what its result is stamped with, not a brush or window
+		 * moved since. Current ones without.
+		 */
+		at?: { parts: QueryParts; filter: unknown[]; window: QueryParams['binWindow'] }
+	): string | null {
+		const { handle } = reg;
+		const descriptor = at ? { ...reg.descriptor, parts: at.parts } : reg.descriptor;
+		const filter = (at?.filter ??
+			reg.filterGroup.selection.predicate(reg.descriptor.route ?? NO_ROUTE)) as unknown[];
+		const window = at ? at.window : (handle.params.binWindow ?? null);
+		const params = at ? { ...handle.params, binWindow: window } : handle.params;
+		// A windowed binned mark aggregates only the rows its window can hold.
+		const range = windowSourceFilter(descriptor.parts, descriptor.transformCompiler, window);
 		return this.#assembleSQL(
 			descriptor,
 			descriptor.table,
 			range ? [...filter, range] : filter,
-			handle.params
+			params
 		);
 	}
 

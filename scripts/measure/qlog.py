@@ -16,6 +16,8 @@ Runs are grouped by label: `label=file`, or the file name without its " (n)" dow
 Each group's numbers are the median over its runs.
 
 --window drag     only statements sent during the log's scripted drag (/test/query-load)
+--window NAME     only statements sent during the log's window NAME (`windows` in the log:
+                  /test/path-grid's session records zoom and pan)
 --window A:B      only statements sent between A and B ms (performance.now() time)
 --by FIELDS       the group key, from connection,class,purpose,table,source,caller
                   (default connection,class,purpose,table, as report())
@@ -56,7 +58,10 @@ def window_of(log: dict, spec: str | None) -> tuple[float, float] | None:
         return float(drag['start']), float(drag['end'])
     a, sep, b = spec.partition(':')
     if not sep:
-        raise SystemExit(f'--window: expected drag or A:B, got {spec!r}')
+        named = (log.get('windows') or {}).get(spec)
+        if not named:
+            raise SystemExit(f'--window: expected drag, A:B or a window the log names, got {spec!r}')
+        return float(named['start']), float(named['end'])
     return float(a), float(b)
 
 
@@ -65,6 +70,7 @@ def analyse(log: dict, by: list[str], window: tuple[float, float] | None, raw: b
     last_end = {'main': 0.0, 'lane': 0.0}
     groups: dict[str, dict[str, float]] = {}
     total_work = total_wait = 0.0
+    total_rows = 0
     first = last = None
     n = 0
     for s in statements:
@@ -80,10 +86,12 @@ def analyse(log: dict, by: list[str], window: tuple[float, float] | None, raw: b
             value = str(s.get(field) or ('main' if field == 'connection' else '?'))
             parts.append(value if raw or field not in ('table', 'source') else normalize(value))
         key = ' '.join(parts)
-        g = groups.setdefault(key, {'n': 0, 'work': 0.0, 'wait': 0.0})
+        g = groups.setdefault(key, {'n': 0, 'work': 0.0, 'wait': 0.0, 'rows': 0})
         g['n'] += 1
         g['work'] += work
         g['wait'] += wait
+        g['rows'] += s.get('rows') or 0
+        total_rows += s.get('rows') or 0
         total_work += work
         total_wait += wait
         first = s['start'] if first is None else first
@@ -94,6 +102,7 @@ def analyse(log: dict, by: list[str], window: tuple[float, float] | None, raw: b
         'span': (last - first) if n else 0.0,
         'work': total_work,
         'wait': total_wait,
+        'rows': total_rows,
         'groups': groups,
     }
 
@@ -137,6 +146,7 @@ def main() -> int:
         ('span', 'span (ms)'),
         ('work', 'work (ms)'),
         ('wait', 'queue wait (ms)'),
+        ('rows', 'rows returned (logs from 2026-11-26 on)'),
     ]:
         cells = [f'{med([r[key] for r in runs[label]]):.0f}' for label in labels]
         print(f'| {heading} | ' + ' | '.join(cells) + ' |')
@@ -148,14 +158,15 @@ def main() -> int:
         return med([r['groups'].get(key, {}).get(field, 0.0) for r in runs[label]])
 
     ranked = sorted(keys, key=lambda k: -max(group_med(label, k, 'work') for label in labels))
-    print(f'\nGroups ({" ".join(by)}), median work / wait in ms, statements:\n')
+    print(f'\nGroups ({" ".join(by)}), median work / wait in ms, statements, rows:\n')
     print('| group | ' + ' | '.join(labels) + ' |')
     print('|---|' + '---|' * len(labels))
     for key in ranked[: args.top]:
         cells = []
         for label in labels:
             work, wait = group_med(label, key, 'work'), group_med(label, key, 'wait')
-            cells.append(f'{work:.1f} / {wait:.1f}, ×{group_med(label, key, "n"):.0f}')
+            rows = group_med(label, key, 'rows')
+            cells.append(f'{work:.1f} / {wait:.1f}, ×{group_med(label, key, "n"):.0f}, {rows:.0f} rows')
         print(f'| {key} | ' + ' | '.join(cells) + ' |')
     if len(ranked) > args.top:
         print(f'\n({len(ranked) - args.top} more groups; --top N to show them)')

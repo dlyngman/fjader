@@ -113,12 +113,15 @@ import {
 	binWindowFor,
 	binWindowNeedsMove,
 	insideBinWindow,
-	viewInBinUnits
+	viewInBinUnits,
+	windowCoversRange,
+	windowPaddedBins
 } from './bin-window';
 import { binRowsMoved, binSpecKey, heldCoversView, isRebin, rebinTweens } from './rebin';
 import {
 	buildQueryParts,
 	assembleQuery,
+	windowSourceFilter,
 	isPositionalChannel,
 	measureChannels,
 	pathGapChannels,
@@ -354,8 +357,15 @@ export class MarkLifecycleV2 {
 		if (this.#autoBinNodes.size > 0 && this.#fieldStats) {
 			for (const [ch, value] of Object.entries(resolvedSelect)) {
 				if (isBinExpression(value)) {
-					const { fieldInfo, scaleType, currentDomain, multiplier, maxBins, minSteps } =
-						this.#binArgs(ch);
+					const {
+						fieldInfo,
+						scaleType,
+						currentDomain,
+						multiplier,
+						maxBins,
+						minSteps,
+						paddedCount
+					} = this.#binArgs(ch);
 					resolvedSelect[ch] = value.resolve(
 						fieldInfo,
 						scaleType,
@@ -363,7 +373,8 @@ export class MarkLifecycleV2 {
 						currentDomain,
 						multiplier,
 						maxBins,
-						minSteps
+						minSteps,
+						paddedCount
 					);
 				}
 			}
@@ -441,8 +452,12 @@ export class MarkLifecycleV2 {
 	 * type and last re-bin domain, and the chart's step multiplier. One place,
 	 * so the bin expression and its padding cannot be resolved differently.
 	 * Reactive reads, from the deriveds that call it.
+	 *
+	 * A path mark's bins are capped by what its padding holds (#maxBins): the
+	 * window's bins while it pads one (`paddedCount`), else the whole extent's.
+	 * `padsWindow` asks for a window about to be set (#windowBand).
 	 */
-	#binArgs(channel: string) {
+	#binArgs(channel: string, padsWindow?: boolean) {
 		const axis = channel.startsWith('x') ? 'x' : 'y';
 		return {
 			axis,
@@ -452,9 +467,21 @@ export class MarkLifecycleV2 {
 			multiplier: this.#chartContext.binStepMultiplier || 1.0,
 			maxBins: this.#maxBins(),
 			// A path of two points is not a line of anything: see PATH_MIN_STEPS.
-			minSteps: this.#config._rowLayouts ? PATH_MIN_STEPS : 1
+			minSteps: this.#config._rowLayouts ? PATH_MIN_STEPS : 1,
+			// #padsWindow read for a path only: any other mark's bins must not depend
+			// on its window, or setting or clearing one would re-register it.
+			paddedCount:
+				this.#config._rowLayouts && axis === this.#binnedAxis() && (padsWindow ?? this.#padsWindow)
+					? windowPaddedBins
+					: undefined
 		} as const;
 	}
+
+	/**
+	 * Whether the mark pads a window now (a window is set on its handle). A
+	 * boolean of its own, so a window that moves does not recompute the bins.
+	 */
+	#padsWindow: boolean = $derived(this.#handle?.params.binWindow != null);
 
 	/**
 	 * The most bins this mark's binned axis may have: a bound for a PATH mark,
@@ -503,32 +530,50 @@ export class MarkLifecycleV2 {
 	get binsHeld(): 'finest' | 'coarsest' | null {
 		if (!this.#fieldStats) return null;
 		for (const [channel, node] of this.#autoBinNodes) {
-			const { axis, fieldInfo, scaleType, currentDomain, multiplier, maxBins, minSteps } =
-				this.#binArgs(channel);
+			const {
+				axis,
+				fieldInfo,
+				scaleType,
+				currentDomain,
+				multiplier,
+				maxBins,
+				minSteps,
+				paddedCount
+			} = this.#binArgs(channel);
 			// At the view as it is, not at the last re-bin's: a held mark does not
 			// re-bin (the bins at the next level are the same bins), so the domain
 			// of its last re-bin stays one from before the bound, and asked there
 			// the bins are never held.
 			const view = axis === this.#binnedAxis() && this.#lastView ? this.#lastView : currentDomain;
-			return node.held(fieldInfo, scaleType, view, multiplier, maxBins, minSteps);
+			return node.held(fieldInfo, scaleType, view, multiplier, maxBins, minSteps, paddedCount);
 		}
 		return null;
 	}
 
 	/**
 	 * The bins of each numeric bin channel, for dense() to pad from; null without
-	 * any. With `at`, the bins they would have with that axis's view at `domain`.
+	 * any. With `at`, the bins they would have with that axis's view at `domain`
+	 * (and, given, with or without a window: #binArgs).
 	 */
 	#binPadding(at?: {
 		axis: 'x' | 'y';
 		domain: [number, number];
+		padsWindow?: boolean;
 	}): Record<string, BinPadding> | null {
 		if (this.#autoBinNodes.size === 0 || !this.#fieldStats) return null;
 		let out: Record<string, BinPadding> | null = null;
 		for (const [ch, value] of Object.entries(this.#config.select)) {
 			if (!isBinExpression(value)) continue;
-			const { axis, fieldInfo, scaleType, currentDomain, multiplier, maxBins, minSteps } =
-				this.#binArgs(ch);
+			const {
+				axis,
+				fieldInfo,
+				scaleType,
+				currentDomain,
+				multiplier,
+				maxBins,
+				minSteps,
+				paddedCount
+			} = this.#binArgs(ch, at?.padsWindow);
 			const padding = value.padding(
 				fieldInfo,
 				scaleType,
@@ -536,7 +581,8 @@ export class MarkLifecycleV2 {
 				multiplier,
 				this.#timeOrigin(axis),
 				maxBins,
-				minSteps
+				minSteps,
+				paddedCount
 			);
 			if (padding) (out ??= {})[ch] = padding;
 		}
@@ -865,35 +911,7 @@ export class MarkLifecycleV2 {
 				},
 				getData: () => this.data,
 				onViewport: (axis, domain) => this.#onViewport(axis, domain),
-				triggerReBin: (axis, domain) => {
-					if (axis === 'x' || axis === 'y') this.#noteView(axis, [domain[0], domain[1]]);
-					// The window around the new view, set before the parts change: the
-					// re-registration's first query reads it as it is sent.
-					if (this.#windowedAxis() === axis) {
-						const scratch = this.#viewScratch;
-						scratch[0] = domain[0];
-						scratch[1] = domain[1];
-						const view = viewInBinUnits(scratch, this.#timeOrigin(axis), scratch);
-						// The grid of the bins on screen: the new step's is not resolved
-						// yet. Still outward, so the view is covered; the SQL snaps exactly.
-						const band = this.#resolvedQueryParts?.bins?.[`${axis}1`];
-						this.#handle?.setBinWindow(binWindowFor(view, band), false);
-					}
-					this.#lastBinDomain[axis] = [domain[0], domain[1]];
-					// #lastBinDomain is $state — #resolvedQueryParts recomputes automatically.
-					// A mark binned on one axis takes the rebin from the result itself
-					// (#takeBinStep), which re-registers its value axis. Clearing the
-					// flag here as well armed it for whichever result came next: a
-					// filter result re-registered y from the whole extent over the
-					// fit, and a rebin that kept its nice step sends no result at all
-					// (the same SQL, the same cached table), which left the
-					// driving-axis fit gated off until one came. 2D bins keep the
-					// reset: a heatmap's continuous colour domain re-registers through it.
-					if (this.#binnedAxis() === null) {
-						this.#skipDomainUpdateForAxis = axis;
-						this.#dataDerivedDomainsSet = false;
-					}
-				}
+				triggerReBin: (axis, domain) => this.#rebinTo(axis, domain)
 			});
 		}
 
@@ -1826,6 +1844,18 @@ export class MarkLifecycleV2 {
 			let skipAxis = this.#skipDomainUpdateForAxis;
 			let instantFor = this.#instantFor;
 
+			// A path's result over a window re-registers its series or ordinal colour
+			// only (a topN or sort re-reads them from every result), never a
+			// continuous scale: the window's rows would narrow it to what the window
+			// holds. Without a window it re-registers as it did before windows.
+			// Following the bins on y is the rebin ride's, for every path at once.
+			let colorState = this.#colorScaleState;
+			if (this.#dataDerivedDomainsSet && this.#config._rowLayouts && this.#handle?.resultWindow) {
+				xState = null;
+				yState = null;
+				if (!colorState?.isOrdinal) colorState = null;
+			}
+
 			// A rebin result: the value axis (count per bucket) changed unit, so
 			// it registers once, at once where nothing else would jump. Never the
 			// binned axis: the user's zoom set it, whichever result reset the skip.
@@ -1884,7 +1914,7 @@ export class MarkLifecycleV2 {
 					this.#markId,
 					this.#placeExtent,
 					instantFor,
-					this.#colorScaleState,
+					colorState,
 					this.#transformCompiler.hasCategoryReducingTransforms()
 				);
 			};
@@ -2387,20 +2417,45 @@ export class MarkLifecycleV2 {
 	// ===========================================================================
 
 	/**
-	 * The mark's query: its resolved parts, under the filter its selection
-	 * applies. What the tooltip table is written from and the viewport count
-	 * wraps. Null before setup completes (scale domains and time offsets aren't
-	 * available yet).
+	 * The mark's query for the rows on screen: the parts, bin window and
+	 * selection filter of the result it holds (before its first, the current
+	 * ones), with the window's source filter the engine adds
+	 * (windowSourceFilter). What the tooltip table is written from, the
+	 * viewport count wraps and the SQL fit reads: each describes the data
+	 * drawn, so not a window set since, whose bins may be others. Without a
+	 * window, a mark whose bins are sized for one (a path, #maxBins) would pad
+	 * the whole extent past the row limit, and get unpadded rows.
+	 *
+	 * Not the engine's assembly in every respect: it does not split window
+	 * aggregates into the engine's CTE or apply its numeric cast, so for a
+	 * rolling mean the SQL can differ from what the engine sends. Null before
+	 * setup completes (scale domains and time offsets aren't available yet).
+	 *
+	 * `current`: the current parts, window and filter instead, for the SQL fit,
+	 * which answers for the view as it is: it takes over from the held result
+	 * exactly when the view has moved past that result's window
+	 * (#fitFromResult), and the current window is placed around the view.
 	 */
-	buildQuery(): string | null {
-		if (!this.setupComplete || !this.#resolvedQueryParts) return null;
-		const filter = this.#filterGroup.selection.predicate(this.#route) ?? [];
+	buildQuery(opts: { current?: boolean } = {}): string | null {
+		const handle = this.#handle;
+		const held = opts.current ? null : (handle?.resultParts ?? null);
+		const parts = held ?? this.#resolvedQueryParts;
+		if (!this.setupComplete || !parts) return null;
+		// The filter too: a newer query in flight has another one.
+		const filter = (
+			held
+				? (handle?.resultFilter ?? [])
+				: (this.#filterGroup.selection.predicate(this.#route) ?? [])
+		) as unknown[];
+		const binWindow = held ? (handle?.resultWindow ?? null) : (handle?.params.binWindow ?? null);
+		const range = windowSourceFilter(parts, this.#transformCompiler, binWindow);
 		const q = assembleQuery({
 			table: this.#sourceTable,
-			parts: this.#resolvedQueryParts,
-			filter: filter as unknown[],
+			parts,
+			filter: range ? [...filter, range] : filter,
 			transformCompiler: this.#transformCompiler,
-			limit: this.#reactiveConfig.limit
+			limit: this.#reactiveConfig.limit,
+			binWindow
 		});
 		return q ? q.toString() : null;
 	}
@@ -3286,20 +3341,105 @@ export class MarkLifecycleV2 {
 
 	/**
 	 * The binned axis, when this mark pads and queries a window around the
-	 * viewport there (bin-window.ts): a mark that fits its value axis from the
-	 * visible bins (`fitDomain`), so the whole extent is not needed for y. A
-	 * mark without one keeps whole-extent padding for now: its y is the whole
-	 * extent's. JS transforms are not padded at all.
+	 * viewport there (bin-window.ts). JS transforms are not padded at all.
+	 *
+	 * - A path mark (a line or an area): always, once its domains are
+	 *   registered. Padding its whole extent grows with zoom depth, and a path is
+	 *   only right padded. Its value axis is registered from its first result
+	 *   and never again (#takeBinStep), so a window cannot change it; the first
+	 *   result must cover the whole extent, so no window before it has landed.
+	 *   Its curve reads one point past each end of what it draws: the window's
+	 *   cut ends are at least half a view off screen, four bins at its fewest
+	 *   steps (PATH_MIN_STEPS).
+	 * - Any other mark: when it fits its value axis from the visible bins
+	 *   (`fitDomain`), so the whole extent is not needed for y. Without one it
+	 *   pads its whole extent: its y is re-registered from each rebin's result.
 	 */
 	#windowedAxis(): 'x' | 'y' | null {
 		const axis = this.#binnedAxis();
 		if (!axis || this.#transformCompiler.hasJSTransforms()) return null;
-		// Not for a path mark yet: its curve reads a point past each end of what
-		// it draws, so its window needs a wider margin than a bar's, which is
-		// not built. It pads its whole extent.
-		if (this.#config._rowLayouts) return null;
+		if (this.#config._rowLayouts) {
+			return this.#dataDerivedDomainsSet || this.#config.passiveScales ? axis : null;
+		}
 		const fit = this.#reactiveConfig.fitDomain;
 		return fit === true || fit === (axis === 'x' ? 'y' : 'x') ? axis : null;
+	}
+
+	/**
+	 * Re-bin `axis` at the view `domain`: the window around it first, for a
+	 * mark that pads one, then the bins (#lastBinDomain), so the parts change
+	 * once and their first query carries the window. The rebin watch's
+	 * (AdaptiveBinRung.triggerReBin), and a path's first window (#onViewport).
+	 */
+	#rebinTo(axis: string, domain: readonly number[]): void {
+		if (axis === 'x' || axis === 'y') this.#noteView(axis, [domain[0], domain[1]]);
+		// The window around the new view, set before the parts change: the
+		// re-registration's first query reads it as it is sent.
+		if (this.#windowedAxis() === axis) {
+			const scratch = this.#viewScratch;
+			scratch[0] = domain[0];
+			scratch[1] = domain[1];
+			const view = viewInBinUnits(scratch, this.#timeOrigin(axis), scratch);
+			const band = this.#windowBand(axis, [domain[0], domain[1]]);
+			// A path whose window would hold the whole extent pads it without one:
+			// the same bins, and the SQL its first query at these bins had. The
+			// same check as #onViewport's, so the two cannot disagree on one view
+			// (a first window re-binning on every frame).
+			const whole = !!this.#config._rowLayouts && this.#windowCoversField(axis, view);
+			this.#handle?.setBinWindow(whole ? null : binWindowFor(view, band), false);
+		}
+		this.#lastBinDomain[axis] = [domain[0], domain[1]];
+		// #lastBinDomain is $state — #resolvedQueryParts recomputes automatically.
+		// A mark binned on one axis takes the rebin from the result itself
+		// (#takeBinStep), which re-registers its value axis. Clearing the
+		// flag here as well armed it for whichever result came next: a
+		// filter result re-registered y from the whole extent over the
+		// fit, and a rebin that kept its nice step sends no result at all
+		// (the same SQL, the same cached table), which left the
+		// driving-axis fit gated off until one came. 2D bins keep the
+		// reset: a heatmap's continuous colour domain re-registers through it.
+		if (this.#binnedAxis() === null) {
+			this.#skipDomainUpdateForAxis = axis;
+			this.#dataDerivedDomainsSet = false;
+		}
+	}
+
+	/**
+	 * Whether a window around `view` (in the bins' units) would hold the binned
+	 * field's whole extent, from its statistics: the bins are planned from the
+	 * same min and max. One answer per view, whatever bins are asked about.
+	 * Allocates nothing once the field's name is known.
+	 */
+	#windowCoversField(axis: 'x' | 'y', view: readonly [number, number]): boolean {
+		let name = this.#binFieldNames.get(axis);
+		if (name === undefined) {
+			const node =
+				this.#autoBinNodes.get(`${axis}1`) ??
+				this.#autoBinNodes.get(`${axis}2`) ??
+				this.#autoBinNodes.get(axis);
+			if (!node) return false;
+			name = typeof node.field === 'string' ? node.field : node.field.toString();
+			this.#binFieldNames.set(axis, name);
+		}
+		const stats = this.#fieldStats?.[name];
+		if (!stats) return false;
+		return windowCoversRange(view, Number(stats.min), Number(stats.max));
+	}
+	/** The binned field's name per axis, for #windowCoversField. Plain: fixed per mark. */
+	#binFieldNames = new Map<string, string>();
+
+	/**
+	 * The bin grid a window set for a view at `domain` is snapped to. A path
+	 * mark: the bins it will have there with the window, which its cap counts
+	 * (windowPaddedBins assumes the window is snapped to its own bins). Any
+	 * other mark: the bins on screen, as the new step's is not resolved yet;
+	 * still outward, so the view is covered, and the SQL snaps exactly.
+	 */
+	#windowBand(axis: 'x' | 'y', domain: [number, number]): BinPadding | undefined {
+		const bins = this.#config._rowLayouts
+			? this.#binPadding({ axis, domain, padsWindow: true })
+			: this.#resolvedQueryParts?.bins;
+		return bins?.[`${axis}1`];
 	}
 
 	/**
@@ -3318,13 +3458,40 @@ export class MarkLifecycleV2 {
 		}
 		// A window set that no query went out with (set quietly for a query that
 		// then never came): send it, so the rows on screen are not left behind.
+		// First: a window cleared quietly is one too.
 		if (current !== handle.sentWindow) {
 			handle.setBinWindow(current, true);
+			return;
+		}
+		// A path's first window, once its first result has registered its value
+		// axis, and only once the window would leave part of the extent out: one
+		// that covers it pads the same bins as none, and its other SQL would miss
+		// the cache for the same rows (a second query for every path at load).
+		// Checked each frame without allocating.
+		//
+		// Set as a rebin to the view it is placed around (#rebinTo): the bins may
+		// still be planned at an older view, several levels off (the watch moves
+		// level without a rebin when the bins come out the same), and the cap the
+		// window lifts must be counted at the view the window is around. The
+		// parts change once, and their re-registration's query carries it.
+		if (!current && this.#config._rowLayouts) {
+			if (!this.#resolvedQueryParts?.bins?.[`${axis}1`]) return;
+			const view = viewInBinUnits(domain, this.#timeOrigin(axis), this.#viewScratch);
+			if (this.#windowCoversField(axis, view)) return;
+			this.#rebinTo(axis, domain);
 			return;
 		}
 		const band = this.#resolvedQueryParts?.bins?.[`${axis}1`];
 		const view = viewInBinUnits(domain, this.#timeOrigin(axis), this.#viewScratch);
 		if (!binWindowNeedsMove(current, view, band ? binExtent(band) : null)) return;
+		// A path zoomed out until its window would hold the whole extent drops it,
+		// as a rebin there would (#rebinTo): its query meets the whole extent's in
+		// the cache, and its bins are capped for the extent again. Not by clearing
+		// the window alone, which would send the window's bins unwindowed.
+		if (this.#config._rowLayouts && this.#windowCoversField(axis, view)) {
+			this.#rebinTo(axis, domain);
+			return;
+		}
 		handle.setBinWindow(binWindowFor(view, band), true);
 	}
 
@@ -3376,7 +3543,8 @@ export class MarkLifecycleV2 {
 	 * Used by fitDomain (MIN/MAX) and potentially DensityHost (COUNT).
 	 */
 	#buildSidecarQuery(outerSelect: Record<string, unknown>, where?: unknown): Query | null {
-		const markQuery = this.buildQuery();
+		// The view as it is, not the rows on screen: see buildQuery.
+		const markQuery = this.buildQuery({ current: true });
 		if (!markQuery) return null;
 		const q = Query.from({ mark_data: sql`(${markQuery})` }).select(
 			outerSelect as Record<string, ExprValue>
