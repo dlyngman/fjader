@@ -334,7 +334,10 @@ def main() -> int:
             print('\nNo CPU profile samples for the page main thread in this window.')
             return 0
         if not any(per_fn.values()):
-            print(f'\nNo function in `{focus}` matches `{args.match}`.')
+            if keep is not None:
+                print(f'\nNo function in `{focus}` matches `{args.match}`.')
+            else:
+                print(f'\nNo JavaScript function in the CPU profile samples of `{focus}`.')
             return 0
 
         def cell(label: str, n: str, column: int) -> str:
