@@ -67,6 +67,8 @@ export class DensityHost {
 	#version: (() => number) | null;
 	/** The rows' version the last held count was of. */
 	#countedVersion = -1;
+	/** The mark's last answer was `'ask'`: its rows are the database's to count. */
+	#asksDatabase = false;
 	/** A held count put off, to be taken when the spacing allows (#countLater). */
 	#laterTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -195,8 +197,10 @@ export class DensityHost {
 		// As often as a count query went out, whoever counts: a count moves the
 		// context the rungs react to, and a pan changes it on every frame.
 		if (!this.#shouldQueryCount(lo, hi)) {
-			// A mark's own count is not left stale when the frames stop here.
-			if (this.#countInView) this.#countLater();
+			// A mark's own count is not left stale when the frames stop here. Not
+			// for a mark that said the database counts its rows: the timer would
+			// only ask it again.
+			if (this.#countInView && !this.#asksDatabase) this.#countLater();
 			return;
 		}
 		// Held by the mark: no query.
@@ -251,8 +255,10 @@ export class DensityHost {
 		if (count === 'ask') {
 			// Not asked again for these rows on a frame whose view did not move.
 			this.#countedVersion = this.#version?.() ?? -1;
+			this.#asksDatabase = true;
 			return false;
 		}
+		this.#asksDatabase = false;
 		// A query still out is of a result the mark no longer needs counted.
 		this.#querySequence++;
 		this.#countQueryPending = false;

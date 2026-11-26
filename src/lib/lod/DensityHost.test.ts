@@ -115,6 +115,18 @@ describe('DensityHost', () => {
 		await vi.waitFor(() => expect(host.ctx.visibleCount).toBe(77));
 	});
 
+	it('sets no timer for a mark whose rows the database counts, however the view moves', () => {
+		const { frame } = harness(
+			() => 'ask',
+			() => 1
+		);
+		frame();
+		const timers = vi.spyOn(globalThis, 'setTimeout');
+		for (let lo = 1; lo <= 30; lo++) frame(lo, lo + 100);
+		expect(timers).not.toHaveBeenCalled();
+		timers.mockRestore();
+	});
+
 	it('asks the database as before for a mark that says nothing', async () => {
 		const { host, query, frame } = harness();
 		frame();
