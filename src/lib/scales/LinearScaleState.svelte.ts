@@ -734,11 +734,14 @@ export class LinearScaleState {
 	}
 
 	/**
-	 * Accumulate zoom input (for coalesced wheel events).
+	 * Accumulate zoom input (for coalesced wheel events). Returns whether it
+	 * took the zoom: not on an axis with zoom disabled. A zoom at the scale's
+	 * limit is clamped when the accumulator is applied, a frame later, so it
+	 * is taken here.
 	 * @param visualCenter - Cursor position as a visual fraction [0,1] (0=left/bottom, 1=right/top)
 	 */
-	accumulateZoom(visualCenter: number, scaleFactor: number): void {
-		if (this.disableZoom) return; // Ignore zoom for auto-scaling axes
+	accumulateZoom(visualCenter: number, scaleFactor: number): boolean {
+		if (this.disableZoom) return false; // Ignore zoom for auto-scaling axes
 		this.#userDriven = true;
 		this.#endCrossfade(); // direct manipulation re-ticks live
 
@@ -747,6 +750,7 @@ export class LinearScaleState {
 		this.#zoomAccumulator.hasUpdates = true;
 		this.#setStiffness(SCALE_SPRING_PRESETS.zoom);
 		this.#ensureAnimating();
+		return true;
 	}
 
 	/**

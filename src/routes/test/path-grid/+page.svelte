@@ -57,6 +57,8 @@
 	// windowed path moves its window several times. The log names each phase
 	// (`windows`), for `qlog.py --window zoom-1` and the like.
 	let running = $state(false);
+	/** The log the last session saved, for the status line. */
+	let done = $state(null);
 	/** When the page first took pointer or wheel input: the end of its load. */
 	let firstInput = null;
 	function noteInput() {
@@ -133,7 +135,7 @@
 		return (Number(row.mid) - lo) / (hi - lo);
 	}
 
-	async function zoomAndPan(id, centre) {
+	async function zoomAndPan(id, centre, quick) {
 		panel(id).scrollIntoView({ block: 'center' });
 		await sleep(500);
 		const r = plotRect(id);
@@ -158,21 +160,47 @@
 				await sleep(60);
 			}
 		});
-		await phase(`pan-${id}`, async () => {
-			// Three drags one way and three back, 0.7 of a view each: about two
-			// views each way, past the window's margin, so it moves; and back over
-			// the data the zoom landed in.
-			for (let k = 0; k < 6; k++) {
-				const [from, to] = k < 3 ? [0.85, 0.15] : [0.15, 0.85];
-				await drag(id, (t) => [at(from + (to - from) * t), y], 1500);
-				await sleep(300);
-			}
+		// Quick: the long drags only.
+		if (!quick) {
+			await phase(`pan-${id}`, async () => {
+				// Three drags one way and three back, 0.7 of a view each: about two
+				// views each way, past the window's margin, so it moves; and back over
+				// the data the zoom landed in.
+				for (let k = 0; k < 6; k++) {
+					const [from, to] = k < 3 ? [0.85, 0.15] : [0.15, 0.85];
+					await drag(id, (t) => [at(from + (to - from) * t), y], 1500);
+					await sleep(300);
+				}
+			});
+		}
+		await phase(`pan-long-${id}`, async () => {
+			// One long gesture: pressed in the chart's own axis margin (where a pan
+			// starts), then held down out to the window's right edge, across to its
+			// left edge and back, past the chart (the pointer is captured). About
+			// five views, so the window moves several times within a single pan.
+			const stops = [at(centre), window.innerWidth - 20, 20, at(centre)];
+			const legs = stops.length - 1;
+			await drag(
+				id,
+				(t) => {
+					const k = Math.min(legs - 1, Math.floor(t * legs));
+					const u = t * legs - k;
+					return [stops[k] + (stops[k + 1] - stops[k]) * u, y];
+				},
+				12000
+			);
 		});
 		pointer(svg, 'pointerleave', r.right + 1, r.top - 1);
 	}
 
-	async function runSession() {
+	/**
+	 * The full session (cases 1 and 4: zoom, short drags, long drags; about a
+	 * minute) or the quick one (case 1: zoom and the long drags; about 15 s).
+	 * Saves its log when it ends: no button to wait for.
+	 */
+	async function runSession(quick = false) {
 		running = true;
+		done = null;
 		// A synthetic pointer id has no active pointer: capture throws.
 		const capture = Element.prototype.setPointerCapture;
 		const release = Element.prototype.releasePointerCapture;
@@ -195,8 +223,11 @@
 			// zoom tried by hand before the session is not counted as load.
 			windows = { load: { start: 0, end: firstInput ?? performance.now() } };
 			const centre = await dataCentre();
-			await zoomAndPan(1, centre);
-			await zoomAndPan(4, centre);
+			await zoomAndPan(1, centre, quick);
+			if (!quick) await zoomAndPan(4, centre, quick);
+			const name = `qlog-pathgrid${quick ? '-quick' : ''}.json`;
+			log.download(name, { windows, quick });
+			done = name;
 		} finally {
 			Element.prototype.setPointerCapture = capture;
 			Element.prototype.releasePointerCapture = release;
@@ -265,14 +296,21 @@
 		</p>
 
 		<p>
-			<button onclick={runSession} disabled={running}>
-				{running ? "running… don't move the mouse" : 'Run session'}
-			</button>
+			<button onclick={() => runSession(true)} disabled={running}>Quick session (15 s)</button>
+			<button onclick={() => runSession()} disabled={running}>Full session (1 min)</button>
 			<button onclick={() => log.download('qlog-pathgrid.json', { windows })} disabled={running}>
 				Save log
 			</button>
-			Reload between runs. The session zooms deep into cases 1 and 4 at the median delay and pans each
-			about two views and back.
+			{#if running}
+				<strong class="session-status">Running: don't move the mouse.</strong>
+			{:else if done}
+				<strong class="session-status"
+					>Done: saved {done} to Downloads. Reload for the next run.</strong
+				>
+			{/if}
+			<br />
+			Quick: case 1 zoomed deep at the median delay, then one long drag each way. Full: cases 1 and 4,
+			with short drags before the long ones. Each saves its log when it ends.
 		</p>
 
 		<div class="grid sticky">
@@ -620,6 +658,11 @@
 		display: grid;
 		grid-template-columns: repeat(2, minmax(360px, 1fr));
 		gap: 24px 16px;
+	}
+	.session-status {
+		margin-left: 8px;
+		padding: 2px 8px;
+		background: #fff3c4;
 	}
 	.case.wide {
 		grid-column: 1 / -1;

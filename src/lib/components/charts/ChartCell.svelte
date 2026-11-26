@@ -270,6 +270,7 @@
 		removeVisibilityCallback();
 		chartVisibility.remove(layout.chartId);
 		chartHover.set(layout.chartId, false);
+		chartHover.pan(layout.chartId, false);
 	});
 	onMount(() => () => hoverSettle.leave());
 
@@ -417,6 +418,9 @@
 		get hovered() {
 			return chartHover.hovered;
 		},
+		get gesturing() {
+			return chartHover.gesturing;
+		},
 		get yScaleState() {
 			return scales?.yScaleState;
 		},
@@ -515,9 +519,14 @@
 	let activePanY = $state(false);
 	let isReordering = $state(false);
 
-	// Touch/pinch zoom state
-	let initialTouchDistance = $state(0);
-	let isZooming = $state(false);
+	/**
+	 * Tell the chart a pan started or stopped (ChartHover), from the handlers
+	 * that change it: work for tooltips and clicks waits for its end. Touch
+	 * comes through the pointer handlers too.
+	 */
+	function reportGesture() {
+		chartHover.pan(layout.chartId, isPanning);
+	}
 
 	let chartCellEl: HTMLDivElement;
 	// SVG offsetX/offsetY is relative to the *target* element, not the listener,
@@ -646,6 +655,16 @@
 		return event.clientY - svgTop;
 	}
 
+	/**
+	 * A wheel step that changed the view or the bins: a gesture (ChartHover).
+	 * A mark whose data changes under it leaves the tooltip manager until its
+	 * table is rewritten (MarkLifecycleV2), so no tooltip reads the old bins.
+	 */
+	function wheelGesture() {
+		chartHover.wheel();
+		tooltipManager?.suppress(100);
+	}
+
 	function handleWheel(event: WheelEvent) {
 		if (!wheelControl.shouldCaptureWheel(event)) return;
 		event.preventDefault();
@@ -653,13 +672,13 @@
 		if (event.shiftKey) {
 			// Per-mark routing via rung-based API
 			const lodSurface = tooltipManager?.currentMarkLOD;
-			if (lodSurface) {
-				lodSurface.adjustResolution(event.deltaY);
-			} else {
-				// Fallback: chart-level bin multiplier
-				const delta = event.deltaY < 0 ? 0.035 : -0.035;
-				scales.adjustBinMultiplier(delta);
-			}
+			// Re-binning changes the data as a zoom does: a gesture too, when it
+			// changed anything (not at a bound), as a zoom counts when it zoomed.
+			const changed = lodSurface
+				? lodSurface.adjustResolution(event.deltaY)
+				: // Fallback: chart-level bin multiplier
+					scales.adjustBinMultiplier(event.deltaY < 0 ? 0.035 : -0.035);
+			if (changed) wheelGesture();
 			return;
 		}
 
@@ -669,6 +688,8 @@
 		const scaleFactor =
 			event.deltaY < 0 ? 1 + Math.abs(event.deltaY) * 0.0025 : 1 - Math.abs(event.deltaY) * 0.0025;
 		// Parallel axis zoom takes priority — yInBounds is sufficient (same margin logic as regular axes)
+		// A gesture only when an axis zoomed: a wheel over a band axis or a
+		// margin changes nothing, and need not hold back tooltip tables.
 		if (
 			yInBounds &&
 			!!scales.parallelScales &&
@@ -680,8 +701,8 @@
 				layout.innerHeight
 			)
 		) {
-			// handled by parallel axis
-		} else {
+			wheelGesture();
+		} else if (
 			scales.accumulateZoom(
 				innerPoint,
 				scaleFactor,
@@ -689,9 +710,12 @@
 				yInBounds,
 				layout.innerWidth,
 				layout.innerHeight
-			);
+			)
+		) {
+			wheelGesture();
+		} else {
+			tooltipManager?.suppress(100);
 		}
-		tooltipManager?.suppress(100);
 	}
 
 	function handleClick(event: MouseEvent) {
@@ -749,62 +773,6 @@
 			scales.resetZoom(xInBounds, yInBounds);
 		}
 		tooltipManager?.suppress(300);
-	}
-
-	function getTouchDistance(t1: Touch, t2: Touch): number {
-		const dx = t1.clientX - t2.clientX;
-		const dy = t1.clientY - t2.clientY;
-		return Math.sqrt(dx * dx + dy * dy);
-	}
-
-	function handleTouchStart(event: TouchEvent) {
-		if (event.touches.length === 2) {
-			event.preventDefault();
-			isZooming = true;
-			initialTouchDistance = getTouchDistance(event.touches[0], event.touches[1]);
-			const mid = touchMidpoint(event.touches[0], event.touches[1]);
-			pointerBuffer.x = mid.x;
-			pointerBuffer.y = mid.y;
-			const { xInBounds, yInBounds } = layout.getActiveAxes(pointerBuffer);
-			activePanX = xInBounds;
-			activePanY = yInBounds;
-		}
-	}
-
-	function touchMidpoint(t1: Touch, t2: Touch): { x: number; y: number } {
-		return {
-			x: (t1.clientX + t2.clientX) / 2 - svgLeft,
-			y: (t1.clientY + t2.clientY) / 2 - svgTop
-		};
-	}
-
-	function handleTouchMove(event: TouchEvent) {
-		if (!isZooming || event.touches.length !== 2) return;
-		const currentDistance = getTouchDistance(event.touches[0], event.touches[1]);
-		const scaleFactor = currentDistance / initialTouchDistance;
-
-		if (Math.abs(scaleFactor - 1) > 0.01) {
-			const mid = touchMidpoint(event.touches[0], event.touches[1]);
-			pointerBuffer.x = mid.x;
-			pointerBuffer.y = mid.y;
-			const { innerPoint } = layout.getActiveAxes(pointerBuffer);
-			scales.applyZoom(
-				innerPoint,
-				scaleFactor,
-				activePanX,
-				activePanY,
-				layout.innerWidth,
-				layout.innerHeight
-			);
-			initialTouchDistance = currentDistance;
-		}
-	}
-
-	function handleTouchEnd() {
-		isZooming = false;
-		isPanning = false;
-		activePanX = false;
-		activePanY = false;
 	}
 
 	// The press under way, for reroutePress: its pointer, where it is now, and
@@ -889,6 +857,7 @@
 			scales.startParallelPan(pointerBuffer.y, innerPoint.x, layout.innerWidth, layout.innerHeight)
 		) {
 			isPanning = true;
+			reportGesture();
 			scales.clearCurrentDataPoints();
 			currentInnerX = null;
 			currentInnerY = null;
@@ -913,6 +882,7 @@
 
 		if (!activePanX && !activePanY) return;
 		isPanning = true;
+		reportGesture();
 		scales.startPan(
 			pointerBuffer.x,
 			pointerBuffer.y,
@@ -936,6 +906,10 @@
 
 	function processPointerMove(event: PointerEvent) {
 		if (otherPointer(event)) return;
+		// A backstop: a pan whose release never reached the chart (its capture
+		// lost with the element, say) ends at the first move with no button down,
+		// rather than leaving the chart gesturing.
+		if (isPanning && event.buttons === 0) stopPan();
 		if (event.pointerId === pressPointerId) {
 			pressClientX = event.clientX;
 			pressClientY = event.clientY;
@@ -1043,12 +1017,19 @@
 		// the pointer now, and the one that had it reports the loss.
 		if (event.target !== pressTarget && pressTarget?.hasPointerCapture?.(event.pointerId)) return;
 		if (!isPanning) chartContext.onInteractorDragEnd?.();
+		// A capture lost with no pointerup (the element re-rendered or removed
+		// mid-pan, another element taking capture) ends the pan: left on, the
+		// chart would stay gesturing, and its marks' tooltip tables unwritten.
+		// The button may still be down: its later moves are then hover, and its
+		// release a click. Better than a pan that never ends.
+		else stopPan();
 		pressPointerId = null;
 		pressRerouted = false;
 	}
 
 	function stopPan() {
 		isPanning = false;
+		reportGesture();
 		activePanX = false;
 		activePanY = false;
 		scales.endPan();

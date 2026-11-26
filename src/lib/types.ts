@@ -719,6 +719,8 @@ export interface ChartContext {
 	shownElsewhere(scale: object): boolean;
 	/** Whether the pointer is over any of the chart's cells (hover intent). */
 	readonly hovered: boolean;
+	/** Whether a pan or zoom gesture is under way on any of its cells (ChartHover). */
+	readonly gesturing: boolean;
 	readonly yScaleState: ScaleStateInstance | null | undefined;
 	readonly scaleTypes: { x: string; y: string } | null | undefined;
 	readonly scalesReady: boolean | undefined;
@@ -762,7 +764,8 @@ export interface ChartContext {
 	unregisterMark: (markId: string) => void;
 
 	readonly binStepMultiplier: number | undefined;
-	adjustBinMultiplier?: (delta: number) => void;
+	/** Whether the multiplier changed (not at its bound). */
+	adjustBinMultiplier?: (delta: number) => boolean;
 	setBinStepMultiplier?: (value: number) => void;
 
 	// Tooltip

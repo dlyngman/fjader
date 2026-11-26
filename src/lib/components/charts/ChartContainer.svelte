@@ -480,6 +480,7 @@
 	// --- ChartConfig (reactive configuration store) ---
 	const chartConfig = new ChartConfig();
 	onDestroy(() => chartConfig.entrance.destroy());
+	onDestroy(() => chartHover.destroy());
 
 	// Register chart-level props for palette overrides
 	chartConfig.registerChart({
@@ -595,6 +596,9 @@
 		shownElsewhere: (scale) => chartVisibility.shownElsewhere(scale),
 		get hovered() {
 			return chartHover.hovered;
+		},
+		get gesturing() {
+			return chartHover.gesturing;
 		},
 		get yScaleState() {
 			return scales?.yScaleState;

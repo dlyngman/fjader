@@ -278,13 +278,21 @@ export class AdaptiveBinRung implements LODRung {
 	// Shift+scroll — adjust multiplier
 	// =========================================================================
 
-	adjustResolution(deltaY: number): void {
+	/**
+	 * Whether it changed the bins: not when the multiplier is at its bound, nor
+	 * when the bins are already held at the bound it asks past (the finest for
+	 * a finer step, the coarsest for a coarser one), where a changed multiplier
+	 * gives the same bins.
+	 */
+	adjustResolution(deltaY: number): boolean {
 		const delta = deltaY < 0 ? 0.035 : -0.035;
+		const held = this.#held?.() ?? null;
 		// Apply to chartContext — frame callback detects the change and triggers re-bin
-		this.#chartContext.adjustBinMultiplier?.(delta);
+		const changed = this.#chartContext.adjustBinMultiplier?.(delta) ?? false;
 		// Persist to entry for spec export / undo
 		const newMultiplier = this.#chartContext.binStepMultiplier ?? 1.0;
 		this.#setParam('multiplier', newMultiplier);
+		return changed && held !== (delta > 0 ? 'finest' : 'coarsest');
 	}
 
 	// =========================================================================

@@ -851,6 +851,7 @@ export class ChartScales {
 		}
 	};
 
+	/** Zoom the axes asked for that can zoom; whether any did. */
 	accumulateZoom = (
 		innerPoint: { x: number; y: number },
 		scaleFactor: number,
@@ -858,29 +859,16 @@ export class ChartScales {
 		doY: boolean,
 		innerWidth: number,
 		innerHeight: number
-	): void => {
+	): boolean => {
+		let zoomed = false;
 		if (doX && isPanZoomScale(this.#xScaleInstance)) {
-			this.#xScaleInstance.accumulateZoom(innerPoint.x / innerWidth, scaleFactor);
+			zoomed = this.#xScaleInstance.accumulateZoom(innerPoint.x / innerWidth, scaleFactor);
 		}
 		if (doY && isPanZoomScale(this.#yScaleInstance)) {
-			this.#yScaleInstance.accumulateZoom(1 - innerPoint.y / innerHeight, scaleFactor);
+			zoomed =
+				this.#yScaleInstance.accumulateZoom(1 - innerPoint.y / innerHeight, scaleFactor) || zoomed;
 		}
-	};
-
-	applyZoom = (
-		innerPoint: { x: number; y: number },
-		scaleFactor: number,
-		doX: boolean,
-		doY: boolean,
-		innerWidth: number,
-		innerHeight: number
-	): void => {
-		if (doX && isPanZoomScale(this.#xScaleInstance)) {
-			this.#xScaleInstance.accumulateZoom(innerPoint.x / innerWidth, scaleFactor);
-		}
-		if (doY && isPanZoomScale(this.#yScaleInstance)) {
-			this.#yScaleInstance.accumulateZoom(1 - innerPoint.y / innerHeight, scaleFactor);
-		}
+		return zoomed;
 	};
 
 	startPan = (
@@ -1088,9 +1076,11 @@ export class ChartScales {
 		}
 	}
 
-	adjustBinMultiplier(delta: number): void {
+	/** Scale the bin step multiplier by `1 + delta`; whether it changed (not at its bound). */
+	adjustBinMultiplier(delta: number): boolean {
 		const current = this.binStepMultiplier;
 		this.setBinStepMultiplier(current + current * delta);
+		return this.binStepMultiplier !== current;
 	}
 
 	getContextData() {

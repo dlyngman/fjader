@@ -7,7 +7,8 @@ export interface LODRung {
 	readonly destroyed: boolean;
 	readonly active: boolean;
 	readonly props: Record<string, unknown>;
-	adjustResolution?(deltaY: number): void;
+	/** Shift+scroll: whether it changed anything (a value at its bound does not). */
+	adjustResolution?(deltaY: number): boolean;
 	destroy(): void;
 }
 
@@ -20,8 +21,8 @@ export interface MarkLODParts {
 	/** The mark's rungs, in palette order; null for one not built (yet). */
 	rungs: (LODRung | null)[];
 	densityHost: DensityHost | null;
-	/** Shift+scroll over the mark, where its lifecycle has no bins to adjust. */
-	adjustResolution?(deltaY: number): void;
+	/** Shift+scroll over the mark, where its lifecycle has no bins to adjust; whether it changed anything. */
+	adjustResolution?(deltaY: number): boolean;
 }
 
 /**
@@ -29,7 +30,8 @@ export interface MarkLODParts {
  * Provides shift+scroll routing, rung iteration for palette, and density diagnostics.
  */
 export interface MarkLODSurface {
-	adjustResolution(deltaY: number): void;
+	/** Shift+scroll over the mark: whether it changed anything (ChartHover counts a gesture then). */
+	adjustResolution(deltaY: number): boolean;
 	/** Live rung instances filtered to non-destroyed. Palette should still check rung.destroyed defensively. */
 	getRungs(): LODRung[];
 	/** Density context for diagnostics display (null if no DensityHost). */
