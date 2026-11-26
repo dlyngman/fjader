@@ -55,6 +55,11 @@
 	// windowed path moves its window several times. The log names each phase
 	// (`windows`), for `qlog.py --window zoom-1` and the like.
 	let running = $state(false);
+	/** When the page first took pointer or wheel input: the end of its load. */
+	let firstInput = null;
+	function noteInput() {
+		firstInput ??= performance.now();
+	}
 	let windows = {};
 	const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 	const frame = () => new Promise((r) => requestAnimationFrame(() => r()));
@@ -184,8 +189,9 @@
 			}
 		};
 		try {
-			// Everything before the session: the page's load.
-			windows = { load: { start: 0, end: performance.now() } };
+			// The page's load: until the first input, by hand or this session's, so a
+			// zoom tried by hand before the session is not counted as load.
+			windows = { load: { start: 0, end: firstInput ?? performance.now() } };
 			const centre = await dataCentre();
 			await zoomAndPan(1, centre);
 			await zoomAndPan(4, centre);
@@ -239,6 +245,8 @@
 		}
 	});
 </script>
+
+<svelte:window onpointerdowncapture={noteInput} onwheelcapture={noteInput} />
 
 {#if loadError}
 	<p class="status error">Error: {loadError}</p>
