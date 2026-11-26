@@ -268,6 +268,9 @@ describe('topN on a path it cannot rank', () => {
 		const without = await db.all(assemble([]));
 		expect(withTop.length).toBe(without.length);
 		expect(withTop.length).toBe(BINS);
+
+		// And it cuts nothing, so the mark keeps its window's source filter.
+		expect(new TransformCompiler([topN(5)], config).hasCategoryReducingTransforms()).toBe(false);
 	});
 
 	it('includeOthers on a path ranking its series reserves no Other bucket', () => {

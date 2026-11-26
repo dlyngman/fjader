@@ -237,7 +237,14 @@ export class TransformCompiler {
 		return this.jsTransforms.length > 0;
 	}
 
+	/**
+	 * Whether a transform cuts the categories (a topN). Not a topN on a path mark
+	 * with no series to rank (MarkConfig.path without rankedSeries): it leaves the
+	 * rows as they are, so the mark keeps its window's source filter and does not
+	 * re-read its domains from every result for it.
+	 */
 	hasCategoryReducingTransforms(): boolean {
+		if (this.markConfig?.path && !this.markConfig.rankedSeries) return false;
 		return this.transforms.some((t) => t.type === 'topN');
 	}
 
