@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { ScaleGeneration } from '$lib/scales/ScaleGeneration.svelte';
 	import type { ChartVisibility } from './ChartVisibility.svelte';
-	import type { ChartHover } from './ChartHover.svelte';
+	import { SETTLE_MS, type ChartHover } from './ChartHover.svelte';
 	import { setContext, getContext, onMount } from 'svelte';
 	import { DECLARATION_REGISTRY, type DeclarationRegistry } from './declarations.svelte';
 	import InCell from './InCell.svelte';
@@ -655,6 +655,16 @@
 		return event.clientY - svgTop;
 	}
 
+	/**
+	 * A wheel step that changed the view or the bins: a gesture (ChartHover),
+	 * and no tooltip until it settles. The tooltip tables are written once the
+	 * gesture ends, so a tooltip before then reads the old bins over new ones.
+	 */
+	function wheelGesture() {
+		chartHover.wheel();
+		tooltipManager?.suppress(SETTLE_MS);
+	}
+
 	function handleWheel(event: WheelEvent) {
 		if (!wheelControl.shouldCaptureWheel(event)) return;
 		event.preventDefault();
@@ -662,16 +672,13 @@
 		if (event.shiftKey) {
 			// Per-mark routing via rung-based API
 			const lodSurface = tooltipManager?.currentMarkLOD;
-			if (lodSurface) {
-				// Re-binning changes the data as a zoom does: a gesture too. Only
-				// with a surface to re-bin, as a zoom counts only when it zoomed.
-				chartHover.wheel();
-				lodSurface.adjustResolution(event.deltaY);
-			} else {
-				// Fallback: chart-level bin multiplier
-				const delta = event.deltaY < 0 ? 0.035 : -0.035;
-				scales.adjustBinMultiplier(delta);
-			}
+			// Re-binning changes the data as a zoom does: a gesture too, when it
+			// changed anything (not at a bound), as a zoom counts when it zoomed.
+			const changed = lodSurface
+				? lodSurface.adjustResolution(event.deltaY)
+				: // Fallback: chart-level bin multiplier
+					scales.adjustBinMultiplier(event.deltaY < 0 ? 0.035 : -0.035);
+			if (changed) wheelGesture();
 			return;
 		}
 
@@ -694,7 +701,7 @@
 				layout.innerHeight
 			)
 		) {
-			chartHover.wheel();
+			wheelGesture();
 		} else if (
 			scales.accumulateZoom(
 				innerPoint,
@@ -705,9 +712,10 @@
 				layout.innerHeight
 			)
 		) {
-			chartHover.wheel();
+			wheelGesture();
+		} else {
+			tooltipManager?.suppress(100);
 		}
-		tooltipManager?.suppress(100);
 	}
 
 	function handleClick(event: MouseEvent) {
@@ -1008,6 +1016,8 @@
 		// A capture lost with no pointerup (the element re-rendered or removed
 		// mid-pan, another element taking capture) ends the pan: left on, the
 		// chart would stay gesturing, and its marks' tooltip tables unwritten.
+		// The button may still be down: its later moves are then hover, and its
+		// release a click. Better than a pan that never ends.
 		else stopPan();
 		pressPointerId = null;
 		pressRerouted = false;
@@ -1016,6 +1026,9 @@
 	function stopPan() {
 		isPanning = false;
 		reportGesture();
+		// The tooltip tables are written now that the pan has ended: until then a
+		// tooltip would read the rows from before it.
+		tooltipManager?.suppress(SETTLE_MS);
 		activePanX = false;
 		activePanY = false;
 		scales.endPan();

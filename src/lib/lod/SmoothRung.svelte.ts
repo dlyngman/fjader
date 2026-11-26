@@ -83,15 +83,17 @@ export class SmoothRung implements LODRung {
 	// Shift+scroll — adjust window size
 	// =========================================================================
 
-	adjustResolution(deltaY: number): void {
+	adjustResolution(deltaY: number): boolean {
 		this.#scrollAccum += deltaY;
 		const threshold = 60; // px of scroll per window step
-		if (Math.abs(this.#scrollAccum) >= threshold) {
-			const steps = Math.trunc(this.#scrollAccum / threshold);
-			this.#scrollAccum -= steps * threshold;
-			const current = this.#getWindow();
-			this.#setParam('window', Math.max(0, Math.min(100, current + steps)));
-		}
+		if (Math.abs(this.#scrollAccum) < threshold) return false;
+		const steps = Math.trunc(this.#scrollAccum / threshold);
+		this.#scrollAccum -= steps * threshold;
+		const current = this.#getWindow();
+		const next = Math.max(0, Math.min(100, current + steps));
+		if (next === current) return false;
+		this.#setParam('window', next);
+		return true;
 	}
 
 	// =========================================================================

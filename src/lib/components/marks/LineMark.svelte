@@ -317,8 +317,8 @@
 			rungs: [dots, smooth],
 			densityHost,
 			adjustResolution(deltaY: number) {
-				if (smooth?.active || deltaY > 0) smooth?.adjustResolution(deltaY);
-				else dots?.adjustResolution(deltaY);
+				if (smooth?.active || deltaY > 0) return smooth?.adjustResolution(deltaY) ?? false;
+				return dots?.adjustResolution(deltaY) ?? false;
 			}
 		};
 	}

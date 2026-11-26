@@ -1077,9 +1077,11 @@ export class ChartScales {
 		}
 	}
 
-	adjustBinMultiplier(delta: number): void {
+	/** Scale the bin step multiplier by `1 + delta`; whether it changed (not at its bound). */
+	adjustBinMultiplier(delta: number): boolean {
 		const current = this.binStepMultiplier;
 		this.setBinStepMultiplier(current + current * delta);
+		return this.binStepMultiplier !== current;
 	}
 
 	getContextData() {

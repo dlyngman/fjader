@@ -112,10 +112,13 @@ export class DotsRung implements LODRung {
 	// Shift+scroll — adjust threshold
 	// =========================================================================
 
-	adjustResolution(deltaY: number): void {
+	adjustResolution(deltaY: number): boolean {
 		const step = deltaY < 0 ? -1 : 1;
 		const current = this.#getThreshold();
-		this.#setParam('threshold', Math.max(10, Math.min(100, current + step)));
+		const next = Math.max(10, Math.min(100, current + step));
+		if (next === current) return false;
+		this.#setParam('threshold', next);
+		return true;
 	}
 
 	// =========================================================================

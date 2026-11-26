@@ -764,7 +764,8 @@ export interface ChartContext {
 	unregisterMark: (markId: string) => void;
 
 	readonly binStepMultiplier: number | undefined;
-	adjustBinMultiplier?: (delta: number) => void;
+	/** Whether the multiplier changed (not at its bound). */
+	adjustBinMultiplier?: (delta: number) => boolean;
 	setBinStepMultiplier?: (value: number) => void;
 
 	// Tooltip

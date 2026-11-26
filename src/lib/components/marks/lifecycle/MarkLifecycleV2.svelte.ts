@@ -747,6 +747,8 @@ export class MarkLifecycleV2 {
 	// --- Tooltip ---
 	#tooltipTableName: string;
 	#tooltipTableReady = $state(false);
+	/** Whether the chart was gesturing at the tooltip effect's last run. Plain. */
+	#tooltipGesturing = false;
 	/**
 	 * True once a tooltip table write has started, so there may be a table to
 	 * drop. Without it every lifecycle torn down before its first data (a mark
@@ -930,7 +932,7 @@ export class MarkLifecycleV2 {
 					if (binRung && !binRung.destroyed) return binRung.adjustResolution(deltaY);
 					const own = ownLOD?.();
 					if (own?.adjustResolution) return own.adjustResolution(deltaY);
-					chartContext.adjustBinMultiplier?.(deltaY < 0 ? 0.035 : -0.035);
+					return chartContext.adjustBinMultiplier?.(deltaY < 0 ? 0.035 : -0.035) ?? false;
 				},
 				getRungs: () => {
 					const rungs: LODRung[] = [];
@@ -1305,6 +1307,9 @@ export class MarkLifecycleV2 {
 			const eager = !!fitDomain && this.#transformCompiler.hasJSTransforms();
 
 			untrack(() => {
+				// The run where a gesture ends, before anything returns early.
+				const gestureEnded = this.#tooltipGesturing && !gesturing;
+				this.#tooltipGesturing = gesturing;
 				if (dataVersion === this.#tooltipWrittenFor) return;
 				clearTimeout(this.#tooltipWriteTimeout!);
 				// A data change waits for the data to settle; hover arriving at a
@@ -1327,12 +1332,14 @@ export class MarkLifecycleV2 {
 				};
 				// Sent from this effect, not a timer, so it goes out before a preagg
 				// build the same pointer enter queues (see Preagg.activate).
-				// A catch-up result is one result, with nothing to settle. A query
-				// still in flight (a gesture's last rebin or window move, as it ends)
-				// is about to replace these rows: debounced too, so its result restarts
-				// the wait and one write follows; a superseded one lets the timer write.
+				// A catch-up result is one result, with nothing to settle. At a
+				// gesture's end, a query still in flight (its last rebin or window
+				// move) is about to replace these rows: debounced too, so its result
+				// restarts the wait and one write follows; a superseded one lets the
+				// timer write. Only then: a hover arriving while another chart is
+				// brushed (a query in flight here too) writes at once, as before.
 				const catchUp = this.#handle?.resultCause === 'catchUp';
-				const settling = (this.#handle?.queriesInFlight ?? 0) > 0;
+				const settling = gestureEnded && (this.#handle?.queriesInFlight ?? 0) > 0;
 				if ((dataChanged || settling) && !catchUp) {
 					this.#tooltipWriteTimeout = setTimeout(write, SETTLE_MS);
 				} else write();
