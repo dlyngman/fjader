@@ -124,7 +124,8 @@
 			(n) => !cols.includes(n)
 		); // exclude channels already in column list (e.g. 'r')
 		const result = [...cols, ...opts, ...nums];
-		if (markLOD) result.push('lod');
+		// A mark's surface with no rung (a line with lod={false}) has nothing to show.
+		if (markLOD && markLOD.getRungs().length > 0) result.push('lod');
 		return result;
 	});
 
@@ -1291,7 +1292,9 @@
 										>{densityCtx.shouldDecimate ? 'on' : 'off'}</span
 									>
 								</div>
-							{:else if binsRung}
+							{/if}
+							<!-- Beside the density readouts on a binned line, which has both. -->
+							{#if binsRung}
 								<div class="group-row">
 									<span class="group-label">bins</span>
 									<span class="lod-readout"
@@ -1310,6 +1313,17 @@
 										>{((binsRung.props.binStep as number) ?? 0).toPrecision(3)}</span
 									>
 								</div>
+								{#if binsRung.props.held}
+									<!-- Zoom and shift+scroll stop here, and say nothing. -->
+									<div class="group-row">
+										<span class="group-label">{binsRung.props.held}</span>
+										<span class="lod-readout lod-active"
+											>{binsRung.props.held === 'finest'
+												? 'at the padding limit'
+												: 'the fewest a path draws'}</span
+										>
+									</div>
+								{/if}
 							{/if}
 							<!-- Editable tunables (group navigation) -->
 							{#each lodGroupItems as item, gi (item.key)}

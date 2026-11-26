@@ -38,6 +38,23 @@ function numericBins(
 }
 
 /**
+ * How many bins `options` gives over [min, max], as `padding` counts them: the
+ * numeric bins exactly; time buckets as their estimate (months and years are
+ * not a fixed width), with the two an end can straddle.
+ */
+function binCount(min: number, max: number, isTemporal: boolean, options: BinOptions): number {
+	if (isTemporal) {
+		const { unit, step = 1 } = options.interval
+			? { unit: options.interval, step: options.step }
+			: timeInterval(min, max, options.steps || 40);
+		const width = (UNIT_MS[unit] ?? UNIT_MS.day) * (step ?? 1);
+		return Math.ceil((max - min) / width) + 2;
+	}
+	const { min: lo, alpha } = numericBins(min, max, options);
+	return Math.floor((max - lo) / alpha) + 1;
+}
+
+/**
  * The edge of numeric bin `index` (SQL), `min + alpha * (index + offset)`, in
  * DOUBLE arithmetic. The one formula both `bin()` and `dense()`'s padding
  * write, so a bin's edge is the same bits whichever produced it: a padded row
@@ -201,13 +218,17 @@ export class AutoBinNode {
 		scaleType: string,
 		timeOffset: number | null = null,
 		currentDomain: [number, number] | null = null,
-		binStepMultiplier: number = 1.0
+		binStepMultiplier: number = 1.0,
+		maxBins: number = Infinity,
+		minSteps: number = 1
 	): ExprNode {
 		const { col, min, max, isTemporal, binOptions } = this.#plan(
 			fieldInfo,
 			scaleType,
 			currentDomain,
-			binStepMultiplier
+			binStepMultiplier,
+			maxBins,
+			minSteps
 		);
 		if (isTemporal) {
 			const offset = binOptions.offset ?? 0;
@@ -238,6 +259,19 @@ export class AutoBinNode {
 	 */
 	get followsView(): boolean {
 		return !this.options.step && !this.options.interval;
+	}
+
+	/**
+	 * The steps across the view these bins are resolved for while they follow
+	 * it: the mark's `steps` (30 by default) by the chart's step multiplier,
+	 * with the floor. The same at every rebin level, which is the point of
+	 * levels: a view's bins are about this many, a little more or fewer as the
+	 * view moves within its level. Null for bins that do not follow the view.
+	 */
+	viewSteps(binStepMultiplier: number = 1.0, minSteps: number = 1): number | null {
+		if (!this.followsView) return null;
+		const steps = Math.max(1, Math.round((this.options.steps || 30) * binStepMultiplier));
+		return Math.max(steps, minSteps);
 	}
 
 	/**
@@ -277,13 +311,17 @@ export class AutoBinNode {
 		scaleType: string,
 		currentDomain: [number, number] | null = null,
 		binStepMultiplier: number = 1.0,
-		t0: number | null = null
+		t0: number | null = null,
+		maxBins: number = Infinity,
+		minSteps: number = 1
 	): BinPadding | null {
 		const { col, min, max, isTemporal, binOptions } = this.#plan(
 			fieldInfo,
 			scaleType,
 			currentDomain,
-			binStepMultiplier
+			binStepMultiplier,
+			maxBins,
+			minSteps
 		);
 		const offset = binOptions.offset ?? 0;
 		const source = String(col);
@@ -317,13 +355,53 @@ export class AutoBinNode {
 		};
 	}
 
-	/** The column, extent and options both `resolve` and `padding` bin with. */
+	/**
+	 * Whether the bins these arguments resolve are held at a bound: `finest` at
+	 * `maxBins` (the view or the step multiplier asks for more than may be
+	 * padded), `coarsest` at `minSteps`. For the palette, since a bound stops
+	 * shift+scroll and zoom without saying so.
+	 */
+	held(
+		fieldInfo: Record<string, FieldInfo>,
+		scaleType: string,
+		currentDomain: [number, number] | null,
+		binStepMultiplier: number,
+		maxBins: number,
+		minSteps: number = 1
+	): 'finest' | 'coarsest' | null {
+		return this.#plan(fieldInfo, scaleType, currentDomain, binStepMultiplier, maxBins, minSteps)
+			.held;
+	}
+
+	/**
+	 * The column, extent and options both `resolve` and `padding` bin with.
+	 *
+	 * `maxBins` bounds bins that follow the view (`followsView`): a mark that is
+	 * only right when padded (a path) must keep its bins × series × facets under
+	 * the padding's row limit, which finer bins over the whole extent pass. The
+	 * steps come down until the bins they give fit; a `step` or an `interval` of
+	 * the mark's own is not touched.
+	 *
+	 * `minSteps` is the fewest steps across the view such bins may have (across
+	 * the field's extent, for a view wider than it): the step multiplier and a
+	 * view far wider than the data would otherwise take a line down to two
+	 * points, which is not a line of anything. `maxBins` wins where both hold.
+	 */
 	#plan(
 		fieldInfo: Record<string, FieldInfo>,
 		scaleType: string,
 		currentDomain: [number, number] | null,
-		binStepMultiplier: number
-	): { col: ExprValue; min: number; max: number; isTemporal: boolean; binOptions: BinOptions } {
+		binStepMultiplier: number,
+		maxBins: number = Infinity,
+		minSteps: number = 1
+	): {
+		col: ExprValue;
+		min: number;
+		max: number;
+		isTemporal: boolean;
+		binOptions: BinOptions;
+		held: 'finest' | 'coarsest' | null;
+	} {
 		const fieldName = typeof this.field === 'string' ? this.field : this.field.toString();
 		const info = fieldInfo[fieldName] || {};
 		const { min, max, type } = info;
@@ -347,13 +425,14 @@ export class AutoBinNode {
 			binOptions.steps = 30;
 		}
 
+		let level = 0;
 		if (currentDomain && binOptions.steps && !binOptions.step && !binOptions.interval) {
 			const viewportWidth = currentDomain[1] - currentDomain[0];
 			const globalWidth = this.extentWidth(fieldInfo, scaleType);
 
 			if (viewportWidth > 0 && globalWidth > 0) {
 				// From the view's level, not its width: see rebinLevel.
-				const level = rebinLevel(viewportWidth, globalWidth);
+				level = rebinLevel(viewportWidth, globalWidth);
 				const scaledSteps = Math.max(1, Math.round(binOptions.steps * REBIN_RATIO ** level));
 				binOptions = { ...binOptions, steps: scaledSteps };
 			}
@@ -371,7 +450,39 @@ export class AutoBinNode {
 			}
 		}
 
-		return { col, min, max, isTemporal, binOptions };
+		let floored = false;
+		if (minSteps > 1 && binOptions.steps && this.followsView) {
+			const floor = Math.round(minSteps * REBIN_RATIO ** Math.max(level, 0));
+			if (binOptions.steps < floor) {
+				binOptions = { ...binOptions, steps: floor };
+				floored = true;
+			}
+		}
+
+		let capped = false;
+		if (Number.isFinite(maxBins) && binOptions.steps && this.followsView && max !== min) {
+			// Against the bins the steps actually give: a nice step can give more
+			// bins than were asked for.
+			let steps = binOptions.steps;
+			// Down by a fifth at least each time: a step one smaller often rounds to
+			// the same nice step, and the same count.
+			for (let i = 0; i < 200 && steps > 1; i++) {
+				const count = binCount(min, max, isTemporal, { ...binOptions, steps });
+				if (count <= maxBins) break;
+				capped = true;
+				steps = Math.max(1, Math.floor(steps * Math.min(maxBins / count, 0.8)));
+			}
+			if (capped) binOptions = { ...binOptions, steps };
+		}
+
+		return {
+			col,
+			min,
+			max,
+			isTemporal,
+			binOptions,
+			held: capped ? 'finest' : floored ? 'coarsest' : null
+		};
 	}
 
 	withOffset(offset: number): AutoBinNode {

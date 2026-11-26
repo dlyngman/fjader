@@ -3,6 +3,6 @@ export type { DensityContext, DensityHostConfig } from './DensityHost.svelte';
 export { DotsRung } from './DotsRung.svelte';
 export { SmoothRung } from './SmoothRung.svelte';
 export { AdaptiveBinRung } from './AdaptiveBinRung.svelte';
-export type { LODRung, MarkLODSurface } from './rung-types';
+export type { LODRung, MarkLODParts, MarkLODSurface } from './rung-types';
 export { RollingAvgNode, isRollingAvgExpression } from '../sql/rolling-avg';
 export type { SmoothMode } from '../sql/rolling-avg';

@@ -38,7 +38,7 @@ import {
 import type { ExprNode, ExprValue, FilterExpr, GroupByExpr } from '@uwdata/mosaic-sql';
 import type { ScaleRequirement } from '$lib/scales/ScalePriorities';
 import { TransformCompiler } from '$lib/transforms/TransformCompiler';
-import { withDenseCategories, withoutOtherMembers, withRanking } from '$lib/transforms';
+import { binLimit, withDenseCategories, withoutOtherMembers, withRanking } from '$lib/transforms';
 import { markValueAxis } from '$lib/transforms/value-axis';
 import { ArrowDataAccessor } from '$lib/data/DataAccessor';
 import type { DataAccessor } from '$lib/data/DataAccessor';
@@ -81,7 +81,8 @@ import {
 } from '$lib/components/rendering/activity-reads';
 
 import { AdaptiveBinRung } from '$lib/lod/AdaptiveBinRung.svelte';
-import type { MarkLODSurface } from '$lib/lod/rung-types';
+import { countRowsInView, type HeldCount } from '$lib/lod/DensityHost.svelte';
+import type { LODRung, MarkLODParts, MarkLODSurface } from '$lib/lod/rung-types';
 import { generateMarkId, buildChannelFieldMap, resolveSortChannel } from '../utils';
 import { buildExpressionLabel, isLabeledTipEntry } from '../utils/channel-field-map';
 import { detectChannelsNeedingDataDomain } from './domain-computation';
@@ -162,6 +163,14 @@ function middleBinWidth(side: TakenSide): number {
 // ---------------------------------------------------------------------------
 // Config (same shape as MarkLifecycleConfig — shared during transition)
 // ---------------------------------------------------------------------------
+
+/**
+ * The fewest steps across the view a path mark's view-scaled bins may have
+ * (AutoBinNode's `minSteps`). The chart's step multiplier goes down to a tenth,
+ * and a view far wider than the data coarsens the bins further: a histogram of
+ * two bars is still a histogram, a line of two points is a segment.
+ */
+const PATH_MIN_STEPS = 8;
 
 export interface MarkLifecycleV2Config {
 	markType: string;
@@ -318,7 +327,9 @@ export class MarkLifecycleV2 {
 	#schema = $state<Map<string, ColumnSchema> | null>(null);
 	#lastBinDomain = $state<Record<string, [number, number]>>({});
 	#adaptiveBinRung: AdaptiveBinRung | null = null;
-	/** Set when this lifecycle registered a MarkLODSurface, to undo it on destroy. */
+	/** Whether this lifecycle registered the mark's MarkLODSurface, to undo it on destroy. */
+	#lodRegistered = false;
+	/** The mark's `onMarkLOD`, told of the surface and of its going. */
 	#onMarkLOD: ((surface: MarkLODSurface | null) => void) | null = null;
 
 	// --- Engine Registration ---
@@ -343,8 +354,17 @@ export class MarkLifecycleV2 {
 		if (this.#autoBinNodes.size > 0 && this.#fieldStats) {
 			for (const [ch, value] of Object.entries(resolvedSelect)) {
 				if (isBinExpression(value)) {
-					const { fieldInfo, scaleType, currentDomain, multiplier } = this.#binArgs(ch);
-					resolvedSelect[ch] = value.resolve(fieldInfo, scaleType, null, currentDomain, multiplier);
+					const { fieldInfo, scaleType, currentDomain, multiplier, maxBins, minSteps } =
+						this.#binArgs(ch);
+					resolvedSelect[ch] = value.resolve(
+						fieldInfo,
+						scaleType,
+						null,
+						currentDomain,
+						multiplier,
+						maxBins,
+						minSteps
+					);
 				}
 			}
 		}
@@ -429,8 +449,70 @@ export class MarkLifecycleV2 {
 			fieldInfo: this.#fieldStats as Record<string, { min?: number; max?: number; type?: string }>,
 			scaleType: axis === 'x' ? this.actualXScaleType : this.actualYScaleType,
 			currentDomain: this.#lastBinDomain[axis] ?? null,
-			multiplier: this.#chartContext.binStepMultiplier || 1.0
+			multiplier: this.#chartContext.binStepMultiplier || 1.0,
+			maxBins: this.#maxBins(),
+			// A path of two points is not a line of anything: see PATH_MIN_STEPS.
+			minSteps: this.#config._rowLayouts ? PATH_MIN_STEPS : 1
 		} as const;
+	}
+
+	/**
+	 * The most bins this mark's binned axis may have: a bound for a PATH mark,
+	 * which is only right when padded. An unpadded stacked area skips the series
+	 * with no row in a bin and its bands overlap; an unpadded line of means draws
+	 * across the gap its empty bin was. Padding refuses past its row limit, and
+	 * bins that follow the view pass it under zoom, so they are held where bins
+	 * × series × facets still fits (transforms' binLimit, the limit's own
+	 * arithmetic). Applied always, not only under zoom: a path with so many
+	 * series that its default bins pass the limit gets fewer bins, and is padded.
+	 *
+	 * Infinity for a mark that draws each row on its own (bars survive missing
+	 * rows, and a windowed histogram pads only its view), before identity setup,
+	 * and where the series alone pass the limit. Read from the deriveds that
+	 * resolve the bins, so it follows identity setup.
+	 */
+	#maxBins(): number {
+		if (!this.#config._rowLayouts) return Infinity;
+		const identity = this.#identity;
+		if (!identity) return Infinity;
+		const keys: string[] = [];
+		const binned = new Set<string>();
+		for (const [channel, value] of Object.entries(this.#config.select)) {
+			if (value == null) continue;
+			if (isBinExpression(value)) {
+				binned.add(channel);
+			} else if (
+				!isRollingAvgExpression(value) &&
+				!(isNode(value) && (isAggregateExpression(value as ExprNode) || isWindowExpression(value)))
+			) {
+				keys.push(channel);
+			}
+		}
+		if (binned.size === 0) return Infinity;
+		// The chart's facet is a group key the select does not hold.
+		if ('__facet' in identity) keys.push('__facet');
+		return binLimit(keys, identity, binned);
+	}
+
+	/**
+	 * Whether a binned axis's bins are held at a bound: `finest` at #maxBins (the
+	 * view or the step multiplier asks for more than can be padded), `coarsest`
+	 * at a path's fewest steps. For the palette's readout, and for
+	 * the count a line's dots are judged by (countInView).
+	 */
+	get binsHeld(): 'finest' | 'coarsest' | null {
+		if (!this.#fieldStats) return null;
+		for (const [channel, node] of this.#autoBinNodes) {
+			const { axis, fieldInfo, scaleType, currentDomain, multiplier, maxBins, minSteps } =
+				this.#binArgs(channel);
+			// At the view as it is, not at the last re-bin's: a held mark does not
+			// re-bin (the bins at the next level are the same bins), so the domain
+			// of its last re-bin stays one from before the bound, and asked there
+			// the bins are never held.
+			const view = axis === this.#binnedAxis() && this.#lastView ? this.#lastView : currentDomain;
+			return node.held(fieldInfo, scaleType, view, multiplier, maxBins, minSteps);
+		}
+		return null;
 	}
 
 	/**
@@ -445,13 +527,16 @@ export class MarkLifecycleV2 {
 		let out: Record<string, BinPadding> | null = null;
 		for (const [ch, value] of Object.entries(this.#config.select)) {
 			if (!isBinExpression(value)) continue;
-			const { axis, fieldInfo, scaleType, currentDomain, multiplier } = this.#binArgs(ch);
+			const { axis, fieldInfo, scaleType, currentDomain, multiplier, maxBins, minSteps } =
+				this.#binArgs(ch);
 			const padding = value.padding(
 				fieldInfo,
 				scaleType,
 				at?.axis === axis ? at.domain : currentDomain,
 				multiplier,
-				this.#timeOrigin(axis)
+				this.#timeOrigin(axis),
+				maxBins,
+				minSteps
 			);
 			if (padding) (out ??= {})[ch] = padding;
 		}
@@ -673,6 +758,8 @@ export class MarkLifecycleV2 {
 		filterGroup: FilterGroup,
 		options?: {
 			onMarkLOD?: ((surface: MarkLODSurface | null) => void) | null;
+			/** The mark's own rungs, beside its bins' (MarkLODParts). */
+			lod?: (() => MarkLODParts | null) | null;
 		}
 	) {
 		this.#config = config;
@@ -757,17 +844,16 @@ export class MarkLifecycleV2 {
 
 		// AdaptiveBinRung for binned marks (watches viewport domain, triggers rebin).
 		// For any mark with a bin() channel: the chart gives the coordinator, so no
-		// mark has to ask for it.
-		// Not for a path mark yet: finer bins over its whole extent pass the
-		// padding's row limit, and an unpadded path is drawn wrongly (a stacked
-		// area's bands overlap, a gap closes) where an unpadded bar is not.
+		// mark has to ask for it. A path mark's bins are bounded so that it stays
+		// padded (#maxBins).
 		const gpuCoordinator = chartContext.gpuCoordinator ?? null;
-		if (this.#autoBinNodes.size > 0 && gpuCoordinator && !config._rowLayouts) {
+		if (this.#autoBinNodes.size > 0 && gpuCoordinator) {
 			const binAxes = [...this.#autoBinNodes.keys()].map(
 				(ch) => (ch.startsWith('x') ? 'x' : 'y') as 'x' | 'y'
 			);
 			this.#adaptiveBinRung = new AdaptiveBinRung(gpuCoordinator, chartContext, {
 				binAxes,
+				held: () => this.binsHeld,
 				levelOf: (axis, lo, hi) => this.#viewLevel(axis, lo, hi),
 				binsDiffer: (axis, lo, hi) => this.#binsDifferAt(axis, lo, hi),
 				setParam: (_key, value) => {
@@ -809,20 +895,39 @@ export class MarkLifecycleV2 {
 					}
 				}
 			});
-			if (options?.onMarkLOD) {
-				// The palette, tooltips and shift+scroll reach a mark's rungs through
-				// its MarkLODSurface; a binned mark has one rung and no DensityHost.
-				const rung = this.#adaptiveBinRung;
-				const surface: MarkLODSurface = {
-					adjustResolution: (deltaY) => rung.adjustResolution(deltaY),
-					getRungs: () => (rung.destroyed ? [] : [rung]),
-					getDensityCtx: () => null,
-					getDensityHost: () => null
-				};
-				chartContext.config.registerMarkLOD(markId, surface);
-				options.onMarkLOD(surface);
-				this.#onMarkLOD = options.onMarkLOD;
-			}
+		}
+
+		// The mark's ONE LOD surface: what the palette, the tooltips and
+		// shift+scroll reach its rungs through. Built here for any mark with a
+		// rung, its bins' or its own (`options.lod`), and registered once: two
+		// registrations under one mark id would replace each other.
+		const ownLOD = options?.lod ?? null;
+		if (this.#adaptiveBinRung || ownLOD) {
+			const binRung = this.#adaptiveBinRung;
+			const surface: MarkLODSurface = {
+				// A binned axis takes the gesture, whichever mark draws it; then the
+				// mark's own rungs; then the chart's bins, as with no mark under it.
+				adjustResolution: (deltaY) => {
+					if (binRung && !binRung.destroyed) return binRung.adjustResolution(deltaY);
+					const own = ownLOD?.();
+					if (own?.adjustResolution) return own.adjustResolution(deltaY);
+					chartContext.adjustBinMultiplier?.(deltaY < 0 ? 0.035 : -0.035);
+				},
+				getRungs: () => {
+					const rungs: LODRung[] = [];
+					if (binRung && !binRung.destroyed) rungs.push(binRung);
+					for (const rung of ownLOD?.()?.rungs ?? []) {
+						if (rung && !rung.destroyed) rungs.push(rung);
+					}
+					return rungs;
+				},
+				getDensityCtx: () => ownLOD?.()?.densityHost?.ctx ?? null,
+				getDensityHost: () => ownLOD?.()?.densityHost ?? null
+			};
+			chartContext.config.registerMarkLOD(markId, surface);
+			options?.onMarkLOD?.(surface);
+			this.#lodRegistered = true;
+			this.#onMarkLOD = options?.onMarkLOD ?? null;
 		}
 
 		// Detect channels needing data-derived domains
@@ -2301,6 +2406,44 @@ export class MarkLifecycleV2 {
 	}
 
 	/**
+	 * The mark's points inside a view, counted from the result it holds: for a
+	 * grid, whose rows are every point the mark draws. `'ask'` for any other
+	 * layout (raw rows are decimated before they are drawn; the database counts
+	 * those, buildViewportCountQuery). `'wait'` for a binned mark before its
+	 * first result: its result is a grid unless padding refuses it, which only a
+	 * result can say, and asking the database meanwhile is the query this saves.
+	 * The same rows the count query would count, without running the mark's
+	 * query again to count them.
+	 */
+	countInView(xLo: number, xHi: number, yLo: number, yHi: number): HeldCount {
+		if (this.#autoBinNodes.size > 0 && this.dataVersion === 0) return 'wait';
+		const layout = this.rowLayout;
+		if (layout.kind !== 'grid') return 'ask';
+		// Bins that follow the view, and can still refine: the points the view's
+		// LEVEL is resolved for, not the ones in the view this moment. Within a
+		// level the points spread by up to a rebin ratio before the next level
+		// closes them up, so a count of the moment made the dots come and go with
+		// every level. Held at their finest, the bins stop following, and the
+		// points are counted as they are: dots then mean the finest bins.
+		const nominal = this.#nominalSteps();
+		if (nominal !== null && this.binsHeld !== 'finest') return nominal * layout.series;
+		const data = this.data;
+		const x = data?.getColumn('x') as ArrayLike<number> | null | undefined;
+		if (!data || !x) return 'ask';
+		const y = (data.getColumn('y') as ArrayLike<number> | null) ?? null;
+		return countRowsInView(x, y, xLo, xHi, yLo, yHi);
+	}
+
+	/** The steps across the view of the binned axis's bins while they follow it; null when they do not. */
+	#nominalSteps(): number | null {
+		for (const [channel, node] of this.#autoBinNodes) {
+			const { multiplier, minSteps } = this.#binArgs(channel);
+			return node.viewSteps(multiplier, minSteps);
+		}
+		return null;
+	}
+
+	/**
 	 * Build a viewport count query for DensityHost LOD measurement.
 	 * Wraps the mark's query as a subquery and counts rows within the given
 	 * viewport bounds; filters on `x`, so only for a mark with one (LineMark).
@@ -3323,10 +3466,11 @@ export class MarkLifecycleV2 {
 		clearTimeout(this.#refitTimeout!);
 		clearTimeout(this.#tooltipWriteTimeout!);
 
-		if (this.#onMarkLOD) {
+		if (this.#lodRegistered) {
 			this.#chartContext.config.unregisterMarkLOD(this.#markId);
-			this.#onMarkLOD(null);
+			this.#onMarkLOD?.(null);
 			this.#onMarkLOD = null;
+			this.#lodRegistered = false;
 		}
 		if (this.#adaptiveBinRung) {
 			this.#adaptiveBinRung.destroy();

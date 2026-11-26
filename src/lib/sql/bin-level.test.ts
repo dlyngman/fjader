@@ -124,3 +124,126 @@ describe('a bin() that does not follow the view', () => {
 		expect(bin('missing').extentWidth(INFO, 'linear')).toBeNaN();
 	});
 });
+
+describe('a bound on the bins (a path mark, which must stay padded)', () => {
+	const count = (domain: [number, number] | null, maxBins: number, multiplier = 1) =>
+		(bin('v').padding(INFO, 'linear', domain, multiplier, null, maxBins) as { count: number })
+			.count;
+
+	it('holds view-scaled bins under the bound at any zoom', () => {
+		for (let width = 1000; width > 0.5; width /= 1.4) {
+			expect(count([0, width], 200)).toBeLessThanOrEqual(200);
+		}
+		// Unbounded, the same zoom passes it.
+		expect(count([0, 1], Infinity)).toBeGreaterThan(200);
+	});
+
+	it('leaves the bins alone while they fit', () => {
+		expect(bin('v').padding(INFO, 'linear', [0, 300], 1, null, 500)).toEqual(
+			bin('v').padding(INFO, 'linear', [0, 300], 1)
+		);
+		expect(bin('v').held(INFO, 'linear', [0, 300], 1, 500)).toBeNull();
+	});
+
+	it('says when it holds, under zoom and under the step multiplier', () => {
+		expect(bin('v').held(INFO, 'linear', [0, 2], 1, 200)).toBe('finest');
+		expect(bin('v').held(INFO, 'linear', null, 1, 200)).toBeNull();
+		expect(bin('v').held(INFO, 'linear', null, 40, 200)).toBe('finest');
+		expect(count(null, 200, 40)).toBeLessThanOrEqual(200);
+	});
+
+	it('applies to the default bins too, when the bound is below them', () => {
+		expect(count(null, Infinity)).toBeGreaterThan(10);
+		expect(count(null, 10)).toBeLessThanOrEqual(10);
+		expect(bin('v').held(INFO, 'linear', null, 1, 10)).toBe('finest');
+	});
+
+	it('gives the expression and its padding the same bins', () => {
+		const node = bin('v');
+		const pad = node.padding(INFO, 'linear', [0, 3], 1, null, 150) as { alpha: number };
+		expect(String(node.resolve(INFO, 'linear', null, [0, 3], 1, 150))).toContain(
+			`CAST(${JSON.stringify(pad.alpha)} AS DOUBLE)`
+		);
+	});
+
+	it('does not touch a bin() with a step or an interval of its own', () => {
+		const fixed = bin('v', { step: 1 });
+		expect(fixed.padding(INFO, 'linear', null, 1, null, 50)).toEqual(
+			fixed.padding(INFO, 'linear', null, 1)
+		);
+		expect(fixed.held(INFO, 'linear', null, 1, 50)).toBeNull();
+	});
+
+	it('holds time buckets under the bound as they are counted for padding', () => {
+		const time = (domain: [number, number], maxBins: number) =>
+			(bin('t').padding(TIME_INFO, 'time', domain, 1, T0, maxBins) as { count: number }).count;
+		expect(time([0, 3600], Infinity)).toBeGreaterThan(300);
+		expect(time([0, 3600], 300)).toBeLessThanOrEqual(300);
+	});
+});
+
+describe('a floor on the steps (a path mark, which two points do not make)', () => {
+	const count = (domain: [number, number] | null, multiplier: number, minSteps = 1) =>
+		(
+			bin('v').padding(INFO, 'linear', domain, multiplier, null, Infinity, minSteps) as {
+				count: number;
+			}
+		).count;
+
+	it('the step multiplier alone takes the bins down to a few', () => {
+		expect(count(null, 0.1)).toBeLessThanOrEqual(4);
+	});
+
+	it('holds them at about the floor, at any zoom', () => {
+		expect(count(null, 0.1, 8)).toBeGreaterThanOrEqual(5);
+		// Zoomed in: the floor is across the view, so more across the extent.
+		expect(count([0, 100], 0.1, 8)).toBeGreaterThan(count(null, 0.1, 8) * 4);
+	});
+
+	it('holds them for a view far wider than the data', () => {
+		expect(count([-50_000, 50_000], 1)).toBeLessThanOrEqual(3);
+		expect(count([-50_000, 50_000], 1, 8)).toBeGreaterThanOrEqual(5);
+	});
+
+	it('says so, leaves bins above it alone, and gives way to the upper bound', () => {
+		const node = bin('v');
+		expect(node.held(INFO, 'linear', null, 0.1, Infinity, 8)).toBe('coarsest');
+		expect(node.held(INFO, 'linear', null, 1, Infinity, 8)).toBeNull();
+		expect(node.padding(INFO, 'linear', null, 1, null, Infinity, 8)).toEqual(
+			node.padding(INFO, 'linear', null, 1)
+		);
+		expect(node.held(INFO, 'linear', null, 0.1, 3, 8)).toBe('finest');
+	});
+
+	it('does not touch a bin() with a step of its own', () => {
+		const fixed = bin('v', { step: 500 });
+		expect(fixed.padding(INFO, 'linear', null, 1, null, Infinity, 8)).toEqual(
+			fixed.padding(INFO, 'linear', null, 1)
+		);
+	});
+});
+
+describe('the steps across the view that view-following bins are resolved for', () => {
+	it('are the mark’s steps by the step multiplier, 30 by default, with the floor', () => {
+		expect(bin('v').viewSteps()).toBe(30);
+		expect(bin('v', { steps: 60 }).viewSteps()).toBe(60);
+		expect(bin('v', { steps: 60 }).viewSteps(0.5)).toBe(30);
+		expect(bin('v').viewSteps(0.1, 8)).toBe(8);
+	});
+
+	it('are about the bins a view has at its own level, at every level', () => {
+		// A view exactly on a level: 1000 / 1.5^k wide.
+		for (let level = 0; level <= 8; level++) {
+			const width = 1000 / REBIN_RATIO ** level;
+			const pad = bin('v', { steps: 60 }).padding(INFO, 'linear', [0, width]) as { alpha: number };
+			const inView = width / pad.alpha;
+			expect(inView).toBeGreaterThan(60 / 2.6);
+			expect(inView).toBeLessThanOrEqual(60 * 1.01);
+		}
+	});
+
+	it('are null for bins that keep their step', () => {
+		expect(bin('v', { step: 5 }).viewSteps()).toBeNull();
+		expect(bin('t', { interval: 'day' }).viewSteps()).toBeNull();
+	});
+});

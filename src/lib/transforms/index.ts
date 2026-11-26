@@ -735,6 +735,52 @@ function densePlan(
 }
 
 /**
+ * What a binned axis's bins are crossed with when padded: every other group
+ * key, each with its dim, and the rows that makes per bin (each key's ids plus
+ * the absent one). `missing` names a key with no dim, which cannot be
+ * enumerated; null before identity setup, when a key that will have a dim has
+ * none yet.
+ *
+ * One derivation for `dense()`'s row limit and for the bound a path mark's
+ * lifecycle puts on its bins (`binLimit`), so the two cannot disagree.
+ */
+export function binCross(
+	groupKeys: readonly string[],
+	aliases: readonly string[],
+	identity: Record<string, ChannelIdentity> | null | undefined,
+	binned: ReadonlySet<string>
+): { cross: [string, string][]; rowsPerBin: number } | { missing: string } | null {
+	const cross: [string, string][] = [];
+	let rowsPerBin = 1;
+	for (const key of groupKeys) {
+		if (binned.has(key) || !aliases.includes(key)) continue;
+		if (!identity) return null;
+		const keyIdentity = identity[key];
+		if (!keyIdentity) return { missing: key };
+		cross.push([key, keyIdentity.dim]);
+		rowsPerBin *= keyIdentity.size + 1;
+	}
+	return { cross, rowsPerBin };
+}
+
+/**
+ * The most bins a binned axis can have and still be padded, with these group
+ * keys beside it: the row limit over the rows per bin. Infinity when nothing
+ * says (no identity yet, a key with no dim: padding refuses those by itself),
+ * and when the cross product alone passes the limit, where no bin count helps.
+ */
+export function binLimit(
+	groupKeys: readonly string[],
+	identity: Record<string, ChannelIdentity> | null | undefined,
+	binned: ReadonlySet<string>
+): number {
+	const crossed = binCross(groupKeys, groupKeys, identity, binned);
+	if (crossed === null || 'missing' in crossed) return Infinity;
+	const limit = Math.floor(DENSE_ROW_LIMIT / crossed.rowsPerBin);
+	return limit >= 1 ? limit : Infinity;
+}
+
+/**
  * The plan for a binned axis: one row per bin, from the bins `bin()`
  * resolved, crossed with each other group key's ids as for a categorical band.
  * Null with nothing binned. Refuses, saying why, what it cannot enumerate: bins
@@ -768,22 +814,19 @@ function binPlan(
 	}
 
 	const binned = new Set(bins.map(([ch]) => ch));
-	const cross: [string, string][] = [];
 	const window = config?.binWindow ?? null;
 	const binCount = windowBinCount(bins[0][1], window);
-	let rows = binCount;
-	for (const key of groupKeys) {
-		if (binned.has(key) || !aliases.includes(key)) continue;
-		const keyIdentity = identity?.[key];
-		// Before identity setup a series has no dim yet; it will.
-		if (!identity) return null;
-		if (!keyIdentity) {
-			say(`the group key "${key}" has no dim, so its missing combinations cannot be enumerated.`);
-			return null;
-		}
-		cross.push([key, keyIdentity.dim]);
-		rows *= keyIdentity.size + 1;
+	const crossed = binCross(groupKeys, aliases, identity, binned);
+	// Before identity setup a series has no dim yet; it will.
+	if (crossed === null) return null;
+	if ('missing' in crossed) {
+		say(
+			`the group key "${crossed.missing}" has no dim, so its missing combinations cannot be enumerated.`
+		);
+		return null;
 	}
+	const { cross } = crossed;
+	const rows = binCount * crossed.rowsPerBin;
 	if (rows > DENSE_ROW_LIMIT) {
 		say(
 			`padding would produce about ${rows} rows, over the ${DENSE_ROW_LIMIT} limit ` +

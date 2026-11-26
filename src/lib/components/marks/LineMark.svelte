@@ -25,7 +25,7 @@
 	import { DensityHost } from '$lib/lod/DensityHost.svelte';
 	import { DotsRung } from '$lib/lod/DotsRung.svelte';
 	import { SmoothRung } from '$lib/lod/SmoothRung.svelte';
-	import type { MarkLODSurface } from '$lib/lod/rung-types';
+	import type { MarkLODParts, MarkLODSurface } from '$lib/lod/rung-types';
 	import type { SmoothMode, RollingAvgNode } from '$lib/sql/rolling-avg';
 	import type {
 		ChannelRef,
@@ -292,7 +292,10 @@
 					queryEngine,
 					chartContext,
 					markId,
-					filterGroups.get(entry.selection as string | undefined)
+					filterGroups.get(entry.selection as string | undefined),
+					// The lifecycle owns the mark's LOD surface: these are the line's own
+					// rungs, read when the palette or the wheel asks.
+					{ onMarkLOD, lod: ownLOD }
 				);
 			}
 		});
@@ -301,6 +304,25 @@
 	// MarkColor and MarkSeries connect to setup internally via their lifecycle effects
 
 	// --- LOD CONFIG RESOLUTION ---
+	/**
+	 * The line's own rungs for its lifecycle's LOD surface (MarkLODParts), or null
+	 * with `lod={false}`. Shift+scroll on an unbinned line: smoothing when it is
+	 * on or being turned up, else the dots.
+	 */
+	function ownLOD(): MarkLODParts | null {
+		if (!lodEnabled) return null;
+		const dots = dotsRung;
+		const smooth = smoothRung;
+		return {
+			rungs: [dots, smooth],
+			densityHost,
+			adjustResolution(deltaY: number) {
+				if (smooth?.active || deltaY > 0) smooth?.adjustResolution(deltaY);
+				else dots?.adjustResolution(deltaY);
+			}
+		};
+	}
+
 	const gpuCoordinator = getGPUContext();
 	const faceted = !!chartContext.fx;
 	const entryLod = $derived(entry.lod);
@@ -384,6 +406,10 @@
 			callerId: markId,
 			countQueryBuilder: (xLo: number, xHi: number, yLo: number, yHi: number) =>
 				setup.buildViewportCountQuery(xLo, xHi, yLo, yHi),
+			// A grid holds every point it draws: counted from the result, no query.
+			countInView: (xLo: number, xHi: number, yLo: number, yHi: number) =>
+				setup.countInView(xLo, xHi, yLo, yHi),
+			version: () => setup.dataVersion,
 			decimate
 		});
 		densityHost = host;
@@ -504,38 +530,6 @@
 		// The y scale only for the parity page's control; see m4Parity.
 		const scaleState = m4Parity.swapScale ? chartContext.yScaleState : chartContext.xScaleState;
 		m4Decimator.configure(numBins, numSeries, scaleState?.id ?? null);
-	});
-
-	// --- MARK LOD SURFACE REGISTRATION ---
-	$effect(() => {
-		if (!lodEnabled) return;
-		const host = densityHost;
-		const dots = dotsRung;
-		const smooth = smoothRung;
-		const surface: MarkLODSurface = {
-			adjustResolution(deltaY: number) {
-				if (smooth?.active || deltaY > 0) {
-					smooth?.adjustResolution(deltaY);
-				} else {
-					dots?.adjustResolution(deltaY);
-				}
-			},
-			getRungs() {
-				return [dots, smooth].filter((r): r is DotsRung | SmoothRung => r != null && !r.destroyed);
-			},
-			getDensityCtx() {
-				return host?.ctx ?? null;
-			},
-			getDensityHost() {
-				return host ?? null;
-			}
-		};
-		chartContext.config.registerMarkLOD(markId, surface);
-		onMarkLOD?.(surface);
-		return () => {
-			chartContext.config.unregisterMarkLOD(markId);
-			onMarkLOD?.(null);
-		};
 	});
 
 	// Tooltip registration — only guard conditions are tracked.
