@@ -32,6 +32,7 @@
 	import { Toggle, IntervalX } from '$lib/interactors';
 	import { Grid } from '$lib/components/guides';
 	import { bin } from '$lib/sql/bin';
+	import { topN } from '$lib/transforms';
 	import { attachQueryLog } from '$lib/query-engine/debug/query-log';
 
 	const { queryEngine } = initFjader();
@@ -566,6 +567,32 @@
 								selection="pg"
 							/>
 						{/key}
+					</ChartContainer>
+				</div>
+			</div>
+			<div class="case">
+				<h3>10. The top three carriers (topN)</h3>
+				<p class="desc">
+					Case 1's lines, kept to the three carriers with the most flights. A topN re-reads the
+					series from every result, so this is the check that it does not re-read the y axis from a
+					window: note the top of the y axis, zoom deep into the x axis, then brush and toggle above
+					and pan. The y axis must not shrink to the rows in view; it stays the whole extent's.
+				</p>
+				<div class="panel">
+					<ChartContainer xLabel="delay" yLabel="count">
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<Grid />
+						<LineMark
+							table="pg_flights"
+							x={bin('delay', { steps: 50 })}
+							y={count()}
+							stroke="carrier"
+							transforms={[topN(3)]}
+							selection="pg"
+						/>
+						<Legend position="right" />
 					</ChartContainer>
 				</div>
 			</div>
