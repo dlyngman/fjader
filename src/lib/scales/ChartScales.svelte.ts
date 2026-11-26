@@ -872,22 +872,6 @@ export class ChartScales {
 		return zoomed;
 	};
 
-	applyZoom = (
-		innerPoint: { x: number; y: number },
-		scaleFactor: number,
-		doX: boolean,
-		doY: boolean,
-		innerWidth: number,
-		innerHeight: number
-	): void => {
-		if (doX && isPanZoomScale(this.#xScaleInstance)) {
-			this.#xScaleInstance.accumulateZoom(innerPoint.x / innerWidth, scaleFactor);
-		}
-		if (doY && isPanZoomScale(this.#yScaleInstance)) {
-			this.#yScaleInstance.accumulateZoom(1 - innerPoint.y / innerHeight, scaleFactor);
-		}
-	};
-
 	startPan = (
 		x: number,
 		y: number,

@@ -519,16 +519,13 @@
 	let activePanY = $state(false);
 	let isReordering = $state(false);
 
-	// Touch/pinch zoom state
-	let initialTouchDistance = $state(0);
-	let isZooming = $state(false);
-
 	/**
-	 * Tell the chart a pan or zoom gesture started or stopped (ChartHover), from
-	 * the handlers that change it: work for tooltips and clicks waits for its end.
+	 * Tell the chart a pan started or stopped (ChartHover), from the handlers
+	 * that change it: work for tooltips and clicks waits for its end. Touch
+	 * comes through the pointer handlers too.
 	 */
 	function reportGesture() {
-		chartHover.pan(layout.chartId, isPanning || isZooming);
+		chartHover.pan(layout.chartId, isPanning);
 	}
 
 	let chartCellEl: HTMLDivElement;
@@ -663,11 +660,12 @@
 		event.preventDefault();
 
 		if (event.shiftKey) {
-			// Re-binning changes the data as a zoom does: a gesture too.
-			chartHover.wheel();
 			// Per-mark routing via rung-based API
 			const lodSurface = tooltipManager?.currentMarkLOD;
 			if (lodSurface) {
+				// Re-binning changes the data as a zoom does: a gesture too. Only
+				// with a surface to re-bin, as a zoom counts only when it zoomed.
+				chartHover.wheel();
 				lodSurface.adjustResolution(event.deltaY);
 			} else {
 				// Fallback: chart-level bin multiplier
@@ -767,64 +765,6 @@
 			scales.resetZoom(xInBounds, yInBounds);
 		}
 		tooltipManager?.suppress(300);
-	}
-
-	function getTouchDistance(t1: Touch, t2: Touch): number {
-		const dx = t1.clientX - t2.clientX;
-		const dy = t1.clientY - t2.clientY;
-		return Math.sqrt(dx * dx + dy * dy);
-	}
-
-	function handleTouchStart(event: TouchEvent) {
-		if (event.touches.length === 2) {
-			event.preventDefault();
-			isZooming = true;
-			reportGesture();
-			initialTouchDistance = getTouchDistance(event.touches[0], event.touches[1]);
-			const mid = touchMidpoint(event.touches[0], event.touches[1]);
-			pointerBuffer.x = mid.x;
-			pointerBuffer.y = mid.y;
-			const { xInBounds, yInBounds } = layout.getActiveAxes(pointerBuffer);
-			activePanX = xInBounds;
-			activePanY = yInBounds;
-		}
-	}
-
-	function touchMidpoint(t1: Touch, t2: Touch): { x: number; y: number } {
-		return {
-			x: (t1.clientX + t2.clientX) / 2 - svgLeft,
-			y: (t1.clientY + t2.clientY) / 2 - svgTop
-		};
-	}
-
-	function handleTouchMove(event: TouchEvent) {
-		if (!isZooming || event.touches.length !== 2) return;
-		const currentDistance = getTouchDistance(event.touches[0], event.touches[1]);
-		const scaleFactor = currentDistance / initialTouchDistance;
-
-		if (Math.abs(scaleFactor - 1) > 0.01) {
-			const mid = touchMidpoint(event.touches[0], event.touches[1]);
-			pointerBuffer.x = mid.x;
-			pointerBuffer.y = mid.y;
-			const { innerPoint } = layout.getActiveAxes(pointerBuffer);
-			scales.applyZoom(
-				innerPoint,
-				scaleFactor,
-				activePanX,
-				activePanY,
-				layout.innerWidth,
-				layout.innerHeight
-			);
-			initialTouchDistance = currentDistance;
-		}
-	}
-
-	function handleTouchEnd() {
-		isZooming = false;
-		isPanning = false;
-		reportGesture();
-		activePanX = false;
-		activePanY = false;
 	}
 
 	// The press under way, for reroutePress: its pointer, where it is now, and
