@@ -220,7 +220,8 @@ export class AutoBinNode {
 		currentDomain: [number, number] | null = null,
 		binStepMultiplier: number = 1.0,
 		maxBins: number = Infinity,
-		minSteps: number = 1
+		minSteps: number = 1,
+		paddedCount?: PaddedBinCount
 	): ExprNode {
 		const { col, min, max, isTemporal, binOptions } = this.#plan(
 			fieldInfo,
@@ -228,7 +229,8 @@ export class AutoBinNode {
 			currentDomain,
 			binStepMultiplier,
 			maxBins,
-			minSteps
+			minSteps,
+			paddedCount
 		);
 		if (isTemporal) {
 			const offset = binOptions.offset ?? 0;
@@ -313,7 +315,8 @@ export class AutoBinNode {
 		binStepMultiplier: number = 1.0,
 		t0: number | null = null,
 		maxBins: number = Infinity,
-		minSteps: number = 1
+		minSteps: number = 1,
+		paddedCount?: PaddedBinCount
 	): BinPadding | null {
 		const { col, min, max, isTemporal, binOptions } = this.#plan(
 			fieldInfo,
@@ -321,7 +324,8 @@ export class AutoBinNode {
 			currentDomain,
 			binStepMultiplier,
 			maxBins,
-			minSteps
+			minSteps,
+			paddedCount
 		);
 		const offset = binOptions.offset ?? 0;
 		const source = String(col);
@@ -367,10 +371,18 @@ export class AutoBinNode {
 		currentDomain: [number, number] | null,
 		binStepMultiplier: number,
 		maxBins: number,
-		minSteps: number = 1
+		minSteps: number = 1,
+		paddedCount?: PaddedBinCount
 	): 'finest' | 'coarsest' | null {
-		return this.#plan(fieldInfo, scaleType, currentDomain, binStepMultiplier, maxBins, minSteps)
-			.held;
+		return this.#plan(
+			fieldInfo,
+			scaleType,
+			currentDomain,
+			binStepMultiplier,
+			maxBins,
+			minSteps,
+			paddedCount
+		).held;
 	}
 
 	/**
@@ -386,6 +398,9 @@ export class AutoBinNode {
 	 * the field's extent, for a view wider than it): the step multiplier and a
 	 * view far wider than the data would otherwise take a line down to two
 	 * points, which is not a line of anything. `maxBins` wins where both hold.
+	 *
+	 * `paddedCount` says how many of the bins are padded: all of them by default,
+	 * fewer for a mark that pads a window around the view. The cap bounds those.
 	 */
 	#plan(
 		fieldInfo: Record<string, FieldInfo>,
@@ -393,7 +408,8 @@ export class AutoBinNode {
 		currentDomain: [number, number] | null,
 		binStepMultiplier: number,
 		maxBins: number = Infinity,
-		minSteps: number = 1
+		minSteps: number = 1,
+		paddedCount?: PaddedBinCount
 	): {
 		col: ExprValue;
 		min: number;
@@ -467,7 +483,8 @@ export class AutoBinNode {
 			// Down by a fifth at least each time: a step one smaller often rounds to
 			// the same nice step, and the same count.
 			for (let i = 0; i < 200 && steps > 1; i++) {
-				const count = binCount(min, max, isTemporal, { ...binOptions, steps });
+				const all = binCount(min, max, isTemporal, { ...binOptions, steps });
+				const count = paddedCount ? paddedCount(all, level, isTemporal) : all;
 				if (count <= maxBins) break;
 				capped = true;
 				steps = Math.max(1, Math.floor(steps * Math.min(maxBins / count, 0.8)));
@@ -492,6 +509,14 @@ export class AutoBinNode {
 		});
 	}
 }
+
+/**
+ * How many bins a mark pads for bins numbering `count` across the field's
+ * extent, resolved at rebin `level`: the count itself for a mark that pads its
+ * whole extent, fewer for one that pads a window around the view
+ * (bin-window.ts windowPaddedBins). What a bin cap (`maxBins`) is compared with.
+ */
+export type PaddedBinCount = (count: number, level: number, temporal: boolean) => number;
 
 export function isBinExpression(expr: unknown): expr is AutoBinNode {
 	return (

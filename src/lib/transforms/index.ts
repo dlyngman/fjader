@@ -500,9 +500,10 @@ function timeWindowMs(bin: TimeBinPadding, window: BinWindow | null): [number, n
 /**
  * About how many bins a window holds: exact for numeric bins; for time, the
  * extent's estimate scaled to the window (months and years are not a fixed
- * width), plus the two buckets an end can straddle.
+ * width), plus the two buckets an end can straddle. What the row limit is
+ * checked against, and so what a path's bin cap must bound (windowPaddedBins).
  */
-function windowBinCount(bin: BinPadding, window: BinWindow | null): number {
+export function windowBinCount(bin: BinPadding, window: BinWindow | null): number {
 	if (!window) return bin.count;
 	if (bin.kind === 'number') {
 		const [k0, k1] = numericWindowBins(bin, window);

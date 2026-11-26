@@ -1,5 +1,5 @@
 import type { BinPadding, BinWindow } from '$lib/types';
-import { intervalWidthMs } from '$lib/sql/bin';
+import { intervalWidthMs, REBIN_RATIO } from '$lib/sql/bin';
 
 /**
  * A binned mark's window: the bins it pads and queries, around the viewport.
@@ -101,4 +101,32 @@ export function insideBinWindow(
 export function binExtent(bin: BinPadding): [number, number] {
 	if (bin.kind === 'time') return [bin.minMs, bin.maxMs];
 	return [bin.min, bin.min + bin.alpha * bin.count];
+}
+
+/**
+ * At most how many bins the window pads, for bins that number `count` across the
+ * field's extent and are resolved at rebin `level`: what a path mark's bin cap
+ * counts (MarkLifecycleV2.#maxBins), so that bins at the cap never make the
+ * padding refuse. An upper bound on what `dense()` counts for any window a view
+ * of that level is given (binWindowFor, then the padding's windowBinCount):
+ *
+ * - The widest view of a level: levels round to the nearest (rebinLevel), so a
+ *   view of level L ≥ 1 is at most REBIN_RATIO^(0.5 − L) of the extent. A view
+ *   of level 0 or less can be as wide as the extent or wider.
+ * - The window: (1 + 2·MARGIN) views, clipped to the extent, so never more
+ *   than the extent's bins.
+ * - Snapped outward to the bin grid: a bin more on each side, and one for a
+ *   float's rounding. Time bins are counted by the extent's estimate scaled to
+ *   the window, plus the two buckets an end can straddle, from a width snapped
+ *   by the nominal bucket width; with at least 9 buckets, 6 more cover it.
+ *
+ * The window moves keep this: a move places it around the view as it is, at
+ * the bins in effect, and the bins are re-planned at every level change.
+ */
+export function windowPaddedBins(count: number, level: number, temporal: boolean): number {
+	if (level <= 0) return count;
+	if (temporal && count < 9) return count;
+	const views = 1 + 2 * MARGIN;
+	const share = Math.min(1, views * REBIN_RATIO ** (0.5 - level));
+	return Math.min(count, Math.ceil(count * share) + (temporal ? 6 : 3));
 }

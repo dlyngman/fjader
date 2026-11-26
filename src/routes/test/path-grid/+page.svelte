@@ -43,6 +43,9 @@
 	const coarseBins = bin('delay', { steps: 60 });
 	const fineBins = bin('delay', { steps: 3000 });
 
+	// Case 9: remounts the line inside whatever view the chart has.
+	let remounts = $state(0);
+
 	onMount(async () => {
 		try {
 			const url = `${window.location.origin}/data/flights-200k.parquet`;
@@ -367,6 +370,33 @@
 							dotRadius={4}
 							selection="pg"
 						/>
+					</ChartContainer>
+				</div>
+			</div>
+			<div class="case">
+				<h3>9. A line mounted into a zoomed chart</h3>
+				<p class="desc">
+					Case 1's lines. Note the top of the y axis, zoom deep into the x axis (the lines refine
+					and flatten, the axis stays), then press Remount: the lines are made again inside the
+					zoomed view. The y axis must read what it read before, the whole extent's: a line takes
+					its value axis from a first result over the whole extent, never from a window.
+				</p>
+				<button onclick={() => remounts++}>Remount ({remounts})</button>
+				<div class="panel">
+					<ChartContainer xLabel="delay" yLabel="count">
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<Grid />
+						{#key remounts}
+							<LineMark
+								table="pg_flights"
+								x={bin('delay', { steps: 50 })}
+								y={count()}
+								stroke="carrier"
+								selection="pg"
+							/>
+						{/key}
 					</ChartContainer>
 				</div>
 			</div>
