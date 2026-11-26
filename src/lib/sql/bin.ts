@@ -114,7 +114,18 @@ const LOG_REBIN_RATIO = Math.log(REBIN_RATIO);
 /**
  * The rebin level of a view `viewWidth` wide on a field `extentWidth` wide:
  * 0 for a view of the whole extent, one more for each REBIN_RATIO it is
- * narrower, rounded to the nearest. View-scaled bins are resolved from the
+ * narrower, rounded to the nearest.
+ *
+ * A view WIDER than the extent is one level less only for each whole
+ * REBIN_RATIO it is wider. An axis is niced and padded past its data (a delay
+ * of -60 to 180 is drawn on -100 to 200, a quarter wider), and that is not a
+ * zoom out: rounded to the nearest, such an axis halved its histogram's bins
+ * on the first frame. Normally under a whole ratio, not always: an axis with
+ * few ticks, a domain set wider than the data, or another mark's wider range on
+ * the same axis can put the first view a level or more out, and the mark then
+ * re-bins after its first result, since its first query is of the whole extent.
+ *
+ * View-scaled bins are resolved from the
  * level, not from the view's width itself, and a mark re-bins when the level of
  * its view changes. So the bins are a function of the view alone: two marks on
  * one field have the same bins on every frame, whenever each of them last
@@ -122,8 +133,10 @@ const LOG_REBIN_RATIO = Math.log(REBIN_RATIO);
  */
 export function rebinLevel(viewWidth: number, extentWidth: number): number {
 	if (!(viewWidth > 0) || !(extentWidth > 0)) return 0;
-	// + 0: a view a little wider than the extent rounds to -0.
-	return Math.round(Math.log(extentWidth / viewWidth) / LOG_REBIN_RATIO) + 0;
+	const levels = Math.log(extentWidth / viewWidth) / LOG_REBIN_RATIO;
+	// Wider than the extent: toward zero (less a rounding error, so exactly one
+	// ratio wider is one level). + 0: -0 is 0.
+	return (levels >= 0 ? Math.round(levels) : Math.ceil(levels - 1e-9)) + 0;
 }
 
 /** A JS number as a DOUBLE literal: a bare 0.1 would be read as a DECIMAL. */

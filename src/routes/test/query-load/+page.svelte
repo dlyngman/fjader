@@ -186,6 +186,21 @@
 	// ?dots=0: without the raw-row scatters, which read every row on every update
 	// and at ?scale=10 swamp what the aggregated marks' queries cost.
 	const noDots = page.url.searchParams.get('dots') === '0';
+
+	// Each histogram's re-bins, for the log: when, the view, its level, what asked
+	// (AdaptiveBinRung.history). A re-bin nobody asked for shows with its cause.
+	const surfaces = new Map();
+	function noteSurface(name, surface) {
+		if (surface) surfaces.set(name, surface);
+	}
+	function rebinHistory() {
+		const out = {};
+		for (const [name, surface] of surfaces) {
+			const rung = surface.getRungs().find((r) => r.name === 'bins');
+			if (rung) out[name] = rung.history.map((entry) => ({ ...entry }));
+		}
+		return out;
+	}
 	const mounted =
 		mount === 'top' ? charts.slice(0, 4) : mount === 'visible' ? charts.slice(0, 8) : charts;
 	const shown = noDots ? mounted.filter((chart) => chart.kind !== 'dots') : mounted;
@@ -238,7 +253,8 @@
 						mountedAt,
 						entrances,
 						hovers,
-						drag
+						drag,
+						rebins: rebinHistory()
 					}
 				)}
 		>
@@ -275,6 +291,7 @@
 									x={bin(chart.x, chart.steps ? { steps: chart.steps } : {})}
 									y={count()}
 									selection="brush"
+									onMarkLOD={(surface) => noteSurface(chart.name, surface)}
 								/>
 							{:else if chart.kind === 'dots'}
 								<DotsMark

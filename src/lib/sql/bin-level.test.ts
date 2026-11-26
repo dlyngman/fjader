@@ -28,6 +28,15 @@ describe('rebinLevel', () => {
 		expect(rebinLevel(900, 1000)).toBe(0);
 	});
 
+	it('a view wider than the extent is a level less only at a whole ratio wider', () => {
+		// A niced axis: a delay of -60..180 drawn on -100..200, a quarter wider.
+		expect(rebinLevel(300, 240)).toBe(0);
+		expect(rebinLevel(1490, 1000)).toBe(0);
+		expect(rebinLevel(1510, 1000)).toBe(-1);
+		expect(rebinLevel(2240, 1000)).toBe(-1);
+		expect(rebinLevel(2260, 1000)).toBe(-2);
+	});
+
 	it('is 0 without a view or an extent', () => {
 		expect(rebinLevel(0, 1000)).toBe(0);
 		expect(rebinLevel(10, NaN)).toBe(0);
@@ -72,6 +81,16 @@ describe('bins resolved from the level', () => {
 	it('are the whole extent’s bins without a view, and at level 0', () => {
 		expect(numeric([0, 1000])).toEqual(numeric(null));
 		expect(numeric([-20, 1020])).toEqual(numeric(null));
+	});
+
+	it('are the whole extent’s bins on an axis niced a quarter past its data', () => {
+		const info = { delay: { min: -60, max: 180 } };
+		const at = (domain: [number, number] | null) =>
+			bin('delay').padding(info, 'linear', domain) as { alpha: number };
+		expect(at([-100, 200])).toEqual(at(null));
+		expect(at(null).alpha).toBe(10);
+		// Zoomed out for real, they coarsen.
+		expect(at([-300, 420]).alpha).toBeGreaterThan(10);
 	});
 
 	it('follow the chart’s step multiplier at any level', () => {
