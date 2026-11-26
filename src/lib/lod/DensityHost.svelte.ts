@@ -147,8 +147,15 @@ export class DensityHost {
 		const hi = target[1];
 		if (lo === this.#lastSeenLo && hi === this.#lastSeenHi) {
 			// The same view: nothing to count again, unless the mark counts its own
-			// rows and they are other rows now (a new result).
-			if (this.#version && this.#version() !== this.#countedVersion) this.#countHeld(lo, hi);
+			// rows and they are other rows now (a new result). No more often than a
+			// count query went out: under a brush a result lands every frame.
+			if (
+				this.#version &&
+				this.#version() !== this.#countedVersion &&
+				performance.now() - this.#lastCountTime > this.#countDebounceMs
+			) {
+				this.#countHeld(lo, hi);
+			}
 			return;
 		}
 
@@ -183,12 +190,12 @@ export class DensityHost {
 			}
 		}
 
-		// Held by the mark: counted on every change of the view, with no query.
+		// As often as a count query went out, whoever counts: a count moves the
+		// context the rungs react to, and a pan changes it on every frame.
+		if (!this.#shouldQueryCount(lo, hi)) return;
+		// Held by the mark: no query.
 		if (this.#countHeldIn(lo, hi, yLo, yHi)) return;
-
-		if (this.#shouldQueryCount(lo, hi)) {
-			this.#issueCountQuery(lo, hi, yLo, yHi);
-		}
+		this.#issueCountQuery(lo, hi, yLo, yHi);
 	}
 
 	/** The y view, then #countHeldIn: for a frame whose view did not move. */

@@ -81,6 +81,10 @@ export class AdaptiveBinRung implements LODRung {
 	 * mark's first bins are of the field's whole extent.
 	 */
 	#level = { x: 0, y: 0 };
+	/** The level of the view last read, per axis; NaN before the first. */
+	#viewLevel = { x: NaN, y: NaN };
+	/** Whether the mark has had rows: re-bins start with its first. */
+	#seenData = false;
 	/** The view read this frame, per axis: reused, so a frame allocates nothing. */
 	#view: { x: [number, number]; y: [number, number] } = { x: [0, 0], y: [0, 0] };
 	#rebinTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -184,15 +188,26 @@ export class AdaptiveBinRung implements LODRung {
 			return;
 		}
 
-		// 2. Nothing to re-bin before the mark has rows (may be null during a query)
-		const data = this.#getData();
-		if (!data || data.length < 1) return;
+		// 2. Nothing to re-bin before the mark's first rows. Asked until it has
+		//    some, not on every frame after.
+		if (!this.#seenData) {
+			const data = this.#getData();
+			if (!data || data.length < 1) return;
+			this.#seenData = true;
+		}
 
-		// 3. Each binned axis: a re-bin when its view is at another level
+		// 3. Each binned axis: a re-bin when its view is at another level. The
+		//    level is worked out when the view moved, not on every frame: most
+		//    frames are of another chart, or of this one's marks, not its view.
 		for (const axis of this.#binAxes) {
-			if (!this.#readView(axis)) continue;
 			const view = this.#view[axis];
-			if (this.#levelOf(axis, view[0], view[1]) !== this.#level[axis]) {
+			const lo = view[0];
+			const hi = view[1];
+			if (!this.#readView(axis)) continue;
+			if (view[0] !== lo || view[1] !== hi || Number.isNaN(this.#viewLevel[axis])) {
+				this.#viewLevel[axis] = this.#levelOf(axis, view[0], view[1]);
+			}
+			if (this.#viewLevel[axis] !== this.#level[axis]) {
 				this.#debouncedReBin(axis);
 			} else {
 				this.#onViewport?.(axis, view);

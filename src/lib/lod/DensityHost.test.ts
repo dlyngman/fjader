@@ -6,7 +6,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { DensityHost, countRowsInView, type HeldCount } from './DensityHost.svelte';
 
-function harness(countInView?: () => HeldCount, version?: () => number) {
+function harness(countInView?: () => HeldCount, version?: () => number, countDebounceMs?: number) {
 	const frames: Array<() => void> = [];
 	const target: [number, number] = [0, 100];
 	const query = vi.fn(async () => [{ cnt: 77 }]);
@@ -17,7 +17,7 @@ function harness(countInView?: () => HeldCount, version?: () => number) {
 		} as never,
 		{ xScaleState: { domain: { target } }, yScaleState: null, innerWidth: 200 } as never,
 		{ query } as never,
-		{ callerId: 'm', countQueryBuilder: () => 'SELECT 1', countInView, version }
+		{ callerId: 'm', countQueryBuilder: () => 'SELECT 1', countInView, version, countDebounceMs }
 	);
 	const frame = (lo = target[0], hi = target[1]) => {
 		target[0] = lo;
@@ -33,17 +33,26 @@ describe('DensityHost', () => {
 		const { host, query, frame } = harness(() => held);
 		frame();
 		expect(host.ctx.visibleCount).toBe(40);
+		// Soon after: a view more than twice as narrow is counted at once.
 		held = 12;
-		frame(10, 60);
+		frame(10, 40);
 		expect(host.ctx.visibleCount).toBe(12);
 		expect(query).not.toHaveBeenCalled();
+	});
+
+	it('counts a moving view no more often than a count query went out', () => {
+		const count = vi.fn(() => 40);
+		const { frame } = harness(count);
+		frame();
+		for (let lo = 1; lo <= 20; lo++) frame(lo, lo + 100);
+		expect(count).toHaveBeenCalledTimes(1);
 	});
 
 	it('counts again when the rows changed under a view that did not move', () => {
 		let held = 40;
 		let version = 1;
 		const count = vi.fn(() => held);
-		const { host, frame } = harness(count, () => version);
+		const { host, frame } = harness(count, () => version, -1);
 		frame();
 		frame();
 		frame();
