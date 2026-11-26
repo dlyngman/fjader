@@ -1692,6 +1692,8 @@ export class QueryEngine {
 		const parts = reg.descriptor.parts;
 		// And the bin window, for the same reason: a pan moves it while this flies.
 		const window = handle.params.binWindow ?? null;
+		// And the selection filter: a brush moves it while this flies.
+		const filter = reg.filterGroup.selection.predicate(reg.descriptor.route ?? NO_ROUTE) ?? [];
 		handle.sentWindow = window;
 		this.query(sqlStr, markReadOptions(markId, reg.descriptor, preagg?.table ?? null))
 			.catch((e) => {
@@ -1703,7 +1705,7 @@ export class QueryEngine {
 			})
 			// With its parts, as `cause`: a re-registration lets a query in
 			// flight land after the mark has new parts.
-			.then((table) => handle._setResult(table, cause, parts, window))
+			.then((table) => handle._setResult(table, cause, parts, window, filter as unknown[]))
 			.catch((e) => {
 				if ((e as Error)?.name === 'AbortError') return;
 				handle._setError(e as Error);

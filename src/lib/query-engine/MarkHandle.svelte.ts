@@ -56,6 +56,13 @@ export class MarkHandle {
 	 */
 	resultWindow: BinWindow | null = null;
 	/**
+	 * The selection filter the result `dataVersion` counts was computed under,
+	 * set with it, as `resultParts`: a brush moves it while a query is in
+	 * flight. What a mark's own queries over the rows on screen apply
+	 * (MarkLifecycleV2.buildQuery). Plain, like `resultParts`.
+	 */
+	resultFilter: unknown[] | null = null;
+	/**
 	 * The bin window the mark's last query went out with (or will, for an
 	 * inactive mark's catch-up, which reads the params when it is sent). Set by
 	 * the engine as it sends. A window in `params` that differs was never sent:
@@ -136,13 +143,15 @@ export class MarkHandle {
 		table: Table,
 		cause: ResultCause = 'update',
 		parts: QueryParts | null = null,
-		window: BinWindow | null = null
+		window: BinWindow | null = null,
+		filter: unknown[] | null = null
 	): void {
 		this.error = null;
 		if (table === this.arrowTable) return;
 		this.resultCause = cause;
 		this.resultParts = parts;
 		this.resultWindow = window;
+		this.resultFilter = filter;
 		this.arrowTable = table;
 		this.dataVersion++;
 	}

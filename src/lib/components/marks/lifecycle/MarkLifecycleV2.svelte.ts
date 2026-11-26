@@ -1844,13 +1844,17 @@ export class MarkLifecycleV2 {
 			let skipAxis = this.#skipDomainUpdateForAxis;
 			let instantFor = this.#instantFor;
 
-			// A path's result over a window re-registers its band or colour domain
-			// only (a topN or sort re-reads it from every result): its continuous
-			// axes are the whole extent's, from its first result (#windowedAxis),
-			// and the window's rows would narrow them to what the window holds.
-			if (this.#dataDerivedDomainsSet && this.#config._rowLayouts && this.#handle?.resultWindow) {
+			// A path re-registers its series or ordinal colour only (a topN or sort
+			// re-reads them from every result), never a continuous scale: those are
+			// the whole extent's, from its first result, as on a path without a
+			// topN, which never re-registers (#takeBinStep). The same with or without
+			// a window: over one, its rows would narrow them to what it holds.
+			// Following the bins on y is the rebin ride's, for every path at once.
+			let colorState = this.#colorScaleState;
+			if (this.#dataDerivedDomainsSet && this.#config._rowLayouts) {
 				xState = null;
 				yState = null;
+				if (!colorState?.isOrdinal) colorState = null;
 			}
 
 			// A rebin result: the value axis (count per bucket) changed unit, so
@@ -1911,7 +1915,7 @@ export class MarkLifecycleV2 {
 					this.#markId,
 					this.#placeExtent,
 					instantFor,
-					this.#colorScaleState,
+					colorState,
 					this.#transformCompiler.hasCategoryReducingTransforms()
 				);
 			};
@@ -2414,9 +2418,9 @@ export class MarkLifecycleV2 {
 	// ===========================================================================
 
 	/**
-	 * The mark's query for the rows on screen: the parts and bin window of the
-	 * result it holds (before its first, the current ones), under the filter
-	 * its selection applies, with the window's source filter the engine adds
+	 * The mark's query for the rows on screen: the parts, bin window and
+	 * selection filter of the result it holds (before its first, the current
+	 * ones), with the window's source filter the engine adds
 	 * (windowSourceFilter). What the tooltip table is written from, the
 	 * viewport count wraps and the SQL fit reads: each describes the data
 	 * drawn, so not a window set since, whose bins may be others. Without a
@@ -2433,7 +2437,12 @@ export class MarkLifecycleV2 {
 		const held = handle?.resultParts ?? null;
 		const parts = held ?? this.#resolvedQueryParts;
 		if (!this.setupComplete || !parts) return null;
-		const filter = (this.#filterGroup.selection.predicate(this.#route) ?? []) as unknown[];
+		// The filter too: a newer query in flight has another one.
+		const filter = (
+			held
+				? (handle?.resultFilter ?? [])
+				: (this.#filterGroup.selection.predicate(this.#route) ?? [])
+		) as unknown[];
 		const binWindow = held ? (handle?.resultWindow ?? null) : (handle?.params.binWindow ?? null);
 		const range = windowSourceFilter(parts, this.#transformCompiler, binWindow);
 		const q = assembleQuery({
@@ -3471,6 +3480,14 @@ export class MarkLifecycleV2 {
 		const band = this.#resolvedQueryParts?.bins?.[`${axis}1`];
 		const view = viewInBinUnits(domain, this.#timeOrigin(axis), this.#viewScratch);
 		if (!binWindowNeedsMove(current, view, band ? binExtent(band) : null)) return;
+		// A path zoomed out until its window would hold the whole extent drops it,
+		// as a rebin there would (#rebinTo): its query meets the whole extent's in
+		// the cache, and its bins are capped for the extent again. Not by clearing
+		// the window alone, which would send the window's bins unwindowed.
+		if (this.#config._rowLayouts && this.#windowCoversField(axis, view)) {
+			this.#rebinTo(axis, domain);
+			return;
+		}
 		handle.setBinWindow(binWindowFor(view, band), true);
 	}
 
