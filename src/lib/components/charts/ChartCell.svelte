@@ -270,6 +270,7 @@
 		removeVisibilityCallback();
 		chartVisibility.remove(layout.chartId);
 		chartHover.set(layout.chartId, false);
+		chartHover.pan(layout.chartId, false);
 	});
 	onMount(() => () => hoverSettle.leave());
 
@@ -417,6 +418,9 @@
 		get hovered() {
 			return chartHover.hovered;
 		},
+		get gesturing() {
+			return chartHover.gesturing;
+		},
 		get yScaleState() {
 			return scales?.yScaleState;
 		},
@@ -518,6 +522,14 @@
 	// Touch/pinch zoom state
 	let initialTouchDistance = $state(0);
 	let isZooming = $state(false);
+
+	/**
+	 * Tell the chart a pan or zoom gesture started or stopped (ChartHover), from
+	 * the handlers that change it: work for tooltips and clicks waits for its end.
+	 */
+	function reportGesture() {
+		chartHover.pan(layout.chartId, isPanning || isZooming);
+	}
 
 	let chartCellEl: HTMLDivElement;
 	// SVG offsetX/offsetY is relative to the *target* element, not the listener,
@@ -663,6 +675,7 @@
 			return;
 		}
 
+		chartHover.wheel();
 		pointerBuffer.x = ptrX(event);
 		pointerBuffer.y = ptrY(event);
 		const { xInBounds, yInBounds, innerPoint } = layout.getActiveAxes(pointerBuffer);
@@ -761,6 +774,7 @@
 		if (event.touches.length === 2) {
 			event.preventDefault();
 			isZooming = true;
+			reportGesture();
 			initialTouchDistance = getTouchDistance(event.touches[0], event.touches[1]);
 			const mid = touchMidpoint(event.touches[0], event.touches[1]);
 			pointerBuffer.x = mid.x;
@@ -803,6 +817,7 @@
 	function handleTouchEnd() {
 		isZooming = false;
 		isPanning = false;
+		reportGesture();
 		activePanX = false;
 		activePanY = false;
 	}
@@ -889,6 +904,7 @@
 			scales.startParallelPan(pointerBuffer.y, innerPoint.x, layout.innerWidth, layout.innerHeight)
 		) {
 			isPanning = true;
+			reportGesture();
 			scales.clearCurrentDataPoints();
 			currentInnerX = null;
 			currentInnerY = null;
@@ -913,6 +929,7 @@
 
 		if (!activePanX && !activePanY) return;
 		isPanning = true;
+		reportGesture();
 		scales.startPan(
 			pointerBuffer.x,
 			pointerBuffer.y,
@@ -1049,6 +1066,7 @@
 
 	function stopPan() {
 		isPanning = false;
+		reportGesture();
 		activePanX = false;
 		activePanY = false;
 		scales.endPan();

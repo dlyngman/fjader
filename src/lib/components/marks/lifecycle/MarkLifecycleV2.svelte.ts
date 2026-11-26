@@ -1285,8 +1285,13 @@ export class MarkLifecycleV2 {
 		//   mark out of the tooltip manager, so no lookup reads old rows. It is
 		//   written when the pointer enters the chart, at once, as interaction:
 		//   it is what the first hover waits for.
+		// - A pan or zoom under way on the chart (ChartHover.gesturing): not
+		//   written. No tooltip shows and no click lands while it lasts, and each
+		//   rebin or moved window would rewrite it. The old table stays readable,
+		//   as during the debounce; it is written at once when the gesture ends.
 		// - fitDomain on a mark with JS transforms reads the table to fit
-		//   (#buildFitDomainQuery), so that mark writes eagerly, in background.
+		//   (#buildFitDomainQuery), so that mark writes eagerly, in background,
+		//   gesture or not.
 		$effect(() => {
 			const tooltipConfig = this.#reactiveConfig.tooltip;
 			const fitDomain = this.#reactiveConfig.fitDomain;
@@ -1295,6 +1300,7 @@ export class MarkLifecycleV2 {
 			const dataVersion = this.dataVersion;
 			if (dataVersion === 0) return;
 			const hovered = this.#chartContext.hovered ?? true;
+			const gesturing = this.#chartContext.gesturing ?? false;
 			const eager = !!fitDomain && this.#transformCompiler.hasJSTransforms();
 
 			untrack(() => {
@@ -1308,6 +1314,9 @@ export class MarkLifecycleV2 {
 					this.#tooltipTableReady = false;
 					return;
 				}
+				// Waits for the gesture's end, which re-runs this effect: the version
+				// is seen by then, so it writes at once.
+				if (gesturing && !eager) return;
 				const cls = eager && !hovered ? 'background' : 'interaction';
 				const write = () => {
 					const data = this.data;
