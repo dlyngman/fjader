@@ -482,6 +482,14 @@
 			]
 		: baseDataBindingConfig;
 
+	// Rebins ride (path-fold.ts): the mark's rebin source decides, once per data
+	// version, what each result is relative to the rows written; a rebin's map
+	// gives each new point its start on the old path. Before the writes below,
+	// which take the decision on their first write of a version.
+	$effect(() => {
+		if (renderer?.resourcesCreated) renderer.setBinning(rebinSource, { geometry: 'point' });
+	});
+
 	// --- DATA WRITING EFFECTS ---
 
 	$effect(() => {

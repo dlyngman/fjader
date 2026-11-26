@@ -98,6 +98,7 @@ import {
 import { binLayout } from './bin-layout';
 import { layoutFor, rowLayoutOf, RUNS, type ReadableLayout, type RowLayout } from './row-layout';
 import {
+	oncePerVersion,
 	buildBinCut,
 	buildBinRemap,
 	isNested,
@@ -3209,7 +3210,11 @@ export class MarkLifecycleV2 {
 	 */
 	readonly rebinSource: RebinSource = {
 		dataVersion: () => this.dataVersion,
-		takeRebin: (canHold) => this.#takeRebin(canHold),
+		// One decision per data version for every renderer of the mark.
+		takeRebin: oncePerVersion(
+			() => this.dataVersion,
+			(canHold) => this.#takeRebin(canHold)
+		),
 		commitLayout: () => {
 			this.#takenSide = this.#pendingSide;
 		},
@@ -3282,7 +3287,8 @@ export class MarkLifecycleV2 {
 			};
 			return { kind: 'cut', cut: held };
 		}
-		const map = buildBinRemap(last, side);
+		// A path's points start on the old path on a split (bin-remap's `point`).
+		const map = buildBinRemap(last, side, 0, this.#config._rowLayouts ? 'point' : 'interval');
 		return map ? { kind: 'forward', map, why: held } : null;
 	}
 

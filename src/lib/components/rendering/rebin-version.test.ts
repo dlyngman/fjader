@@ -4,6 +4,7 @@ import { MorphedChannels } from '$lib/gpu/MorphedChannels';
 import {
 	buildBinCut,
 	buildBinRemap,
+	oncePerVersion,
 	type BinRemapSide,
 	type RebinDecision,
 	type RebinSource
@@ -440,3 +441,30 @@ function side(edges: number[]): BinRemapSide {
 		ids: []
 	};
 }
+
+describe('one decision for every renderer of a mark', () => {
+	it('gives the second renderer of a version the decision the first took, after it committed', () => {
+		// A source as the lifecycle's: a decision compares the result with the
+		// layout last committed, and the first renderer commits on its write.
+		let version = 1;
+		let committed = 'coarse';
+		const current = () => (version === 1 ? 'coarse' : 'fine');
+		const map = new Uint32Array([1, 2, 3]);
+		const fresh = (): RebinDecision =>
+			committed === current() ? null : { kind: 'forward', map, why: 'split' };
+		const take = oncePerVersion(() => version, fresh);
+		const commit = () => (committed = current());
+
+		version = 2;
+		const fill = take(false);
+		commit();
+		const outline = take(false);
+		expect(fill).toEqual({ kind: 'forward', map, why: 'split' });
+		expect(outline).toBe(fill);
+		// Taken afresh, the outline would have found nothing and snapped.
+		expect(fresh()).toBeNull();
+		// The next version decides again.
+		version = 3;
+		expect(take(false)).toBeNull();
+	});
+});

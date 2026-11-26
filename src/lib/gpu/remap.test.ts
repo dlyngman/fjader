@@ -155,6 +155,81 @@ describe('the bins remap', () => {
 	});
 });
 
+/** As `remap`, for rows that sit at a point in their bin (a line's vertices). */
+function remapPoints(
+	prev: BinRemapSide,
+	next: BinRemapSide,
+	old: number[],
+	to: number[]
+): number[] {
+	const map = buildBinRemap(prev, next, 0, 'point')!;
+	const out = new Float32Array(to.length);
+	return Array.from(remapReference('linear', old, to, map, SAME, SAME, to.length, out));
+}
+
+describe('the bins remap for points (lines, areas)', () => {
+	it('starts a split’s points on the old path: interpolated between the old points around them', () => {
+		// Old points at 5, 15 and 25; new ones at 2.5, 7.5, …, 27.5.
+		const from = remapPoints(
+			side([0, 10, 20, 30]),
+			side([0, 5, 10, 15, 20, 25, 30]),
+			[0, 10, 20],
+			[9, 9, 9, 9, 9, 9]
+		);
+		// Before the first old point and after the last: that end point's value.
+		expect(from).toEqual([0, 2.5, 7.5, 12.5, 17.5, 20]);
+	});
+
+	it('a split that does not nest (5 to 2) interpolates by the centres all the same', () => {
+		const from = remapPoints(side([0, 5, 10]), side([0, 2, 4, 6, 8, 10]), [0, 10], [9, 9, 9, 9, 9]);
+		// Centres 1, 3, 5, 7, 9 against old points at 2.5 and 7.5.
+		expect(from).toEqual([0, 1, 5, 9, 10]);
+	});
+
+	it('starts a merge at the overlap-weighted mean of the old points, as an interval does', () => {
+		expect(remapPoints(side([0, 5, 10, 15, 20]), side([0, 10, 20]), [2, 6, 1, 3], [8, 4])).toEqual([
+			4, 2
+		]);
+		// 2 into 5: old bins straddle the new edges, weighted by what falls inside.
+		const from = remapPoints(side([0, 2, 4, 6, 8, 10]), side([0, 5, 10]), [1, 2, 3, 4, 5], [9, 9]);
+		expect(from[0]).toBeCloseTo((2 * 1 + 2 * 2 + 1 * 3) / 5);
+		expect(from[1]).toBeCloseTo((1 * 3 + 2 * 4 + 2 * 5) / 5);
+	});
+
+	it('maps the same bins over a moved window one to one', () => {
+		const from = remapPoints(
+			side([0, 1, 2, 3, 4]),
+			side([1, 2, 3, 4, 5]),
+			[7, 8, 9, 10],
+			[0, 0, 0, 6]
+		);
+		// The point past the old rows has nothing to start from: it starts at its new value.
+		expect(from).toEqual([8, 9, 10, 6]);
+	});
+
+	it('a new point outside the old rows starts at its new value: it appears at once', () => {
+		const from = remapPoints(
+			side([10, 20, 30]),
+			side([0, 5, 10, 15, 20, 25, 30, 35, 40]),
+			[4, 8],
+			[1, 1, 9, 9, 9, 9, 3, 3]
+		);
+		expect(from.slice(0, 2)).toEqual([1, 1]);
+		expect(from.slice(6)).toEqual([3, 3]);
+	});
+
+	it('a gap next to a new point makes its start NaN, so it lands rather than averaging the gap away', () => {
+		const from = remapPoints(
+			side([0, 10, 20, 30]),
+			side([0, 5, 10, 15, 20, 25, 30]),
+			[0, NaN, 20],
+			[9, 9, 9, 9, 9, 9]
+		);
+		expect(from[0]).toBe(0);
+		expect(Number.isNaN(from[1]) && Number.isNaN(from[2]) && Number.isNaN(from[3])).toBe(true);
+	});
+});
+
 /** A held side's rows gathered from a new side's (the hold's `to`), from `to` as it was. */
 function gather(held: BinRemapSide, next: BinRemapSide, src: number[], to: number[]): number[] {
 	const map = buildBinRemap(next, held, NEST_EPSILON)!;
