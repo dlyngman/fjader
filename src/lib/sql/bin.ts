@@ -262,6 +262,19 @@ export class AutoBinNode {
 	}
 
 	/**
+	 * The steps across the view these bins are resolved for while they follow
+	 * it: the mark's `steps` (30 by default) by the chart's step multiplier,
+	 * with the floor. The same at every rebin level, which is the point of
+	 * levels: a view's bins are about this many, a little more or fewer as the
+	 * view moves within its level. Null for bins that do not follow the view.
+	 */
+	viewSteps(binStepMultiplier: number = 1.0, minSteps: number = 1): number | null {
+		if (!this.followsView) return null;
+		const steps = Math.max(1, Math.round((this.options.steps || 30) * binStepMultiplier));
+		return Math.max(steps, minSteps);
+	}
+
+	/**
 	 * The field's extent in the units of the axis's domain (seconds on a time
 	 * axis), which a view's width is compared with for its rebin level
 	 * (`rebinLevel`). NaN without the field's statistics.

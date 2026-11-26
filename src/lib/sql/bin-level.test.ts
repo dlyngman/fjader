@@ -222,3 +222,28 @@ describe('a floor on the steps (a path mark, which two points do not make)', () 
 		);
 	});
 });
+
+describe('the steps across the view that view-following bins are resolved for', () => {
+	it('are the mark’s steps by the step multiplier, 30 by default, with the floor', () => {
+		expect(bin('v').viewSteps()).toBe(30);
+		expect(bin('v', { steps: 60 }).viewSteps()).toBe(60);
+		expect(bin('v', { steps: 60 }).viewSteps(0.5)).toBe(30);
+		expect(bin('v').viewSteps(0.1, 8)).toBe(8);
+	});
+
+	it('are about the bins a view has at its own level, at every level', () => {
+		// A view exactly on a level: 1000 / 1.5^k wide.
+		for (let level = 0; level <= 8; level++) {
+			const width = 1000 / REBIN_RATIO ** level;
+			const pad = bin('v', { steps: 60 }).padding(INFO, 'linear', [0, width]) as { alpha: number };
+			const inView = width / pad.alpha;
+			expect(inView).toBeGreaterThan(60 / 2.6);
+			expect(inView).toBeLessThanOrEqual(60 * 1.01);
+		}
+	});
+
+	it('are null for bins that keep their step', () => {
+		expect(bin('v', { step: 5 }).viewSteps()).toBeNull();
+		expect(bin('t', { interval: 'day' }).viewSteps()).toBeNull();
+	});
+});

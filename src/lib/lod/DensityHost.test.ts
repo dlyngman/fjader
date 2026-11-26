@@ -64,6 +64,32 @@ describe('DensityHost', () => {
 		expect(count).toHaveBeenCalledTimes(2);
 	});
 
+	it('a count put off is taken later, with no further frame: the last result is not left uncounted', async () => {
+		let held = 40;
+		let version = 1;
+		const count = vi.fn(() => held);
+		const { host, frame } = harness(count, () => version, 40);
+		frame();
+		// A new result straight after, under the same view: too soon to count.
+		held = 7;
+		version = 2;
+		frame();
+		expect(host.ctx.visibleCount).toBe(40);
+		// No more frames. The count comes once the spacing has passed.
+		await vi.waitFor(() => expect(host.ctx.visibleCount).toBe(7));
+		expect(count).toHaveBeenCalledTimes(2);
+	});
+
+	it('a moving view that comes to rest is counted where it stopped', async () => {
+		let held = 40;
+		const { host, frame } = harness(() => held, undefined, 40);
+		frame();
+		held = 33;
+		frame(5, 105);
+		expect(host.ctx.visibleCount).toBe(40);
+		await vi.waitFor(() => expect(host.ctx.visibleCount).toBe(33));
+	});
+
 	it('asks nothing while a mark waits for its first result, and counts once it has it', () => {
 		let held: HeldCount = 'wait';
 		const { host, query, frame } = harness(() => held);

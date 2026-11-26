@@ -67,6 +67,8 @@ export class DensityHost {
 	#version: (() => number) | null;
 	/** The rows' version the last held count was of. */
 	#countedVersion = -1;
+	/** A held count put off, to be taken when the spacing allows (#countLater). */
+	#laterTimer: ReturnType<typeof setTimeout> | null = null;
 
 	// --- Decimation config ---
 	#decimate: boolean | 'auto';
@@ -149,12 +151,12 @@ export class DensityHost {
 			// The same view: nothing to count again, unless the mark counts its own
 			// rows and they are other rows now (a new result). No more often than a
 			// count query went out: under a brush a result lands every frame.
-			if (
-				this.#version &&
-				this.#version() !== this.#countedVersion &&
-				performance.now() - this.#lastCountTime > this.#countDebounceMs
-			) {
-				this.#countHeld(lo, hi);
+			if (this.#version && this.#version() !== this.#countedVersion) {
+				if (performance.now() - this.#lastCountTime > this.#countDebounceMs) {
+					this.#countHeld(lo, hi);
+				} else {
+					this.#countLater();
+				}
 			}
 			return;
 		}
@@ -192,10 +194,32 @@ export class DensityHost {
 
 		// As often as a count query went out, whoever counts: a count moves the
 		// context the rungs react to, and a pan changes it on every frame.
-		if (!this.#shouldQueryCount(lo, hi)) return;
+		if (!this.#shouldQueryCount(lo, hi)) {
+			// A mark's own count is not left stale when the frames stop here.
+			if (this.#countInView) this.#countLater();
+			return;
+		}
 		// Held by the mark: no query.
 		if (this.#countHeldIn(lo, hi, yLo, yHi)) return;
 		this.#issueCountQuery(lo, hi, yLo, yHi);
+	}
+
+	/**
+	 * A held count that was put off (too soon after the last) is taken once the
+	 * spacing has passed, of the view as it is then. Without it the last result
+	 * of a brush, or of a re-bin, is never counted when no later frame comes:
+	 * the dots kept the count of the bins before.
+	 */
+	#countLater(): void {
+		if (this.#laterTimer !== null) return;
+		const wait = Math.max(0, this.#countDebounceMs - (performance.now() - this.#lastCountTime));
+		this.#laterTimer = setTimeout(() => {
+			this.#laterTimer = null;
+			if (this.#destroyed) return;
+			const target = (this.#chartContext.xScaleState as { domain?: { target?: number[] } } | null)
+				?.domain?.target;
+			if (target) this.#countHeld(target[0], target[1]);
+		}, wait + 1);
 	}
 
 	/** The y view, then #countHeldIn: for a frame whose view did not move. */
@@ -354,6 +378,10 @@ export class DensityHost {
 		if (this.#frameCallback) {
 			this.#gpuCoordinator.removeFrameCallback(this.#frameCallback);
 			this.#frameCallback = null;
+		}
+		if (this.#laterTimer !== null) {
+			clearTimeout(this.#laterTimer);
+			this.#laterTimer = null;
 		}
 	}
 }

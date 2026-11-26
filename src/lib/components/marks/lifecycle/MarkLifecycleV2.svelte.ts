@@ -2411,12 +2411,30 @@ export class MarkLifecycleV2 {
 	 */
 	countInView(xLo: number, xHi: number, yLo: number, yHi: number): HeldCount {
 		if (this.#autoBinNodes.size > 0 && this.dataVersion === 0) return 'wait';
-		if (this.rowLayout.kind !== 'grid') return 'ask';
+		const layout = this.rowLayout;
+		if (layout.kind !== 'grid') return 'ask';
+		// Bins that follow the view, and can still refine: the points the view's
+		// LEVEL is resolved for, not the ones in the view this moment. Within a
+		// level the points spread by up to a rebin ratio before the next level
+		// closes them up, so a count of the moment made the dots come and go with
+		// every level. Held at their finest, the bins stop following, and the
+		// points are counted as they are: dots then mean the finest bins.
+		const nominal = this.#nominalSteps();
+		if (nominal !== null && this.binsHeld !== 'finest') return nominal * layout.series;
 		const data = this.data;
 		const x = data?.getColumn('x') as ArrayLike<number> | null | undefined;
 		if (!data || !x) return 'ask';
 		const y = (data.getColumn('y') as ArrayLike<number> | null) ?? null;
 		return countRowsInView(x, y, xLo, xHi, yLo, yHi);
+	}
+
+	/** The steps across the view of the binned axis's bins while they follow it; null when they do not. */
+	#nominalSteps(): number | null {
+		for (const [channel, node] of this.#autoBinNodes) {
+			const { multiplier, minSteps } = this.#binArgs(channel);
+			return node.viewSteps(multiplier, minSteps);
+		}
+		return null;
 	}
 
 	/**
