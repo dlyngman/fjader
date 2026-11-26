@@ -28,6 +28,7 @@ import type { TransformCompiler } from '$lib/transforms/TransformCompiler';
 import type { ColumnSchema } from '$lib/query-engine/QueryEngine';
 import { binEdgeSQL, binKeySQL } from '$lib/sql/bin';
 import type { BinPadding, BinWindow } from '$lib/types';
+import { binWindowSourceFilter } from '$lib/transforms';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -133,6 +134,30 @@ export interface WindowWrap {
 	/** channel → outer WindowNode (already rewritten to reference channel aliases). */
 	channels: Record<string, WindowNode>;
 	cteName: string;
+}
+
+/**
+ * The row filter a windowed binned mark's query adds on its bin source, or
+ * null: it aggregates only the rows its window can hold. The padding's join
+ * keeps the window's bins either way, but filtering first saves the GROUP BY
+ * over the rest of the extent. Not when a transform reads the whole extent:
+ * the filter is a row filter, so it precedes every transform. A topN would
+ * rank series over the window (its top and its Other changing as the view
+ * pans, and differing from a preagg read, which ranks the whole extent), and a
+ * window aggregate would lose the rows before the window's edge. Those keep
+ * the windowed padding over the full aggregate: correct, without the speed-up.
+ *
+ * One rule for every query built from a mark: the engine's (QueryEngine
+ * #baseSQL) and the lifecycle's own (MarkLifecycleV2.buildQuery, which the
+ * tooltip table and the viewport count read).
+ */
+export function windowSourceFilter(
+	parts: QueryParts,
+	transformCompiler: TransformCompiler,
+	window: BinWindow | null | undefined
+): ExprNode | null {
+	if (transformCompiler.hasCategoryReducingTransforms() || parts.hasWindowAggregates) return null;
+	return binWindowSourceFilter(parts.bins, window);
 }
 
 export interface AssembleOptions {

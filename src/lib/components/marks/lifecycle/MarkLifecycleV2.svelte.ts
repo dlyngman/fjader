@@ -121,6 +121,7 @@ import { binRowsMoved, binSpecKey, heldCoversView, isRebin, rebinTweens } from '
 import {
 	buildQueryParts,
 	assembleQuery,
+	windowSourceFilter,
 	isPositionalChannel,
 	measureChannels,
 	pathGapChannels,
@@ -2405,19 +2406,25 @@ export class MarkLifecycleV2 {
 
 	/**
 	 * The mark's query: its resolved parts, under the filter its selection
-	 * applies. What the tooltip table is written from and the viewport count
-	 * wraps. Null before setup completes (scale domains and time offsets aren't
-	 * available yet).
+	 * applies, over its window as the engine sends it. What the tooltip table
+	 * is written from and the viewport count wraps. Without the window, a mark
+	 * whose bins are sized for one (a path, MarkLifecycleV2.#maxBins) would pad
+	 * the whole extent past the row limit, and get unpadded rows. Null before
+	 * setup completes (scale domains and time offsets aren't available yet).
 	 */
 	buildQuery(): string | null {
-		if (!this.setupComplete || !this.#resolvedQueryParts) return null;
-		const filter = this.#filterGroup.selection.predicate(this.#route) ?? [];
+		const parts = this.#resolvedQueryParts;
+		if (!this.setupComplete || !parts) return null;
+		const filter = (this.#filterGroup.selection.predicate(this.#route) ?? []) as unknown[];
+		const binWindow = this.#handle?.params.binWindow ?? null;
+		const range = windowSourceFilter(parts, this.#transformCompiler, binWindow);
 		const q = assembleQuery({
 			table: this.#sourceTable,
-			parts: this.#resolvedQueryParts,
-			filter: filter as unknown[],
+			parts,
+			filter: range ? [...filter, range] : filter,
 			transformCompiler: this.#transformCompiler,
-			limit: this.#reactiveConfig.limit
+			limit: this.#reactiveConfig.limit,
+			binWindow
 		});
 		return q ? q.toString() : null;
 	}
