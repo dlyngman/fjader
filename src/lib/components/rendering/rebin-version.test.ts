@@ -241,6 +241,20 @@ describe('a merge that holds the drawn layout', () => {
 		expect(t.written).toEqual([]);
 	});
 
+	it('defers the uniforms too, so a layout they describe stays the held one until the swap', async () => {
+		const t = await drawn();
+		t.setVersion(2);
+		t.setNext({ kind: 'hold', map: HOLD });
+		writeAll(t.renderer, MERGED, MERGED_HEIGHTS);
+		// A path writes its grid (bins per series, series) into its uniform.
+		t.renderer.writeUniform(5, new Uint8Array(16));
+		expect(t.uploads.some((label) => label.includes('uniform'))).toBe(false);
+
+		t.setNext({ kind: 'forward', map: FORWARD, why: 'not nested' });
+		await t.land();
+		expect(t.uploads).toContain('rects-uniform-5');
+	});
+
 	it('writes the new layout when the rows land, through a forward map, and commits', async () => {
 		const t = await drawn();
 		t.setVersion(2);

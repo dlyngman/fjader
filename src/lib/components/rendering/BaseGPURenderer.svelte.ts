@@ -128,6 +128,13 @@ interface Hold {
 	morph: Parameters<BaseGPURenderer['writeMorphed']> | null;
 	attributes: Map<number, AllowSharedBufferSource>;
 	vertex: Map<number, AllowSharedBufferSource>;
+	/**
+	 * The mark's uniforms, written whole: held too, as they can describe the
+	 * layout (a path's grid: bins per series, series), which must stay the held
+	 * rows' until the swap. Addressed with the new result's grid, a held path's
+	 * last points were read from the wrong rows.
+	 */
+	uniforms: Map<number, AllowSharedBufferSource>;
 	count: number | null;
 }
 
@@ -696,6 +703,10 @@ export class BaseGPURenderer {
 	 */
 	writeUniform(binding: number, data: AllowSharedBufferSource): void {
 		if (!this.#device || !data) return;
+		if (this.#hold) {
+			this.#hold.uniforms.set(binding, data);
+			return;
+		}
 
 		let buffer = this.#ownedResources.buffers.get(binding);
 
@@ -1121,6 +1132,7 @@ export class BaseGPURenderer {
 			morph: null,
 			attributes: new Map(),
 			vertex: new Map(),
+			uniforms: new Map(),
 			count: null
 		};
 		return this.#hold;
@@ -1248,6 +1260,7 @@ export class BaseGPURenderer {
 		this.#dropSeams();
 		for (const [binding, data] of hold.attributes) this.writeAttribute(binding, data);
 		for (const [slot, data] of hold.vertex) this.writeVertexBuffer(slot, data);
+		for (const [binding, data] of hold.uniforms) this.writeUniform(binding, data);
 		if (hold.count !== null) this.updateInstanceCount(hold.count);
 	}
 
