@@ -610,6 +610,59 @@
 				</div>
 			</div>
 			<div class="case">
+				<h3>11. Rebins ride: a line of means per carrier</h3>
+				<p class="desc">
+					Mean distance per carrier over delay, with automatic bins. Zoom in and out, and
+					shift+scroll over a line: on each rebin the lines keep their shape and glide to the new
+					bins' values. Zooming in, the new points start on the old lines (no flat steps); zooming
+					out, at the average of what they cover. A mean does not change unit with the bin width, so
+					the y axis can stay as it is. Points past the old rows appear at once, as do gaps.
+				</p>
+				<div class="panel">
+					<ChartContainer xLabel="delay" yLabel="mean distance">
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<Grid />
+						<LineMark
+							table="pg_flights"
+							x={bin('delay')}
+							y={avg('distance')}
+							stroke="carrier"
+							selection="pg"
+						/>
+						<Legend position="right" />
+					</ChartContainer>
+				</div>
+			</div>
+			<div class="case">
+				<h3>12. Rebins ride: a stacked area of means, with its outline</h3>
+				<p class="desc">
+					Mean distance per carrier, stacked, filled, with an outline along each band's top;
+					automatic bins. Zoom and shift+scroll: the fill and its outline ride every rebin together,
+					and no gap opens between bands at any frame.
+				</p>
+				<div class="panel">
+					<ChartContainer xLabel="delay" yLabel="mean distance (stacked)">
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<Grid />
+						<AreaMarkY
+							table="pg_flights"
+							x={bin('delay')}
+							y={avg('distance')}
+							fill="carrier"
+							fillOpacity={0.5}
+							stroke="#333"
+							strokeWidth={1.5}
+							curve="monotone"
+							selection="pg"
+						/>
+					</ChartContainer>
+				</div>
+			</div>
+			<div class="case">
 				<h3>10. The top three carriers (topN)</h3>
 				<p class="desc">
 					Case 1's lines, kept to the three carriers with the most flights. A topN re-reads the
