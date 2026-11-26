@@ -114,6 +114,7 @@ import {
 	binWindowNeedsMove,
 	insideBinWindow,
 	viewInBinUnits,
+	windowCoversExtent,
 	windowPaddedBins
 } from './bin-window';
 import { binRowsMoved, binSpecKey, heldCoversView, isRebin, rebinTweens } from './rebin';
@@ -916,10 +917,11 @@ export class MarkLifecycleV2 {
 						scratch[0] = domain[0];
 						scratch[1] = domain[1];
 						const view = viewInBinUnits(scratch, this.#timeOrigin(axis), scratch);
-						this.#handle?.setBinWindow(
-							binWindowFor(view, this.#windowBand(axis, [domain[0], domain[1]])),
-							false
-						);
+						const band = this.#windowBand(axis, [domain[0], domain[1]]);
+						// A path whose window would hold the whole extent pads it without one:
+						// the same bins, and the SQL its first query at these bins had.
+						const whole = !!this.#config._rowLayouts && !!band && windowCoversExtent(view, band);
+						this.#handle?.setBinWindow(whole ? null : binWindowFor(view, band), false);
 					}
 					this.#lastBinDomain[axis] = [domain[0], domain[1]];
 					// #lastBinDomain is $state — #resolvedQueryParts recomputes automatically.
@@ -3383,11 +3385,20 @@ export class MarkLifecycleV2 {
 		// A path's first window, once its first result has registered its value
 		// axis. Not sent from here: the cap the window lifts re-plans the bins,
 		// and if that changes them the new query carries it; if not, the next
-		// frame sends it (below). The view is copied: the scratch is reused.
+		// frame sends it (below). Only once the window would leave out part of
+		// the extent: one that covers it pads the same bins as no window, and
+		// its other SQL would miss the cache for the same rows (a second query
+		// for every path at load). Checked each frame without allocating; the
+		// view is copied only when the window is set, as the scratch is reused.
 		if (!current && this.#config._rowLayouts) {
+			const band = this.#resolvedQueryParts?.bins?.[`${axis}1`];
+			const view = viewInBinUnits(domain, this.#timeOrigin(axis), this.#viewScratch);
+			if (!band || windowCoversExtent(view, band)) return;
 			const at: [number, number] = [domain[0], domain[1]];
-			const view = viewInBinUnits(at, this.#timeOrigin(axis), this.#viewScratch);
-			handle.setBinWindow(binWindowFor(view, this.#windowBand(axis, at)), false);
+			handle.setBinWindow(
+				binWindowFor(viewInBinUnits(at, this.#timeOrigin(axis)), this.#windowBand(axis, at)),
+				false
+			);
 			return;
 		}
 		// A window set that no query went out with (set quietly for a query that

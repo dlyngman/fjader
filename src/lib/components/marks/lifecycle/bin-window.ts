@@ -97,6 +97,18 @@ export function insideBinWindow(
 	return !window || (range[0] >= window[0] && range[1] <= window[1]);
 }
 
+/**
+ * Whether the window for a viewport `[lo, hi]` (in the bins' units) would hold
+ * every bin of `bin`'s extent: then it pads the same bins as no window. Before
+ * snapping, which only widens it. Allocates nothing: asked on every frame.
+ */
+export function windowCoversExtent(view: readonly [number, number], bin: BinPadding): boolean {
+	const width = view[1] - view[0];
+	const lo = bin.kind === 'time' ? bin.minMs : bin.min;
+	const hi = bin.kind === 'time' ? bin.maxMs : bin.min + bin.alpha * bin.count;
+	return view[0] - MARGIN * width <= lo && view[1] + MARGIN * width >= hi;
+}
+
 /** The extent a bin spec covers, in its own units. */
 export function binExtent(bin: BinPadding): [number, number] {
 	if (bin.kind === 'time') return [bin.minMs, bin.maxMs];

@@ -6,6 +6,7 @@ import {
 	insideBinWindow,
 	MARGIN,
 	viewInBinUnits,
+	windowCoversExtent,
 	windowPaddedBins
 } from './bin-window';
 import { AutoBinNode, bin, intervalWidthMs, REBIN_RATIO } from '$lib/sql/bin';
@@ -208,5 +209,25 @@ describe('a path’s bin cap over a window (windowPaddedBins)', () => {
 	it('deep in: about (1 + 2·MARGIN) views of bins, plus the snapped ends', () => {
 		const share = (1 + 2 * MARGIN) * REBIN_RATIO ** (0.5 - 10);
 		expect(windowPaddedBins(10_000, 10, false)).toBe(Math.ceil(10_000 * share) + 3);
+	});
+});
+
+describe('whether a path needs a window yet (windowCoversExtent)', () => {
+	const numeric: BinPadding = {
+		kind: 'number',
+		source: 'v',
+		min: 0,
+		alpha: 10,
+		count: 100,
+		offset: 0
+	};
+	it('not while the window would hold the whole extent', () => {
+		expect(windowCoversExtent([0, 1000], numeric)).toBe(true);
+		// A quarter of the extent: 1.5 views each side reach both ends.
+		expect(windowCoversExtent([375, 625], numeric)).toBe(true);
+	});
+	it('once the window would leave part of it out', () => {
+		expect(windowCoversExtent([0, 250], numeric)).toBe(false);
+		expect(windowCoversExtent([400, 500], numeric)).toBe(false);
 	});
 });
