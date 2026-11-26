@@ -109,24 +109,41 @@
 		pointer(svg, 'pointerup', x1, y1, 0);
 	}
 
-	async function zoomAndPan(id) {
+	/**
+	 * Where the data is, as a share of the x axis: the median delay between the
+	 * field's min and max. `delay` has a long right tail, so the axis's middle is
+	 * almost empty. The axis is niced a little past the data; deep in, that
+	 * lands a few minutes off the median, still among the most flights.
+	 */
+	async function dataCentre() {
+		const [row] = (
+			await queryEngine.query(
+				'SELECT min(delay) AS lo, max(delay) AS hi, median(delay) AS mid FROM pg_flights'
+			)
+		).toArray();
+		const lo = Number(row.lo);
+		const hi = Number(row.hi);
+		return (Number(row.mid) - lo) / (hi - lo);
+	}
+
+	async function zoomAndPan(id, centre) {
 		panel(id).scrollIntoView({ block: 'center' });
 		await sleep(500);
 		const r = plotRect(id);
 		const y = r.bottom + 10;
 		const at = (f) => r.left + r.width * f;
 		const svg = foreground(id);
-		pointer(svg.closest('.chart-cell') ?? svg, 'pointerenter', at(0.5), y);
-		pointer(svg, 'pointerenter', at(0.5), y);
+		pointer(svg.closest('.chart-cell') ?? svg, 'pointerenter', at(centre), y);
+		pointer(svg, 'pointerenter', at(centre), y);
 		// The wheel handler zooms only after the pointer has dwelt.
 		await sleep(400);
 		await phase(`zoom-${id}`, async () => {
-			for (let i = 0; i < 30; i++) {
+			for (let i = 0; i < 20; i++) {
 				svg.dispatchEvent(
 					new WheelEvent('wheel', {
 						bubbles: true,
 						cancelable: true,
-						clientX: at(0.5),
+						clientX: at(centre),
 						clientY: y,
 						deltaY: -100
 					})
@@ -135,8 +152,12 @@
 			}
 		});
 		await phase(`pan-${id}`, async () => {
-			for (let k = 0; k < 4; k++) {
-				await drag(id, (t) => [at(0.85 - 0.7 * t), y], 1500);
+			// Three drags one way and three back, 0.7 of a view each: about two
+			// views each way, past the window's margin, so it moves; and back over
+			// the data the zoom landed in.
+			for (let k = 0; k < 6; k++) {
+				const [from, to] = k < 3 ? [0.85, 0.15] : [0.15, 0.85];
+				await drag(id, (t) => [at(from + (to - from) * t), y], 1500);
 				await sleep(300);
 			}
 		});
@@ -165,8 +186,9 @@
 		try {
 			// Everything before the session: the page's load.
 			windows = { load: { start: 0, end: performance.now() } };
-			await zoomAndPan(1);
-			await zoomAndPan(4);
+			const centre = await dataCentre();
+			await zoomAndPan(1, centre);
+			await zoomAndPan(4, centre);
 		} finally {
 			Element.prototype.setPointerCapture = capture;
 			Element.prototype.releasePointerCapture = release;
@@ -239,7 +261,8 @@
 			<button onclick={() => log.download('qlog-pathgrid.json', { windows })} disabled={running}>
 				Save log
 			</button>
-			Reload between runs. The session zooms deep into cases 1 and 4 and pans each about three views.
+			Reload between runs. The session zooms deep into cases 1 and 4 at the median delay and pans each
+			about two views and back.
 		</p>
 
 		<div class="grid sticky">
