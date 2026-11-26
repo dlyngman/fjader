@@ -174,14 +174,21 @@
 			});
 		}
 		await phase(`pan-long-${id}`, async () => {
-			// One long gesture each way: the pointer stays down from one edge of the
-			// window to the other, past the chart (it is captured), about three views,
-			// so the window moves several times within a single pan.
-			const edges = [window.innerWidth - 20, 20];
-			for (const [from, to] of [edges, [edges[1], edges[0]]]) {
-				await drag(id, (t) => [from + (to - from) * t, y], 6000);
-				await sleep(300);
-			}
+			// One long gesture: pressed in the chart's own axis margin (where a pan
+			// starts), then held down out to the window's right edge, across to its
+			// left edge and back, past the chart (the pointer is captured). About
+			// five views, so the window moves several times within a single pan.
+			const stops = [at(centre), window.innerWidth - 20, 20, at(centre)];
+			const legs = stops.length - 1;
+			await drag(
+				id,
+				(t) => {
+					const k = Math.min(legs - 1, Math.floor(t * legs));
+					const u = t * legs - k;
+					return [stops[k] + (stops[k + 1] - stops[k]) * u, y];
+				},
+				12000
+			);
 		});
 		pointer(svg, 'pointerleave', r.right + 1, r.top - 1);
 	}
