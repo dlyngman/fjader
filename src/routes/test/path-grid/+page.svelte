@@ -16,7 +16,7 @@
 	 */
 	import { count, avg } from '@uwdata/mosaic-sql';
 	import { initFjader } from '$lib';
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import {
 		ChartContainer,
 		Frame,
@@ -38,6 +38,7 @@
 	const { queryEngine } = initFjader();
 	// Every statement the engine sends, with the rows it returned: "Save log".
 	const log = attachQueryLog(queryEngine);
+	onDestroy(() => log.detach());
 	let isLoaded = $state(false);
 	let loadError = $state(null);
 

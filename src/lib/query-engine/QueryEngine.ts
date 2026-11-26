@@ -1699,7 +1699,11 @@ export class QueryEngine {
 			.catch((e) => {
 				if (!preagg || (e as Error)?.name === 'AbortError') throw e;
 				this.#preagg.readFailed(markId, preagg.table, e);
-				const baseSQL = this.#baseSQL(markId, reg);
+				const baseSQL = this.#baseSQL(markId, reg, {
+					parts,
+					filter: filter as unknown[],
+					window
+				});
 				if (!baseSQL) throw e;
 				return this.query(baseSQL, markReadOptions(markId, reg.descriptor, null));
 			})
@@ -1713,20 +1717,29 @@ export class QueryEngine {
 	}
 
 	/** The query a mark runs on its base table, applying every clause. */
-	#baseSQL(markId: string, reg: MarkRegistration): string | null {
-		const { descriptor, handle } = reg;
-		const filter = reg.filterGroup.selection.predicate(reg.descriptor.route ?? NO_ROUTE);
+	#baseSQL(
+		markId: string,
+		reg: MarkRegistration,
+		/**
+		 * The parts, filter and window a query was sent with, for its fallback:
+		 * it must answer what its result is stamped with, not a brush or window
+		 * moved since. Current ones without.
+		 */
+		at?: { parts: QueryParts; filter: unknown[]; window: QueryParams['binWindow'] }
+	): string | null {
+		const { handle } = reg;
+		const descriptor = at ? { ...reg.descriptor, parts: at.parts } : reg.descriptor;
+		const filter = (at?.filter ??
+			reg.filterGroup.selection.predicate(reg.descriptor.route ?? NO_ROUTE)) as unknown[];
+		const window = at ? at.window : (handle.params.binWindow ?? null);
+		const params = at ? { ...handle.params, binWindow: window } : handle.params;
 		// A windowed binned mark aggregates only the rows its window can hold.
-		const range = windowSourceFilter(
-			descriptor.parts,
-			descriptor.transformCompiler,
-			handle.params.binWindow
-		);
+		const range = windowSourceFilter(descriptor.parts, descriptor.transformCompiler, window);
 		return this.#assembleSQL(
 			descriptor,
 			descriptor.table,
 			range ? [...filter, range] : filter,
-			handle.params
+			params
 		);
 	}
 

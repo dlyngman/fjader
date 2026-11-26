@@ -1844,14 +1844,13 @@ export class MarkLifecycleV2 {
 			let skipAxis = this.#skipDomainUpdateForAxis;
 			let instantFor = this.#instantFor;
 
-			// A path re-registers its series or ordinal colour only (a topN or sort
-			// re-reads them from every result), never a continuous scale: those are
-			// the whole extent's, from its first result, as on a path without a
-			// topN, which never re-registers (#takeBinStep). The same with or without
-			// a window: over one, its rows would narrow them to what it holds.
+			// A path's result over a window re-registers its series or ordinal colour
+			// only (a topN or sort re-reads them from every result), never a
+			// continuous scale: the window's rows would narrow it to what the window
+			// holds. Without a window it re-registers as it did before windows.
 			// Following the bins on y is the rebin ride's, for every path at once.
 			let colorState = this.#colorScaleState;
-			if (this.#dataDerivedDomainsSet && this.#config._rowLayouts) {
+			if (this.#dataDerivedDomainsSet && this.#config._rowLayouts && this.#handle?.resultWindow) {
 				xState = null;
 				yState = null;
 				if (!colorState?.isOrdinal) colorState = null;
@@ -2431,10 +2430,15 @@ export class MarkLifecycleV2 {
 	 * aggregates into the engine's CTE or apply its numeric cast, so for a
 	 * rolling mean the SQL can differ from what the engine sends. Null before
 	 * setup completes (scale domains and time offsets aren't available yet).
+	 *
+	 * `current`: the current parts, window and filter instead, for the SQL fit,
+	 * which answers for the view as it is: it takes over from the held result
+	 * exactly when the view has moved past that result's window
+	 * (#fitFromResult), and the current window is placed around the view.
 	 */
-	buildQuery(): string | null {
+	buildQuery(opts: { current?: boolean } = {}): string | null {
 		const handle = this.#handle;
-		const held = handle?.resultParts ?? null;
+		const held = opts.current ? null : (handle?.resultParts ?? null);
 		const parts = held ?? this.#resolvedQueryParts;
 		if (!this.setupComplete || !parts) return null;
 		// The filter too: a newer query in flight has another one.
@@ -3539,7 +3543,8 @@ export class MarkLifecycleV2 {
 	 * Used by fitDomain (MIN/MAX) and potentially DensityHost (COUNT).
 	 */
 	#buildSidecarQuery(outerSelect: Record<string, unknown>, where?: unknown): Query | null {
-		const markQuery = this.buildQuery();
+		// The view as it is, not the rows on screen: see buildQuery.
+		const markQuery = this.buildQuery({ current: true });
 		if (!markQuery) return null;
 		const q = Query.from({ mark_data: sql`(${markQuery})` }).select(
 			outerSelect as Record<string, ExprValue>
