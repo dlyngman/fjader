@@ -253,6 +253,12 @@ export interface MarkConfig {
 	 * whose topN ranks their band.
 	 */
 	rankedSeries?: string | null;
+	/**
+	 * The mark joins its rows into paths (a line, an area): a topN without a
+	 * series to rank (`rankedSeries`) has nothing sensible to keep there, and
+	 * leaves the rows as they are. Unset for every other mark.
+	 */
+	path?: boolean;
 	/** Every channel carrying category ids, keyed by channel. Absent until identity setup. */
 	identity?: Record<string, ChannelIdentity>;
 	/** The query's GROUP BY channels, or null when it does not aggregate. Per query. */

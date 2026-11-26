@@ -851,7 +851,8 @@ export class MarkLifecycleV2 {
 			y: this.#getFieldName('y'),
 			fill: this.#getFieldName('fill'),
 			...this.#pathPadding(config),
-			rankedSeries: this.#rankedSeries(config)
+			rankedSeries: this.#rankedSeries(config),
+			path: !!config._rowLayouts
 		};
 		// A getter: transforms read it when they build their SQL, by when the
 		// chart has resolved its scales.

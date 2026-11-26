@@ -107,7 +107,8 @@ async function run(c: Case): Promise<{ sql: string; rows: Record<string, number>
 		},
 		// As MarkLifecycleV2.#pathPadding and #rankedSeries state them.
 		...(c.stacked ? {} : { gaps: pathGapChannels(select), absentSeriesGap: true }),
-		rankedSeries: topped ? c.series : null
+		rankedSeries: topped ? c.series : null,
+		path: true
 	} as MarkConfig;
 	const compiler = new TransformCompiler(transforms, config);
 	const query = assembleQuery({
@@ -250,6 +251,42 @@ describe('topN on an area (series in fill)', () => {
 			top.set(row.x, Math.max(top.get(row.x) ?? 0, row.y1));
 		}
 		for (const { b, n } of counts) expect(top.get(Number(b))).toBe(Number(n));
+	});
+});
+
+describe('topN on a path it cannot rank', () => {
+	it('a line or area with no series keeps every row: no n points, no n spikes', async () => {
+		const select = { x: HOUR_BIN, y: castReal(count()) };
+		const config = { markType: 'areay', table: 'f', x: 'x', y: 'y', path: true } as MarkConfig;
+		const assemble = (transforms: Transform[]) => {
+			const parts = buildQueryParts(select, null, transforms.length > 0);
+			parts.bins = HOUR_BINS;
+			const compiler = new TransformCompiler(withDenseCategories(transforms), config);
+			return String(assembleQuery({ table: 'f', parts, transformCompiler: compiler }));
+		};
+		const withTop = await db.all(assemble([topN(5)]));
+		const without = await db.all(assemble([]));
+		expect(withTop.length).toBe(without.length);
+		expect(withTop.length).toBe(BINS);
+	});
+
+	it('includeOthers on a path ranking its series reserves no Other bucket', () => {
+		const compiler = new TransformCompiler([topN(3, { includeOthers: true })], {
+			markType: 'line',
+			table: 'f',
+			x: 'x',
+			y: 'y',
+			rankedSeries: 'stroke',
+			path: true
+		} as MarkConfig);
+		expect(compiler.hasSyntheticOtherBucket()).toBe(false);
+		expect(compiler.otherBy()).toBeNull();
+		// A bar's topN keeps its Other.
+		const bar = new TransformCompiler([topN(3, { includeOthers: true })], {
+			markType: 'bary',
+			table: 'f'
+		} as MarkConfig);
+		expect(bar.hasSyntheticOtherBucket()).toBe(true);
 	});
 });
 

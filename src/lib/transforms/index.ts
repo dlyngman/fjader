@@ -121,6 +121,8 @@ export function topN(n: number | (() => number), options: TopNOptions = {}): Sql
 
 /** Warned once per page: topN's Other on a line or an area. */
 let warnedSeriesOther = false;
+/** Warned once per page: topN on a line or an area with no series. */
+let warnedPathNoSeries = false;
 
 /**
  * topN on a line or an area (MarkConfig.rankedSeries): the top `n` SERIES,
@@ -134,6 +136,10 @@ let warnedSeriesOther = false;
  * bins over one with higher means; `by` names another channel to rank by.
  * NaN (a mean over no rows) is left out of it. Ties break on the series id,
  * so every read of the same rows (base table, preagg) keeps the same series.
+ *
+ * Faceted, the series are ranked across every facet together: the same n in
+ * each facet, as one legend names them. A kept series with no data in a facet
+ * is a line at zero there.
  *
  * Publishes no rank column: a path has no band axis to order, and a padded
  * row's NaN rank must not reach any ordering. `dense()` pads the series left
@@ -1189,6 +1195,17 @@ function topNSQL(count: number | (() => number), options: TopNOptions): SqlTrans
 			const ranked = config?.rankedSeries;
 			if (ranked && aliases.includes(ranked)) {
 				return topSeries(query, aliases, n, ranked, options, config);
+			}
+			if (config?.path) {
+				// A line or an area with no series: ranking its rows or bins keeps n
+				// points or n spikes, which is no top n of anything.
+				if (!warnedPathNoSeries) {
+					warnedPathNoSeries = true;
+					console.warn(
+						'fjader: topN on a line or an area with no series (stroke, z or fill) keeps every row: there is no series to rank.'
+					);
+				}
+				return query;
 			}
 			const { by, band, series } = resolveTopNColumns(aliases, options, config);
 
