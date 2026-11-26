@@ -35,7 +35,28 @@
 	import { topN } from '$lib/transforms';
 	import { attachQueryLog } from '$lib/query-engine/debug/query-log';
 
-	const { queryEngine } = initFjader();
+	const { queryEngine, gpuCoordinator } = initFjader();
+	// Every transition that starts (lib/animation/transition-log.ts): each
+	// renderer's rebin decision (hold, forward and why, swap) and each morph
+	// that snaps, with the time, for a flicker seen by eye. In "Save log".
+	const transitions = [];
+	const offTransitions = gpuCoordinator.observeTransitions((rec) => {
+		transitions.push({
+			t: rec.time,
+			part: rec.part,
+			label: rec.label,
+			snap: rec.snap,
+			detail: rec.detail,
+			charts: [...rec.charts]
+		});
+	});
+	onDestroy(offTransitions);
+	/** Each case's title and its chart ids (a facet grid has several), to read the transitions by. */
+	const caseCharts = () =>
+		[...document.querySelectorAll('.case')].map((el) => ({
+			title: el.querySelector('h3')?.textContent ?? '',
+			charts: [...el.querySelectorAll('canvas')].map((c) => c.dataset.chartId).filter(Boolean)
+		}));
 	// Every statement the engine sends, with the rows it returned: "Save log".
 	const log = attachQueryLog(queryEngine);
 	onDestroy(() => log.detach());
@@ -226,7 +247,7 @@
 			await zoomAndPan(1, centre, quick);
 			if (!quick) await zoomAndPan(4, centre, quick);
 			const name = `qlog-pathgrid${quick ? '-quick' : ''}.json`;
-			log.download(name, { windows, quick });
+			log.download(name, { windows, quick, transitions, cases: caseCharts() });
 			done = name;
 		} finally {
 			Element.prototype.setPointerCapture = capture;
@@ -298,7 +319,11 @@
 		<p>
 			<button onclick={() => runSession(true)} disabled={running}>Quick session (15 s)</button>
 			<button onclick={() => runSession()} disabled={running}>Full session (1 min)</button>
-			<button onclick={() => log.download('qlog-pathgrid.json', { windows })} disabled={running}>
+			<button
+				onclick={() =>
+					log.download('qlog-pathgrid.json', { windows, transitions, cases: caseCharts() })}
+				disabled={running}
+			>
 				Save log
 			</button>
 			{#if running}
