@@ -180,7 +180,15 @@ uv run scripts/measure/qlog.py ~/Downloads/qlog-all*.json --window drag
 
 # Chrome traces: per phase, main-thread busy, GC, GPU process; top self-time events
 uv run scripts/measure/trace.py main=Trace-a.json.gz branch=Trace-b.json.gz --window brush
+
+# and the JavaScript functions carrying the time in that phase, by self and by total time
+uv run scripts/measure/trace.py main=Trace-a.json.gz branch=Trace-b.json.gz --window pan --functions 'lod/|lifecycle'
 ```
+
+`--functions` reads the trace's CPU profile. A production build's function names are minified, so
+to find WHICH function costs, record both traces on the dev server, where names and files
+survive, and compare shares, not milliseconds. The production A/B says how much; the dev trace
+says where.
 
 `dash30.py` warns when runs differ in viewport or frame cadence: such runs don't compare. Each
 script's `--help` lists its options. Write ad hoc Python only for what they don't answer, and

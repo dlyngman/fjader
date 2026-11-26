@@ -22,6 +22,12 @@ Then the event names with the most self time on the page's main thread in one wi
 event's duration minus its children's, so nested events (RunTask > FunctionCall > MinorGC) are not
 counted twice. Recording a trace costs time itself: compare traces with traces, not with logs.
 
+With --functions, also the JavaScript functions with the most time in that window, from the
+trace's CPU profile (samples about every 0.1 to 1 ms): `self` is time in the function's own
+code, `total` includes what it called. Give it a pattern to keep only functions whose name or
+file matches (`--functions 'lod/|lifecycle'`). A production build's names are minified: record
+on the dev server to read them, and compare shares there, not milliseconds.
+
 See docs/measuring.md.
 """
 
@@ -71,6 +77,7 @@ class Trace:
         self.windows = self._windows(marks, complete.get(self.main, []))
         self.main_events = self._with_self_time(complete.get(self.main, []))
         self.gpu_events = self._with_self_time(complete.get(self.gpu, [])) if self.gpu else []
+        self._profile(events)
 
     @staticmethod
     def _windows(marks: list, main_events: list[dict]) -> list[tuple[str, float, float]]:
@@ -120,6 +127,80 @@ class Trace:
         gpu = sum(d for s, d, _, _, depth in self.gpu_events if depth == 0 and a <= s < b)
         return {'busy': busy / 1000, 'gc': gc / 1000, 'gpu': gpu / 1000, 'span': (b - a) / 1000}
 
+    def function_times(self, window: tuple[str, float, float]) -> dict[str, list[float]]:
+        """[self ms, total ms] per JavaScript function on the page's main thread, in the window."""
+        _, a, b = window
+        totals: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
+        for at, dur, node in self.samples:
+            if not (a <= at < b):
+                continue
+            seen: set[str] = set()
+            own = True
+            while node is not None:
+                label = self.functions.get(node)
+                if label is not None:
+                    if own:
+                        totals[label][0] += dur / 1000
+                    if label not in seen:
+                        seen.add(label)
+                        totals[label][1] += dur / 1000
+                own = False
+                node = self.parents.get(node)
+        return totals
+
+    def _profile(self, events: list[dict]) -> None:
+        """The main thread's CPU profile: its samples as (time, duration, node), and the call tree."""
+        self.samples: list[tuple[float, float, int]] = []
+        self.parents: dict[int, int | None] = {}
+        self.functions: dict[int, str | None] = {}
+        profile = next(
+            (
+                e
+                for e in events
+                if e.get('name') == 'Profile' and (e.get('pid'), e.get('tid')) == self.main
+            ),
+            None,
+        )
+        if profile is None:
+            return
+        chunks = sorted(
+            (
+                e
+                for e in events
+                if e.get('name') == 'ProfileChunk'
+                and e.get('pid') == profile['pid']
+                and e.get('id') == profile['id']
+            ),
+            key=lambda e: e['ts'],
+        )
+        at = float(profile['args']['data']['startTime'])
+        times: list[float] = []
+        nodes: list[int] = []
+        for chunk in chunks:
+            data = chunk['args']['data']
+            for node in data.get('cpuProfile', {}).get('nodes', []):
+                frame = node.get('callFrame', {})
+                name = frame.get('functionName') or '(anonymous)'
+                self.parents[node['id']] = node.get('parent')
+                # The profiler's own rows are not functions of the page.
+                if name in ('(root)', '(idle)', '(program)'):
+                    self.functions[node['id']] = None
+                    continue
+                url = frame.get('url') or ''
+                file = url.split('?')[0].rsplit('/', 2)[-2:] if url else []
+                where = f" ({'/'.join(file)}:{frame.get('lineNumber', 0) + 1})" if file else ''
+                self.functions[node['id']] = name + where
+            for node, delta in zip(
+                data.get('cpuProfile', {}).get('samples', []), data.get('timeDeltas', [])
+            ):
+                at += delta
+                times.append(at)
+                nodes.append(node)
+        # A sample stands for the time until the next one.
+        for i, node in enumerate(nodes):
+            dur = times[i + 1] - times[i] if i + 1 < len(times) else 0.0
+            self.samples.append((times[i], max(dur, 0.0), node))
+
     def self_times(self, window: tuple[str, float, float]) -> dict[str, float]:
         _, a, b = window
         totals: dict[str, float] = defaultdict(float)
@@ -144,6 +225,14 @@ def main() -> int:
     parser.add_argument('traces', nargs='+', help='trace files, or label=file')
     parser.add_argument('--window', help='the window for the self-time table (default: the busiest)')
     parser.add_argument('--top', type=int, default=15, help='event names to show (default 15)')
+    parser.add_argument(
+        '--functions',
+        nargs='?',
+        const='',
+        metavar='PATTERN',
+        help='also JavaScript functions by self and total time; with a pattern, only those '
+        'whose name or file matches it',
+    )
     args = parser.parse_args()
 
     traces: dict[str, Trace] = {}
@@ -201,6 +290,33 @@ def main() -> int:
     print('|---|' + '---|' * len(labels))
     for n in names[: args.top]:
         print(f'| {n} | ' + ' | '.join(f'{per_label[label].get(n, 0.0):.1f}' for label in labels) + ' |')
+
+    if args.functions is not None:
+        keep = re.compile(args.functions) if args.functions else None
+        per_fn: dict[str, dict[str, list[float]]] = {}
+        for label in labels:
+            acc: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0])
+            for w in windows[label].get(focus, []):
+                for n, (own, whole) in traces[label].function_times(w).items():
+                    if keep is None or keep.search(n):
+                        acc[n][0] += own
+                        acc[n][1] += whole
+            per_fn[label] = acc
+        if not any(per_fn.values()):
+            print('\nNo CPU profile samples for the page main thread in this window.')
+            return 0
+        for column, title in ((0, 'self'), (1, 'total (with what it called)')):
+            fns = sorted(
+                {n for acc in per_fn.values() for n in acc},
+                key=lambda n: -max(acc[n][column] if n in acc else 0.0 for acc in per_fn.values()),
+            )
+            matching = f', matching `{args.functions}`' if args.functions else ''
+            print(f'\nJavaScript functions in `{focus}` by {title} time, ms (top {args.top}{matching}):\n')
+            print('| function | ' + ' | '.join(labels) + ' |')
+            print('|---|' + '---|' * len(labels))
+            for n in fns[: args.top]:
+                cells = (f'{per_fn[label][n][column]:.1f}' if n in per_fn[label] else '0.0' for label in labels)
+                print(f'| {n} | ' + ' | '.join(cells) + ' |')
     return 0
 
 
