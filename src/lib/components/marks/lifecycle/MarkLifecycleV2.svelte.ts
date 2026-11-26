@@ -497,14 +497,20 @@ export class MarkLifecycleV2 {
 	/**
 	 * Whether a binned axis's bins are held at a bound: `finest` at #maxBins (the
 	 * view or the step multiplier asks for more than can be padded), `coarsest`
-	 * at a path's fewest steps. For the palette's readout.
+	 * at a path's fewest steps. For the palette's readout, and for
+	 * the count a line's dots are judged by (countInView).
 	 */
 	get binsHeld(): 'finest' | 'coarsest' | null {
 		if (!this.#fieldStats) return null;
 		for (const [channel, node] of this.#autoBinNodes) {
-			const { fieldInfo, scaleType, currentDomain, multiplier, maxBins, minSteps } =
+			const { axis, fieldInfo, scaleType, currentDomain, multiplier, maxBins, minSteps } =
 				this.#binArgs(channel);
-			return node.held(fieldInfo, scaleType, currentDomain, multiplier, maxBins, minSteps);
+			// At the view as it is, not at the last re-bin's: a held mark does not
+			// re-bin (the bins at the next level are the same bins), so the domain
+			// of its last re-bin stays one from before the bound, and asked there
+			// the bins are never held.
+			const view = axis === this.#binnedAxis() && this.#lastView ? this.#lastView : currentDomain;
+			return node.held(fieldInfo, scaleType, view, multiplier, maxBins, minSteps);
 		}
 		return null;
 	}
