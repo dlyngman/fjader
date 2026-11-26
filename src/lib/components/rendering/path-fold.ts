@@ -8,11 +8,14 @@ import type { RowLayout } from '$lib/components/marks/lifecycle/row-layout';
  * every result of one layout, so its old value is where it travels from.
  *
  * A rebin rides (the mark's RebinSource, `point` geometry): a zoom or a
- * shift+scroll gives other bins, and each new point starts on the old path,
- * interpolated between the old points around it on a split, at the mean of
- * the old points it covers on a merge, one to one over a moved window
- * (bin-remap). Then it travels to its new value. What does not travel, and
- * appears or goes at once:
+ * shift+scroll gives other bins. On a split (zoom in) each new point starts on
+ * the old path, interpolated between the old points around it, and travels to
+ * its new value. On a merge (zoom out) the finer points are held: each moves
+ * onto the new, coarser path at its own position, and when they land the
+ * coarse layout is swapped in under them (BaseGPURenderer's hold), so the
+ * detail flattens out rather than the corners being cut at the first frame. A
+ * moved window maps one to one (bin-remap). What does not travel, and appears
+ * or goes at once:
  * - a gap (a NaN: a mean over no rows, a series a topN left out): a point
  *   next to one has no start, and opens or closes at once (RemapShader,
  *   ResolveShader);
@@ -21,9 +24,9 @@ import type { RowLayout } from '$lib/components/marks/lifecycle/row-layout';
  *   zoom): it has nothing to start from, and starts at its new value;
  * - another layout that is not a rebin (a series added, a topN's top series
  *   changing which series is drawn): the morph's own row check snaps it;
- * - a merge's corners at its first frame: points cannot hold their old
- *   layout through a merge as bars do, so the coarser points start at once
- *   at the mean of what they cover.
+ * - a merge whose held points do not cover the view (a zoom out past the
+ *   window's margin) or a catch-up result: it goes forward, the coarser
+ *   points starting at once at the mean of what they cover.
  *
  * Runs are replaced. A filter changes which rows a raw line has, so row `i`
  * is another point afterwards; and a decimated line draws from the

@@ -291,14 +291,15 @@ describe('a merge that holds the drawn layout', () => {
 		expect(t.log).toEqual(['take 2 canHold', 'take 3 canHold', 'commit 3']);
 	});
 
-	it('does not hold for a point geometry: merges go forward until points can ride', async () => {
+	it('holds for a point geometry without edge bindings: a held point needs no cut', async () => {
 		const t = setup();
 		await initialized(t.renderer);
 		t.renderer.setBinning(t.source, { geometry: 'point' });
 		writeAll(t.renderer, EDGES, HEIGHTS);
 		t.setVersion(2);
 		writeAll(t.renderer, MERGED, MERGED_HEIGHTS);
-		expect(t.log).toEqual(['take 1', 'commit 1', 'take 2', 'commit 2']);
+		// With rows drawn, the source is told this renderer can hold.
+		expect(t.log).toEqual(['take 1', 'commit 1', 'take 2 canHold', 'commit 2']);
 	});
 
 	it('ends the hold when the lifecycle is rebuilt', async () => {
@@ -466,5 +467,20 @@ describe('one decision for every renderer of a mark', () => {
 		// The next version decides again.
 		version = 3;
 		expect(take(false)).toBeNull();
+	});
+	it('a hold’s end asks for its own version without holding, and gets a forward map, not the hold', () => {
+		const version = 1;
+		const hold: RebinDecision = { kind: 'hold', map: new Uint32Array([1]) };
+		const forward: RebinDecision = { kind: 'forward', map: new Uint32Array([2]), why: 'split' };
+		const take = oncePerVersion(
+			() => version,
+			(canHold) => (canHold ? hold : forward)
+		);
+		// The fill and the outline both hold…
+		expect(take(true)).toBe(hold);
+		expect(take(true)).toBe(hold);
+		// …and at the landing each swaps through the same forward map.
+		expect(take(false)).toBe(forward);
+		expect(take(false)).toBe(forward);
 	});
 });

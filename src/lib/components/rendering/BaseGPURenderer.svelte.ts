@@ -1035,9 +1035,10 @@ export class BaseGPURenderer {
 		const version = untrack(this.#readVersion);
 		if (version === this.#rebinVersion) return;
 		this.#rebinVersion = version;
+		// Intervals hold with their edge bindings (a cut writes them); points hold
+		// without: they need no cut, and a held point moves onto the new path.
 		const canHold =
-			binning.geometry === 'interval' &&
-			binning.edges !== null &&
+			(binning.geometry === 'point' || binning.edges !== null) &&
 			this.#morphed !== null &&
 			MorphedChannels.supported;
 		const decision = this.#take(canHold);

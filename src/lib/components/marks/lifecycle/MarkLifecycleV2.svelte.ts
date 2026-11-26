@@ -3311,6 +3311,13 @@ export class MarkLifecycleV2 {
 		if (!canHold) return 'renderer cannot hold';
 		if (this.#handle?.resultCause === 'catchUp') return 'catch-up';
 		if (!this.#heldCoversView(held, next)) return 'not covered';
+		// A path holds its finer points and moves each onto the new, coarser path
+		// at its own position (bin-remap's `point` interpolation, from the new
+		// points): the zoom in run backwards. Then the coarse layout is swapped
+		// in under it. Nested or not, a point needs no cut.
+		if (this.#config._rowLayouts) {
+			return buildBinRemap(next, held, 0, 'point') ?? 'not nested';
+		}
 		const map = buildBinRemap(next, held, NEST_EPSILON);
 		if (map && isNested(map)) return map;
 		return buildBinCut(held, next) ?? 'not nested';

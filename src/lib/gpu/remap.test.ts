@@ -288,6 +288,27 @@ describe('a merge that holds: nesting and the gather', () => {
 	});
 });
 
+describe('a merge that holds, for points (lines, areas)', () => {
+	it('moves each held point onto the new, coarser path at its own position', () => {
+		// Held points at 2.5, 7.5, 12.5, 17.5; the new ones at 5 and 15, worth 4 and 8.
+		const held = side([0, 5, 10, 15, 20]);
+		const next = side([0, 10, 20]);
+		const map = buildBinRemap(next, held, 0, 'point')!;
+		const out = gatherReference([4, 8], Float32Array.from([1, 1, 1, 1]), map, 4);
+		// Past the first new point and the last: that end point's value.
+		expect(Array.from(out)).toEqual([4, 5, 7, 8]);
+	});
+
+	it('needs no nesting: 2 into 5 holds the same way', () => {
+		const held = side([0, 2, 4, 6, 8, 10]);
+		const next = side([0, 5, 10]);
+		const map = buildBinRemap(next, held, 0, 'point')!;
+		const out = gatherReference([0, 10], Float32Array.from([1, 1, 1, 1, 1]), map, 5);
+		// Held centres 1, 3, 5, 7, 9 against new points at 2.5 and 7.5.
+		expect(Array.from(out)).toEqual([0, 1, 5, 9, 10]);
+	});
+});
+
 describe('a merge that does not nest: the cut', () => {
 	// Step 2 into step 5: the new edge at 5 falls inside the held bar 4–6.
 	const held = side([0, 2, 4, 6, 8, 10]);

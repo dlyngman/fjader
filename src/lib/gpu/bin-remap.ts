@@ -104,26 +104,43 @@ export interface RebinSource {
 }
 
 /**
- * `take`, asked once per data version: every later ask of that version gets the
- * same decision. A mark's renderers (an area's fill, its outline) each ask on
- * their first write of a version, and the first commits the new layout: taken
- * afresh, the second would compare that layout with itself, find nothing, and
- * snap while the first rides. Taken with the first asker's `canHold`: a mark's
- * renderers share one geometry. The state is two plain fields.
+ * `take`, asked once per data version and `canHold`: every later ask of that
+ * version with the same `canHold` gets the same decision. A mark's renderers
+ * (an area's fill, its outline) each ask on their first write of a version,
+ * and the first commits the new layout: taken afresh, the second would compare
+ * that layout with itself, find nothing, and snap while the first rides.
+ *
+ * Per `canHold` as well: a hold's end asks again for its own version without
+ * holding (BaseGPURenderer.#endHoldNow), for the forward map it swaps through,
+ * which the hold decision is not. The state is four plain fields.
  */
 export function oncePerVersion(
 	version: () => number,
 	take: (canHold: boolean) => RebinDecision
 ): (canHold: boolean) => RebinDecision {
 	let taken = -1;
-	let decision: RebinDecision = null;
+	let holding: RebinDecision = null;
+	let forward: RebinDecision = null;
+	let tookHolding = false;
+	let tookForward = false;
 	return (canHold) => {
 		const v = version();
 		if (v !== taken) {
 			taken = v;
-			decision = take(canHold);
+			tookHolding = tookForward = false;
 		}
-		return decision;
+		if (canHold) {
+			if (!tookHolding) {
+				holding = take(true);
+				tookHolding = true;
+			}
+			return holding;
+		}
+		if (!tookForward) {
+			forward = take(false);
+			tookForward = true;
+		}
+		return forward;
 	};
 }
 
