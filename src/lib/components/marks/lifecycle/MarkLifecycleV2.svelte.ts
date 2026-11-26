@@ -408,6 +408,17 @@ export class MarkLifecycleV2 {
 		return { gaps: pathGapChannels(config.select), absentSeriesGap: true };
 	}
 
+	/**
+	 * The series a path mark's topN ranks (MarkConfig.rankedSeries): its series
+	 * channel, on a line or an area with a topN. Null otherwise, and for a bar,
+	 * whose topN ranks its band.
+	 */
+	#rankedSeries(config: MarkLifecycleV2Config): string | null {
+		if (!config._rowLayouts) return null;
+		if (!(config.transforms ?? []).some((transform) => transform.type === 'topN')) return null;
+		return config._orderConfig?.seriesChannel ?? null;
+	}
+
 	// --- Structural query parts ($derived — recomputes on bin/scale/config changes) ---
 	#resolvedQueryParts: QueryParts | null = $derived.by(() => {
 		const semanticSelect = this.#resolvedSelect;
@@ -839,7 +850,9 @@ export class MarkLifecycleV2 {
 			x: this.#getFieldName('x'),
 			y: this.#getFieldName('y'),
 			fill: this.#getFieldName('fill'),
-			...this.#pathPadding(config)
+			...this.#pathPadding(config),
+			rankedSeries: this.#rankedSeries(config),
+			path: !!config._rowLayouts
 		};
 		// A getter: transforms read it when they build their SQL, by when the
 		// chart has resolved its scales.

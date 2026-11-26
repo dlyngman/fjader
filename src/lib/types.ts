@@ -245,6 +245,20 @@ export interface MarkConfig {
 	 */
 	gaps?: readonly string[];
 	absentSeriesGap?: boolean;
+	/**
+	 * The series channel a path mark's `topN` ranks (a line's `stroke` or `z`,
+	 * an area's `fill`), when it has one: on a line or an area, topN keeps the
+	 * top n SERIES, whole, not the top n rows or bins. And `dense()` pads a
+	 * series it left out as a gap (NaN), not a line at zero. Unset for bars,
+	 * whose topN ranks their band.
+	 */
+	rankedSeries?: string | null;
+	/**
+	 * The mark joins its rows into paths (a line, an area): a topN without a
+	 * series to rank (`rankedSeries`) has nothing sensible to keep there, and
+	 * leaves the rows as they are. Unset for every other mark.
+	 */
+	path?: boolean;
 	/** Every channel carrying category ids, keyed by channel. Absent until identity setup. */
 	identity?: Record<string, ChannelIdentity>;
 	/** The query's GROUP BY channels, or null when it does not aggregate. Per query. */

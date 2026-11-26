@@ -119,6 +119,62 @@ export function topN(n: number | (() => number), options: TopNOptions = {}): Sql
 	return topNSQL(n, options);
 }
 
+/** Warned once per page: topN's Other on a line or an area. */
+let warnedSeriesOther = false;
+/** Warned once per page: topN on a line or an area with no series. */
+let warnedPathNoSeries = false;
+
+/**
+ * topN on a line or an area (MarkConfig.rankedSeries): the top `n` SERIES,
+ * each whole, ranked by its total across the bins of `by` (the value channel
+ * by default). A line's series is in `stroke` or `z`, which the bar path's
+ * `fill` lookup never saw, and an area's band is its x bins: ranking rows or
+ * bins kept points, not lines.
+ *
+ * The total is a SUM over the series' rows, whatever the channel aggregates:
+ * natural for a count or a sum. For a mean it favours a series covering more
+ * bins over one with higher means; `by` names another channel to rank by.
+ * NaN (a mean over no rows) is left out of it. Ties break on the series id,
+ * so every read of the same rows (base table, preagg) keeps the same series.
+ *
+ * Faceted, the series are ranked across every facet together: the same n in
+ * each facet, as one legend names them. A kept series with no data in a facet
+ * is a line at zero there.
+ *
+ * Publishes no rank column: a path has no band axis to order, and a padded
+ * row's NaN rank must not reach any ordering. `dense()` pads the series left
+ * out as gaps, so no line at zero stands in for them. `includeOthers` is not
+ * supported here: an Other line would need an id reserved in the series' dim.
+ */
+function topSeries(
+	query: SelectQuery,
+	aliases: string[],
+	n: number,
+	series: string,
+	options: TopNOptions,
+	config: MarkConfig | undefined
+): SelectQuery {
+	if (options.includeOthers && !warnedSeriesOther) {
+		warnedSeriesOther = true;
+		console.warn(
+			'fjader: topN({ includeOthers }) on a line or an area keeps the top series without an Other line.'
+		);
+	}
+	const { by } = resolveValueAndBand(aliases, options, config, 'topN');
+	const total = sqlTag`SUM(${column(by)}) FILTER (WHERE NOT isnan(${column(by)})) OVER (PARTITION BY ${column(series)})`;
+	const totals = Query.from({ __topn_base: query }).select({
+		...passthroughSelect(aliases),
+		__dplot_topn_total: total
+	});
+	const ranked = Query.from({ __topn_totals: totals }).select({
+		...passthroughSelect(aliases),
+		__dplot_topn_series_rank: sqlTag`DENSE_RANK() OVER (ORDER BY "__dplot_topn_total" DESC NULLS LAST, ${column(series)})`
+	});
+	return Query.from({ __topn: ranked })
+		.select(passthroughSelect(aliases))
+		.where(sqlTag`"__dplot_topn_series_rank" <= ${n}`) as SelectQuery;
+}
+
 /** Output aliases of a SelectQuery (the column names its result exposes). */
 function getSelectAliases(query: SelectQuery): string[] {
 	return query._select.map((s) => s.alias).filter(Boolean);
@@ -359,7 +415,13 @@ function densify(
 	window: BinWindow | null = null,
 	gaps: readonly string[] = [],
 	/** An alias to write the band bin's key under (MarkConfig.padKey), or null. */
-	keyAlias: string | null = null
+	keyAlias: string | null = null,
+	/**
+	 * The series a path mark's topN ranked (MarkConfig.rankedSeries), or null:
+	 * a series of it with no row in the aggregate was left out by the topN, and
+	 * is padded as a gap, not as a line at zero.
+	 */
+	rankedSeries: string | null = null
 ): SelectQuery {
 	const { band, dim, cross, bins } = plan;
 	const crossAlias = new Map(cross.map(([key], i) => [key, `k${i}`]));
@@ -453,6 +515,27 @@ function densify(
 	// A binned axis with a window pads only the window's bins, and the LEFT JOIN
 	// from them returns only those: the result is the window.
 	const source = bandBin ? binSource(bandBin, window) : `${padIds(plan.identity[band], dim)} AS d`;
+
+	// The series a path's topN left out: padded as gaps in their positional
+	// measures, so no line or stack band at zero stands in for them. Decided
+	// from the aggregate the padding joins (every row the topN kept), not from
+	// the bins returned: a topN mark reads its whole extent before padding
+	// (QueryEngine drops its window's source filter), so a series kept but
+	// without data in the window stays a line at zero. A preagg table under a
+	// topN is never padded (TransformCompiler.padRows), so its reads decide the
+	// same. A CTE, read by the join and by this, so the aggregate runs once.
+	const rankedAt = rankedSeries ? crossAlias.get(rankedSeries) : undefined;
+	if (rankedAt) {
+		const kept = `${rankedAt}."id" IN (SELECT ${column(rankedSeries!)} FROM __dense_in)`;
+		for (const alias of measureAliases(aliases, plan)) {
+			if (!POSITIONAL_MEASURES.has(alias)) continue;
+			select[alias] =
+				sqlTag`CASE WHEN ${rawSql(kept)} THEN ${select[alias]} ELSE 'NaN'::REAL END` as ExprNode;
+		}
+		return Query.from(rawSql(`${source}${joins} LEFT JOIN __dense_in AS a ON ${on}`))
+			.select(select)
+			.with({ __dense_in: inner }) as SelectQuery;
+	}
 	return Query.from(rawSql(`${source}${joins} LEFT JOIN (${inner}) AS a ON ${on}`)).select(select);
 }
 
@@ -901,7 +984,12 @@ export function dense(options: { enabled?: boolean } = {}): SqlTransform {
 				return finish(windowed, plan);
 			}
 			const plan = densePlan(aliases, config, enabled, reported);
-			return plan ? finish(densify(query, aliases, plan, window, gaps), plan) : query;
+			return plan
+				? finish(
+						densify(query, aliases, plan, window, gaps, null, config?.rankedSeries ?? null),
+						plan
+					)
+				: query;
 		},
 		/**
 		 * The rows apply() would add, as the padding of an empty result: the same
@@ -1104,9 +1192,24 @@ function topNSQL(count: number | (() => number), options: TopNOptions): SqlTrans
 			// Read once per query: every use below must agree on it.
 			const n = current();
 			const aliases = getSelectAliases(query);
+			const ranked = config?.rankedSeries;
+			if (ranked && aliases.includes(ranked)) {
+				return topSeries(query, aliases, n, ranked, options, config);
+			}
+			if (config?.path) {
+				// A line or an area with no series: ranking its rows or bins keeps n
+				// points or n spikes, which is no top n of anything.
+				if (!warnedPathNoSeries) {
+					warnedPathNoSeries = true;
+					console.warn(
+						'fjader: topN on a line or an area with no series (stroke, z or fill) keeps every row: there is no series to rank.'
+					);
+				}
+				return query;
+			}
 			const { by, band, series } = resolveTopNColumns(aliases, options, config);
 
-			let ranked: SelectQuery;
+			let rankedRows: SelectQuery;
 			if (series) {
 				// Grouped: rank CATEGORIES by their total across every series, so
 				// every row of a category shares its rank.
@@ -1123,7 +1226,7 @@ function topNSQL(count: number | (() => number), options: TopNOptions): SqlTrans
 					...passthroughSelect(aliases),
 					__dplot_topn_total: sqlTag`SUM(${column(by)}) OVER (PARTITION BY ${column(band)})`
 				});
-				ranked = Query.from({ __topn_totals: totals }).select({
+				rankedRows = Query.from({ __topn_totals: totals }).select({
 					...passthroughSelect(aliases),
 					[RANK_COLUMN]: sqlTag`DENSE_RANK() OVER (ORDER BY "__dplot_topn_total" DESC, ${column(band)})`
 				});
@@ -1133,7 +1236,7 @@ function topNSQL(count: number | (() => number), options: TopNOptions): SqlTrans
 				// whichever rows the window sees first, so two reads of the same data
 				// (base and preagg, before and after a window move) could disagree and
 				// a category swap in and out of the top and Other on an update.
-				ranked = Query.from({ __topn_base: query }).select({
+				rankedRows = Query.from({ __topn_base: query }).select({
 					...passthroughSelect(aliases),
 					[RANK_COLUMN]: sqlTag`ROW_NUMBER() OVER (ORDER BY ${column(by)} DESC, ${column(band)})`
 				});
@@ -1166,13 +1269,13 @@ function topNSQL(count: number | (() => number), options: TopNOptions): SqlTrans
 			// the GROUP BY. `dense()` does it for both, and runs after this.
 			const otherId = config?.identity?.[band]?.otherId;
 			if (options.includeOthers && otherId != null) {
-				return collapseIntoOther(ranked, aliases, { n, by, band, series, otherId, config });
+				return collapseIntoOther(rankedRows, aliases, { n, by, band, series, otherId, config });
 			}
 			// No reserved id yet — identity setup reserves it asynchronously — so
 			// there is nothing to call Other, and the rows past the cutoff are
 			// simply left out, as the JS path does. The query is rebuilt once the id
 			// exists.
-			return Query.from({ __topn: ranked })
+			return Query.from({ __topn: rankedRows })
 				.select({ ...passthroughSelect(aliases), [RANK_COLUMN]: column(RANK_COLUMN) })
 				.where(sqlTag`${column(RANK_COLUMN)} <= ${n}`);
 		},

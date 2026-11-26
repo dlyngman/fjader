@@ -237,7 +237,14 @@ export class TransformCompiler {
 		return this.jsTransforms.length > 0;
 	}
 
+	/**
+	 * Whether a transform cuts the categories (a topN). Not a topN on a path mark
+	 * with no series to rank (MarkConfig.path without rankedSeries): it leaves the
+	 * rows as they are, so the mark keeps its window's source filter and does not
+	 * re-read its domains from every result for it.
+	 */
 	hasCategoryReducingTransforms(): boolean {
+		if (this.markConfig?.path && !this.markConfig.rankedSeries) return false;
 		return this.transforms.some((t) => t.type === 'topN');
 	}
 
@@ -247,14 +254,24 @@ export class TransformCompiler {
 	 * before the transform can write it.
 	 */
 	hasSyntheticOtherBucket(): boolean {
-		return this.transforms.some((t) => t.type === 'topN' && t.spec?.includeOthers === true);
+		return this.#otherTopN() !== undefined;
 	}
 
 	/** The `by` a topN Other bucket ranks by when stated explicitly, else null (its default). */
 	otherBy(): string | null {
-		const t = this.transforms.find((t) => t.type === 'topN' && t.spec?.includeOthers === true);
+		const t = this.#otherTopN();
 		const by = (t?.spec as { by?: unknown } | undefined)?.by;
 		return typeof by === 'string' ? by : null;
+	}
+
+	/**
+	 * The topN that writes an Other bucket, if any. None on a path mark that
+	 * ranks its series (MarkConfig.rankedSeries): it keeps whole series and
+	 * writes no Other, so no id is reserved for one.
+	 */
+	#otherTopN(): Transform | undefined {
+		if (this.markConfig?.rankedSeries) return undefined;
+		return this.transforms.find((t) => t.type === 'topN' && t.spec?.includeOthers === true);
 	}
 
 	getCategoryTransformKey(): string | null {
