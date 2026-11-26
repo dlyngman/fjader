@@ -1321,8 +1321,15 @@ export class MarkLifecycleV2 {
 					return;
 				}
 				// Waits for the gesture's end, which re-runs this effect: the version
-				// is seen by then, so it writes at once.
-				if (gesturing && !eager) return;
+				// is seen by then, so it writes at once. Meanwhile the mark is out of
+				// the tooltip manager, as when not hovered: its table holds the rows
+				// from before the gesture, and a tooltip must not read them over the
+				// new ones. Back in when the write lands (#writeTooltipTable), however
+				// long it waits for a query in flight.
+				if (gesturing && !eager) {
+					this.#tooltipTableReady = false;
+					return;
+				}
 				const cls = eager && !hovered ? 'background' : 'interaction';
 				const write = () => {
 					const data = this.data;

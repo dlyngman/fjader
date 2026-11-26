@@ -132,6 +132,20 @@ describe('queries in flight', () => {
 		expect(h.queriesInFlight).toBe(0);
 	});
 
+	it('is down before the result is delivered: what its delivery runs sees it settled', async () => {
+		const h = mark();
+		const seen: number[] = [];
+		const deliver = h._setResult.bind(h);
+		h._setResult = (...args: Parameters<MarkHandle['_setResult']>) => {
+			seen.push(h.queriesInFlight);
+			deliver(...args);
+		};
+		h.setBinWindow([0, 10], true);
+		pending[0]({ numRows: 1 });
+		await settle();
+		expect(seen).toEqual([0]);
+	});
+
 	it('a failed or superseded query settles too, so the count does not stick', async () => {
 		const h = mark();
 		vi.mocked(engine.query).mockImplementation((_sql, opts) =>

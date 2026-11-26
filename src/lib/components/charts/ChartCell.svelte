@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { ScaleGeneration } from '$lib/scales/ScaleGeneration.svelte';
 	import type { ChartVisibility } from './ChartVisibility.svelte';
-	import { SETTLE_MS, type ChartHover } from './ChartHover.svelte';
+	import type { ChartHover } from './ChartHover.svelte';
 	import { setContext, getContext, onMount } from 'svelte';
 	import { DECLARATION_REGISTRY, type DeclarationRegistry } from './declarations.svelte';
 	import InCell from './InCell.svelte';
@@ -656,13 +656,13 @@
 	}
 
 	/**
-	 * A wheel step that changed the view or the bins: a gesture (ChartHover),
-	 * and no tooltip until it settles. The tooltip tables are written once the
-	 * gesture ends, so a tooltip before then reads the old bins over new ones.
+	 * A wheel step that changed the view or the bins: a gesture (ChartHover).
+	 * A mark whose data changes under it leaves the tooltip manager until its
+	 * table is rewritten (MarkLifecycleV2), so no tooltip reads the old bins.
 	 */
 	function wheelGesture() {
 		chartHover.wheel();
-		tooltipManager?.suppress(SETTLE_MS);
+		tooltipManager?.suppress(100);
 	}
 
 	function handleWheel(event: WheelEvent) {
@@ -906,6 +906,10 @@
 
 	function processPointerMove(event: PointerEvent) {
 		if (otherPointer(event)) return;
+		// A backstop: a pan whose release never reached the chart (its capture
+		// lost with the element, say) ends at the first move with no button down,
+		// rather than leaving the chart gesturing.
+		if (isPanning && event.buttons === 0) stopPan();
 		if (event.pointerId === pressPointerId) {
 			pressClientX = event.clientX;
 			pressClientY = event.clientY;
@@ -1026,9 +1030,6 @@
 	function stopPan() {
 		isPanning = false;
 		reportGesture();
-		// The tooltip tables are written now that the pan has ended: until then a
-		// tooltip would read the rows from before it.
-		tooltipManager?.suppress(SETTLE_MS);
 		activePanX = false;
 		activePanY = false;
 		scales.endPan();

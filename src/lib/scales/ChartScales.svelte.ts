@@ -862,12 +862,11 @@ export class ChartScales {
 	): boolean => {
 		let zoomed = false;
 		if (doX && isPanZoomScale(this.#xScaleInstance)) {
-			this.#xScaleInstance.accumulateZoom(innerPoint.x / innerWidth, scaleFactor);
-			zoomed = true;
+			zoomed = this.#xScaleInstance.accumulateZoom(innerPoint.x / innerWidth, scaleFactor);
 		}
 		if (doY && isPanZoomScale(this.#yScaleInstance)) {
-			this.#yScaleInstance.accumulateZoom(1 - innerPoint.y / innerHeight, scaleFactor);
-			zoomed = true;
+			zoomed =
+				this.#yScaleInstance.accumulateZoom(1 - innerPoint.y / innerHeight, scaleFactor) || zoomed;
 		}
 		return zoomed;
 	};
