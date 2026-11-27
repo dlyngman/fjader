@@ -370,6 +370,18 @@ class PassTimer {
 	}
 }
 
+/** A node as `tag.class`, or for one without a class, its parent's too: enough to find it. */
+function describe(node: Node): string {
+	const name = node.nodeName.toLowerCase();
+	const cls = node instanceof Element ? (node.getAttribute('class') ?? '').split(' ')[0] : '';
+	if (cls) return `${name}.${cls}`;
+	const parent = node.parentElement;
+	const parentCls = parent ? (parent.getAttribute('class') ?? '').split(' ')[0] : '';
+	return parent
+		? `${name}<${parent.nodeName.toLowerCase()}${parentCls ? '.' + parentCls : ''}`
+		: name;
+}
+
 export class FrameProbe {
 	readonly #ts = new Float64Array(MAX_FRAMES);
 	readonly #work = new Float64Array(MAX_FRAMES);
@@ -398,6 +410,12 @@ export class FrameProbe {
 	readonly #phases: string[] = ['(none)'];
 	#currentPhase = 0;
 	#pendingMutations = 0;
+	/**
+	 * With mutations observed: per phase, how many records of each kind, by
+	 * what changed and where (`attr tag.class @name`, `added tag.class in
+	 * tag.class`, ...). Allocates per record, as observing itself does.
+	 */
+	readonly #mutationKinds: Record<string, Record<string, number>> = {};
 
 	readonly loafs: LoafEntry[] = [];
 	#running = false;
@@ -422,6 +440,20 @@ export class FrameProbe {
 		if (options.mutationRoot) {
 			this.#observer = new MutationObserver((records) => {
 				this.#pendingMutations += records.length;
+				if (!this.#running) return;
+				const kinds = (this.#mutationKinds[this.#phases[this.#currentPhase]] ??= {});
+				const add = (key: string, n: number) => {
+					kinds[key] = (kinds[key] ?? 0) + n;
+				};
+				for (const record of records) {
+					const at = describe(record.target);
+					if (record.type === 'attributes') add(`attr ${at} @${record.attributeName}`, 1);
+					else if (record.type === 'characterData') add(`text ${at}`, 1);
+					else {
+						for (const node of record.addedNodes) add(`added ${describe(node)} in ${at}`, 1);
+						for (const node of record.removedNodes) add(`removed ${describe(node)} in ${at}`, 1);
+					}
+				}
 			});
 			this.#observer.observe(options.mutationRoot, {
 				subtree: true,
@@ -701,6 +733,7 @@ export class FrameProbe {
 						timings: this.#submitTimings.slice(0, s)
 					}
 				: null,
+			mutationKinds: this.mutationsObserved ? this.#mutationKinds : null,
 			loafs: this.loafs
 		};
 	}
