@@ -142,6 +142,15 @@ interface LayerConfig {
 	renderer: { pipeline: GPURenderPipeline | null; perDataBindGroup: GPUBindGroup | null };
 	componentId?: string;
 	zIndex: number;
+	/**
+	 * Where the layer stands among those of its z level: lower draws first.
+	 * It is its mark's place in declaration order (`ChartConfig.orderFor`),
+	 * not the order layers register in: a renderer is created when its mark's
+	 * first data arrives and registers once its asynchronous setup ends, so
+	 * two marks of one chart registered in either order from one load to the
+	 * next.
+	 */
+	order: number;
 	cachedPipeline?: GPURenderPipeline | null;
 	/**
 	 * Whether the layer's shader reads the chart's x and y scales. False for a
@@ -2815,18 +2824,25 @@ export class GPUCoordinator {
 	// LAYER MANAGEMENT
 	// =========================================================================
 
+	/** For a layer registered with no place of its own: after those before it. */
+	#unplacedLayers = 0;
+
 	registerLayer(chartId: string, layerConfig: Partial<LayerConfig>): LayerRegistrationResult {
 		const layerId = layerConfig.id || `layer-${crypto.randomUUID().slice(0, 8)}`;
 		const chart = this.#registeredCharts.get(chartId);
+		const order = layerConfig.order ?? this.#unplacedLayers++;
 
 		if (!chart) {
 			// Queue for when the chart registers (e.g. facet cells registering async)
 			if (!this.#pendingLayers.has(chartId)) {
 				this.#pendingLayers.set(chartId, []);
 			}
-			this.#pendingLayers
-				.get(chartId)!
-				.push({ ...layerConfig, id: layerId, zIndex: layerConfig.zIndex ?? 0 } as LayerConfig);
+			this.#pendingLayers.get(chartId)!.push({
+				...layerConfig,
+				id: layerId,
+				zIndex: layerConfig.zIndex ?? 0,
+				order
+			} as LayerConfig);
 
 			return {
 				remove: () => {
@@ -2844,7 +2860,8 @@ export class GPUCoordinator {
 		chart.layers.set(layerId, {
 			...layerConfig,
 			id: layerId,
-			zIndex: layerConfig.zIndex ?? 0
+			zIndex: layerConfig.zIndex ?? 0,
+			order
 		} as LayerConfig);
 		chart.needsPlanRebuild = true;
 		this.invalidateChart(chartId);
@@ -2958,7 +2975,8 @@ export class GPUCoordinator {
 		const newPlan: LayerConfig[] = [];
 
 		for (const zLevel of sortedZLevels) {
-			const layersInZLevel = zIndexGroups.get(zLevel)!;
+			// In declaration order, whatever order they registered in.
+			const layersInZLevel = zIndexGroups.get(zLevel)!.sort((a, b) => a.order - b.order);
 
 			// Cache pipeline references, then group by pipeline identity
 			// to minimize setPipeline calls within a render pass

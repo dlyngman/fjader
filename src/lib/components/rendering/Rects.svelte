@@ -199,6 +199,7 @@
 		webGPUContext,
 		gpuCoordinator,
 		chartContext,
+		markId,
 		zIndex,
 		label: 'Rects'
 	});

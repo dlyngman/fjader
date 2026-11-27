@@ -118,6 +118,9 @@ export class ChartConfig {
 
 	/** Reactive entries — SvelteMap so iteration/size reads are tracked. */
 	#entries = new SvelteMap<string, MarkEntry>();
+	/** Each mark's place in declaration order (`orderFor`). */
+	#orders = new Map<string, number>();
+	#nextOrder = 0;
 
 	/** Mark LOD surfaces (rung-based) — per-mark LOD registration for palette + routing. */
 	#markLODSurfaces = new Map<string, MarkLODSurface>();
@@ -147,6 +150,7 @@ export class ChartConfig {
 	registerMark(id: string, markType: string, propGetters: PropGetters): MarkEntry {
 		const existing = this.#entries.get(id);
 		if (existing) return existing;
+		this.#orders.set(id, this.#nextOrder++);
 
 		// A data mark holds the chart's entrance from the moment it mounts, which
 		// is now: its lifecycle is built later, in an effect that waits for the
@@ -183,9 +187,25 @@ export class ChartConfig {
 		return entry;
 	}
 
+	/**
+	 * Where a mark's layers stand among the chart's, in the order its marks
+	 * were declared: lower draws first. A mark registers as its component is
+	 * created, which is declaration order; its renderers are created later,
+	 * whenever its first data arrives, and register later still, so neither
+	 * moment says which mark was written first. The same number for every
+	 * renderer of one mark, and across a renderer's remounts.
+	 *
+	 * Without a registered mark (a layer that belongs to none), the next place.
+	 */
+	orderFor(markId?: string): number {
+		const order = markId ? this.#orders.get(markId) : undefined;
+		return order ?? this.#nextOrder++;
+	}
+
 	unregisterMark(id: string): void {
 		// A mark that leaves before its first data must not hold the chart.
 		this.entrance.release(id);
+		this.#orders.delete(id);
 		this.#entries.delete(id);
 		this.#channels.delete(id);
 	}

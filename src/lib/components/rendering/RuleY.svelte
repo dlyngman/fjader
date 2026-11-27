@@ -112,6 +112,7 @@
 		webGPUContext,
 		gpuCoordinator,
 		chartContext,
+		markId,
 		zIndex,
 		label: 'RuleY mark'
 	});

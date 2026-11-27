@@ -135,6 +135,7 @@
 		webGPUContext,
 		gpuCoordinator,
 		chartContext,
+		markId,
 		zIndex,
 		label: 'Texts'
 	});

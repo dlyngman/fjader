@@ -85,6 +85,12 @@
 		globalAlpha?: number;
 		markId?: string;
 		/**
+		 * The mark this line is a part of, when it is not that mark's own
+		 * renderer: an area's outline. It draws at that mark's place in the
+		 * chart's declaration order.
+		 */
+		partOf?: string;
+		/**
 		 * The axis this line grows along when its chart enters, or null to fade
 		 * in. A line mark fades; an area's outline grows with its fill.
 		 */
@@ -133,6 +139,7 @@
 		dotsRung = null,
 		globalAlpha = 1.0,
 		markId = '',
+		partOf = '',
 		grow = null,
 		rebinSource = null,
 		dimAxis = 'x',
@@ -167,6 +174,7 @@
 		webGPUContext,
 		gpuCoordinator,
 		chartContext,
+		markId: markId || partOf,
 		zIndex,
 		label: 'Lines'
 	});

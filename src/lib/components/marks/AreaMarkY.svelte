@@ -406,6 +406,7 @@
 		/>
 		{#if (entry.strokeWidth ?? 0) > 0}
 			<Lines
+				partOf={markId}
 				{xData}
 				yData={yTopData}
 				{seriesData}
@@ -429,6 +430,7 @@
 			/>
 			{#if showBothBoundaries}
 				<Lines
+					partOf={markId}
 					{xData}
 					yData={yBottomData}
 					{seriesData}

@@ -153,6 +153,7 @@
 		webGPUContext,
 		gpuCoordinator,
 		chartContext,
+		markId,
 		zIndex,
 		label: 'Areas'
 	});
