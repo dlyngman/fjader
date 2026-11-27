@@ -12,7 +12,9 @@ beforeAll(() => {
 
 function setup() {
 	const log: string[] = [];
-	const buffer = (label = '') => ({ label, destroy() {} }) as unknown as GPUBuffer;
+	const destroyed: string[] = [];
+	const buffer = (label = '') =>
+		({ label, destroy: () => destroyed.push(label) }) as unknown as GPUBuffer;
 	const device = {
 		createBuffer: ({ label }: { label?: string }) => buffer(label),
 		createShaderModule: () => ({}),
@@ -35,13 +37,15 @@ function setup() {
 		}
 	} as unknown as GPUCommandEncoder;
 
+	const retired: GPUBuffer[] = [];
 	/** The x scale as the coordinator would write it; a test moves it. */
 	const scale = [0, 100, 0.01, 0];
 	const m4 = new M4Decimator(device, {
 		writeScaleParams(_id, view, offset) {
 			view.set(scale, offset);
 			return true;
-		}
+		},
+		retire: (old) => retired.push(old)
 	});
 	m4.configure(800, 3, 'x');
 	const inputs = { x: buffer('x'), y: buffer('y'), series: buffer('s'), color: buffer('c') };
@@ -51,7 +55,7 @@ function setup() {
 		m4.encode(encoder, buffers, points, version);
 		return [...log];
 	};
-	return { m4, scale, inputs, buffer, frame };
+	return { m4, scale, inputs, buffer, frame, retired, destroyed };
 }
 
 describe('M4Decimator.encode', () => {
@@ -141,6 +145,30 @@ describe('M4Decimator.encode', () => {
 			s.m4.setVertexCount(12);
 			expect(s.frame()).toContain('pass m4');
 		});
+	});
+
+	it('retires the buffers it replaces: the coming frame may still hold them', () => {
+		const { m4, frame, retired, destroyed } = setup();
+		frame();
+		// Other dimensions, from an effect: new bins and new outputs.
+		m4.configure(900, 3, 'x');
+		expect(retired.map((b) => b.label).sort()).toEqual([
+			'm4-bins',
+			'm4-output-color',
+			'm4-output-series',
+			'm4-output-x',
+			'm4-output-y'
+		]);
+		// More rows than the outputs hold, found inside an encode.
+		retired.length = 0;
+		frame(20_000);
+		expect(retired.map((b) => b.label).sort()).toEqual([
+			'm4-output-color',
+			'm4-output-series',
+			'm4-output-x',
+			'm4-output-y'
+		]);
+		expect(destroyed).toEqual([]);
 	});
 
 	it('skips no frame when the input has no version', () => {

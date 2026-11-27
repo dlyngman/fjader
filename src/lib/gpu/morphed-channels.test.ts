@@ -105,6 +105,8 @@ function fakes() {
 	} as unknown as GPUCommandEncoder;
 
 	const sources: TransitionClock[] = [];
+	// As the coordinator keeps them: destroyed once the frame is submitted.
+	const retired: GPUBuffer[] = [];
 	const works = new Map<string, MorphWork>();
 	// As the coordinator runs them: every mark's copies, then one pass with the
 	// dispatches of those that have any.
@@ -124,6 +126,7 @@ function fakes() {
 			works.delete(key);
 			log.push('unregister');
 		},
+		retire: (buffer) => retired.push(buffer),
 		addAnimatedSource: (s) => {
 			if (!sources.includes(s)) sources.push(s);
 		},
@@ -148,6 +151,7 @@ function fakes() {
 		log.length = 0;
 		calls.length = 0;
 		computeWork(encoder);
+		for (const buffer of retired.splice(0)) buffer.destroy();
 		return [...log];
 	};
 
@@ -715,7 +719,7 @@ describe('MorphedChannels remapping a rebin', () => {
 		expect(f.sources.length).toBe(1);
 	});
 
-	it('keeps the old resolved through a reallocation until the frame after it was read', () => {
+	it('keeps the old resolved through a reallocation until the frame that read it is submitted', () => {
 		const f = fakes();
 		const m = onScreen(f);
 		// Two rows to four, in buffers of 256 B: no reallocation needed for this
@@ -735,10 +739,12 @@ describe('MorphedChannels remapping a rebin', () => {
 		expect(writeLog).not.toContain('destroy m-2-resolved');
 		const remapFrame = f.frame();
 		expect(remapFrame.filter((c) => c === 'pipeline remap-linear')).toHaveLength(2);
-		expect(remapFrame).not.toContain('destroy m-2-resolved');
-		const next = f.frame();
-		expect(next).toContain('destroy m-2-resolved');
-		expect(next).toContain('destroy m-remap');
+		// Retired to the host, which destroys once the frame is submitted: after
+		// every command that read them, and with no later frame needed for it.
+		const lastCommand = remapFrame.findLastIndex((c) => !c.startsWith('destroy'));
+		expect(remapFrame.indexOf('destroy m-2-resolved')).toBeGreaterThan(lastCommand);
+		expect(remapFrame.indexOf('destroy m-remap')).toBeGreaterThan(lastCommand);
+		expect(f.frame().some((c) => c.startsWith('destroy'))).toBe(false);
 	});
 
 	it('takes an aligned write along while a remap is pending: no fold, one transition', () => {
