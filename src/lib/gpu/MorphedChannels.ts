@@ -315,8 +315,6 @@ export class MorphedChannels implements MorphWork {
 	/** #readClock's results, in fields rather than a returned object. */
 	#clockT = 1;
 	#clockRestarted = false;
-	/** Built once: a descriptor per encode would be an allocation per frame. */
-	#passDescriptor: GPUComputePassDescriptor;
 	/** What `prepare` decided, for the `dispatch` that follows it. */
 	#stagedT = 1;
 	#stagedRemap: GPUBuffer | null = null;
@@ -355,7 +353,6 @@ export class MorphedChannels implements MorphWork {
 		this.#affectedCharts = options.affectedCharts;
 		this.#scaleFor = options.scaleFor ?? null;
 		this.#curve = options.curve ?? null;
-		this.#passDescriptor = { label: `${options.label}-resolve` };
 	}
 
 	/** Whether `binding` morphs: a hold can gather only into channels it has. */
@@ -711,18 +708,6 @@ export class MorphedChannels implements MorphWork {
 		this.#channels.delete(binding);
 		this.#channelList = [...this.#channels.values()];
 		return true;
-	}
-
-	/**
-	 * Fold or snap, then resolve every channel, in one encoder and a pass of
-	 * its own: `prepare` and `dispatch` together, for a host with no shared
-	 * pass. The coordinator calls the halves (`MorphWork`).
-	 */
-	encode(encoder: GPUCommandEncoder): void {
-		if (!this.prepare(encoder)) return;
-		const pass = encoder.beginComputePass(this.#passDescriptor);
-		this.dispatch(pass);
-		pass.end();
 	}
 
 	/**
@@ -1087,6 +1072,7 @@ export class MorphedChannels implements MorphWork {
 			this.#host.removeMorphWork(this.#label);
 			this.#registered = false;
 		}
+		this.#stagedRemap = null;
 		this.#ownClock?.stop();
 		this.#ownClock = null;
 		this.#restWaiter = null;
