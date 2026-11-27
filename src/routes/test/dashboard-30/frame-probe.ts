@@ -19,21 +19,111 @@
  *   since the previous frame. An upload is change-time work: outside a data
  *   change this should stay 0.
  *
+ * - `created`: WebGPU objects the page made since the previous frame, by kind
+ *   (`CREATED`). Each is a wrapper object on Blink's heap, which its garbage
+ *   collector sweeps on the main thread: what is made every frame is what a
+ *   sweep finds during an interaction.
+ *
  * And per `queue.submit`, the time until the GPU reports that work done
  * (`onSubmittedWorkDone`): an upper bound on GPU time per frame, since it
  * includes any queueing behind earlier work.
  *
- * Storage is preallocated typed arrays, so recording allocates nothing per
- * frame and does not disturb what it measures.
+ * Storage is preallocated typed arrays, so recording a frame allocates
+ * nothing. Timing the GPU does allocate, per submit: a promise for the
+ * submit's completion, and with pass timestamps the wrapped encoder's
+ * closures and a readback. `device: null` turns both off, for a run whose
+ * garbage collection is the thing measured; the counts need no device.
  */
 
 const MAX_FRAMES = 30_000;
 const MAX_SUBMITS = 60_000;
 
+/**
+ * What `created` counts, in the order of its columns. All but the last are
+ * objects made; `writeBuffers` are uploads, counted beside them because an
+ * upload per frame is the other thing an interaction loop should not do.
+ */
+export const CREATED = [
+	'encoders',
+	'computePasses',
+	'renderPasses',
+	'currentTextures',
+	'textureViews',
+	'bindGroups',
+	'buffers',
+	'textures',
+	'workDone',
+	'writeBuffers'
+] as const;
+export type CreatedKind = (typeof CREATED)[number];
+const WORK_DONE = CREATED.indexOf('workDone');
+
+/**
+ * Counts calls that make a WebGPU object, by patching the interfaces'
+ * prototypes: every device, encoder, context and texture on the page is
+ * counted, whoever made it. A patched method passes its arguments on by
+ * position and adds one to a typed array, so counting allocates nothing. An
+ * argument the caller left out goes on as `undefined`, which WebIDL reads as
+ * left out.
+ */
+class CreationCounter {
+	readonly pending = new Uint32Array(CREATED.length);
+	readonly #restore: (() => void)[] = [];
+
+	constructor() {
+		const interfaces = globalThis as unknown as Record<string, { prototype: object } | undefined>;
+		const patch = (name: string, method: string, kind: CreatedKind) => {
+			const proto = interfaces[name]?.prototype as Record<string, unknown> | undefined;
+			const original = proto?.[method] as ((...args: unknown[]) => unknown) | undefined;
+			if (!proto || typeof original !== 'function') return;
+			const pending = this.pending;
+			const at = CREATED.indexOf(kind);
+			proto[method] = function (
+				this: unknown,
+				a: unknown,
+				b: unknown,
+				c: unknown,
+				d: unknown,
+				e: unknown
+			) {
+				pending[at]++;
+				return original.call(this, a, b, c, d, e);
+			};
+			this.#restore.push(() => {
+				proto[method] = original;
+			});
+		};
+		patch('GPUDevice', 'createCommandEncoder', 'encoders');
+		patch('GPUCommandEncoder', 'beginComputePass', 'computePasses');
+		patch('GPUCommandEncoder', 'beginRenderPass', 'renderPasses');
+		patch('GPUCanvasContext', 'getCurrentTexture', 'currentTextures');
+		patch('GPUTexture', 'createView', 'textureViews');
+		patch('GPUDevice', 'createBindGroup', 'bindGroups');
+		patch('GPUDevice', 'createBuffer', 'buffers');
+		patch('GPUDevice', 'createTexture', 'textures');
+		patch('GPUQueue', 'onSubmittedWorkDone', 'workDone');
+		patch('GPUQueue', 'writeBuffer', 'writeBuffers');
+	}
+
+	destroy(): void {
+		for (const restore of this.#restore) restore();
+	}
+}
+
+/** One kind's count in a phase: in all, and per frame. */
+export interface CreatedSummary {
+	total: number;
+	p50: number;
+	max: number;
+}
+
 export interface ProbeOptions {
 	/** The element whose subtree mutations are counted, or null for none. */
 	mutationRoot: Element | null;
-	/** The device whose queue submissions are timed, or null for none. */
+	/**
+	 * The device whose queue submissions are timed, or null for none: timing
+	 * allocates per submit (see the file comment).
+	 */
 	device: GPUDevice | null;
 }
 
@@ -75,6 +165,8 @@ export interface PhaseSummary {
 	/** Text atlas uploads in the phase, and the most in one frame. */
 	elementDraws: number;
 	elementDrawsMax: number;
+	/** WebGPU objects made in the phase, by kind. */
+	created: Record<CreatedKind, CreatedSummary>;
 	loafs: number;
 }
 
@@ -284,6 +376,11 @@ export class FrameProbe {
 	readonly #mutations = new Uint32Array(MAX_FRAMES);
 	readonly #elementDraws = new Uint16Array(MAX_FRAMES);
 	#pendingElementDraws = 0;
+	/** Per kind of `CREATED`, the count per frame. */
+	readonly #created = CREATED.map(() => new Uint16Array(MAX_FRAMES));
+	// Made before the pass timer, which keeps the device's createCommandEncoder
+	// to call: it must keep the counted one.
+	readonly #counter = new CreationCounter();
 	readonly #phase = new Uint16Array(MAX_FRAMES);
 	#frames = 0;
 
@@ -349,6 +446,8 @@ export class FrameProbe {
 				queue.onSubmittedWorkDone().then(() => {
 					this.#submitDone[i] = performance.now();
 				});
+				// That one was the probe's own, not the page's.
+				this.#counter.pending[WORK_DONE]--;
 				this.#submitTimings[i] = null;
 				this.#passTimer?.afterSubmit((timing) => {
 					this.#submitPassMs[i] = timing.sumMs;
@@ -430,6 +529,7 @@ export class FrameProbe {
 		if (this.#running) return;
 		this.#running = true;
 		this.#pendingMutations = 0;
+		this.#counter.pending.fill(0);
 		const tick = (ts: number) => {
 			if (!this.#running) return;
 			this.#raf = requestAnimationFrame(tick);
@@ -442,6 +542,11 @@ export class FrameProbe {
 			this.#pendingMutations = 0;
 			this.#elementDraws[i] = this.#pendingElementDraws;
 			this.#pendingElementDraws = 0;
+			const pending = this.#counter.pending;
+			for (let k = 0; k < pending.length; k++) {
+				this.#created[k][i] = Math.min(pending[k], 0xffff);
+				pending[k] = 0;
+			}
 			this.#awaiting = i;
 			this.#awaitingTs = ts;
 			this.#channel!.port2.postMessage(0);
@@ -460,6 +565,7 @@ export class FrameProbe {
 		this.#loafObserver?.disconnect();
 		this.#restoreSubmit?.();
 		this.#passTimer?.destroy();
+		this.#counter.destroy();
 		this.#channel?.port1.close();
 	}
 
@@ -478,6 +584,7 @@ export class FrameProbe {
 			const muts: number[] = [];
 			let draws = 0;
 			let drawsMax = 0;
+			const made: number[][] = CREATED.map(() => []);
 			// Frame 0 has no interval; a phase's first frame measures the gap
 			// since the previous phase's last, which is still a real frame.
 			for (let i = 1; i < n; i++) {
@@ -487,13 +594,24 @@ export class FrameProbe {
 				muts.push(this.#mutations[i]);
 				draws += this.#elementDraws[i];
 				if (this.#elementDraws[i] > drawsMax) drawsMax = this.#elementDraws[i];
+				for (let k = 0; k < made.length; k++) made[k].push(this.#created[k][i]);
 			}
+			const created = {} as Record<CreatedKind, CreatedSummary>;
+			CREATED.forEach((kind, k) => {
+				const sorted = Float64Array.from(made[k]).sort();
+				created[kind] = {
+					total: made[k].reduce((sum, v) => sum + v, 0),
+					p50: sorted.length ? quantile(sorted, 0.5) : 0,
+					max: sorted.length ? sorted[sorted.length - 1] : 0
+				};
+			});
 			return {
 				dts: Float64Array.from(dts).sort(),
 				works: Float64Array.from(works).sort(),
 				muts: Float64Array.from(muts).sort(),
 				draws,
-				drawsMax
+				drawsMax,
+				created
 			};
 		};
 
@@ -502,7 +620,7 @@ export class FrameProbe {
 
 		const phases: PhaseSummary[] = [];
 		for (let p = 1; p < this.#phases.length; p++) {
-			const { dts, works, muts, draws, drawsMax } = collect(p);
+			const { dts, works, muts, draws, drawsMax, created } = collect(p);
 			if (dts.length === 0) continue;
 			let dropped = 0;
 			let slots = 0;
@@ -550,6 +668,7 @@ export class FrameProbe {
 				mutationsMax: this.mutationsObserved ? muts[muts.length - 1] : null,
 				elementDraws: draws,
 				elementDrawsMax: drawsMax,
+				created,
 				loafs: this.loafs.filter((l) => l.phase === this.#phases[p]).length
 			});
 		}
@@ -567,6 +686,9 @@ export class FrameProbe {
 				work: Array.from(this.#work.subarray(0, n)),
 				mutations: this.mutationsObserved ? Array.from(this.#mutations.subarray(0, n)) : null,
 				elementDraws: Array.from(this.#elementDraws.subarray(0, n)),
+				created: Object.fromEntries(
+					CREATED.map((kind, k) => [kind, Array.from(this.#created[k].subarray(0, n))])
+				),
 				phase: Array.from(this.#phase.subarray(0, n))
 			},
 			submits: this.gpuObserved
