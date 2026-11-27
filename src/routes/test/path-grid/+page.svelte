@@ -35,7 +35,28 @@
 	import { topN } from '$lib/transforms';
 	import { attachQueryLog } from '$lib/query-engine/debug/query-log';
 
-	const { queryEngine } = initFjader();
+	const { queryEngine, gpuCoordinator } = initFjader();
+	// Every transition that starts (lib/animation/transition-log.ts): each
+	// renderer's rebin decision (hold, forward and why, swap) and each morph
+	// that snaps, with the time, for a flicker seen by eye. In "Save log".
+	const transitions = [];
+	const offTransitions = gpuCoordinator.observeTransitions((rec) => {
+		transitions.push({
+			t: rec.time,
+			part: rec.part,
+			label: rec.label,
+			snap: rec.snap,
+			detail: rec.detail,
+			charts: [...rec.charts]
+		});
+	});
+	onDestroy(offTransitions);
+	/** Each case's title and its chart ids (a facet grid has several), to read the transitions by. */
+	const caseCharts = () =>
+		[...document.querySelectorAll('.case')].map((el) => ({
+			title: el.querySelector('h3')?.textContent ?? '',
+			charts: [...el.querySelectorAll('canvas')].map((c) => c.dataset.chartId).filter(Boolean)
+		}));
 	// Every statement the engine sends, with the rows it returned: "Save log".
 	const log = attachQueryLog(queryEngine);
 	onDestroy(() => log.detach());
@@ -226,7 +247,7 @@
 			await zoomAndPan(1, centre, quick);
 			if (!quick) await zoomAndPan(4, centre, quick);
 			const name = `qlog-pathgrid${quick ? '-quick' : ''}.json`;
-			log.download(name, { windows, quick });
+			log.download(name, { windows, quick, transitions, cases: caseCharts() });
 			done = name;
 		} finally {
 			Element.prototype.setPointerCapture = capture;
@@ -298,7 +319,11 @@
 		<p>
 			<button onclick={() => runSession(true)} disabled={running}>Quick session (15 s)</button>
 			<button onclick={() => runSession()} disabled={running}>Full session (1 min)</button>
-			<button onclick={() => log.download('qlog-pathgrid.json', { windows })} disabled={running}>
+			<button
+				onclick={() =>
+					log.download('qlog-pathgrid.json', { windows, transitions, cases: caseCharts() })}
+				disabled={running}
+			>
 				Save log
 			</button>
 			{#if running}
@@ -606,6 +631,59 @@
 								selection="pg"
 							/>
 						{/key}
+					</ChartContainer>
+				</div>
+			</div>
+			<div class="case">
+				<h3>11. Rebins ride: a line of means per carrier</h3>
+				<p class="desc">
+					Mean distance per carrier over delay, with automatic bins. Zoom in and out, and
+					shift+scroll over a line: on each rebin the lines keep their shape and glide to the new
+					bins' values. Zooming in, the new points start on the old lines (no flat steps); zooming
+					out, at the average of what they cover. A mean does not change unit with the bin width, so
+					the y axis can stay as it is. Points past the old rows appear at once, as do gaps.
+				</p>
+				<div class="panel">
+					<ChartContainer xLabel="delay" yLabel="mean distance">
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<Grid />
+						<LineMark
+							table="pg_flights"
+							x={bin('delay')}
+							y={avg('distance')}
+							stroke="carrier"
+							selection="pg"
+						/>
+						<Legend position="right" />
+					</ChartContainer>
+				</div>
+			</div>
+			<div class="case">
+				<h3>12. Rebins ride: a stacked area of means, with its outline</h3>
+				<p class="desc">
+					Mean distance per carrier, stacked, filled, with an outline along each band's top;
+					automatic bins. Zoom and shift+scroll: the fill and its outline ride every rebin together,
+					and no gap opens between bands at any frame.
+				</p>
+				<div class="panel">
+					<ChartContainer xLabel="delay" yLabel="mean distance (stacked)">
+						<Frame />
+						<AxisLeft />
+						<AxisBottom />
+						<Grid />
+						<AreaMarkY
+							table="pg_flights"
+							x={bin('delay')}
+							y={avg('distance')}
+							fill="carrier"
+							fillOpacity={0.5}
+							stroke="#333"
+							strokeWidth={1.5}
+							curve="monotone"
+							selection="pg"
+						/>
 					</ChartContainer>
 				</div>
 			</div>

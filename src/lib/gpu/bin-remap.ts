@@ -16,6 +16,20 @@ import type { RowLayout } from '$lib/components/marks/lifecycle/row-layout';
  * blend of the months each week spans. The part of a new bin no old bin covers
  * (the extent's ends) starts at its own new value: `uncovered`, the same ratio.
  *
+ * For `point` rows (a line's vertices, an area's edge), every new point starts
+ * ON the old path, sampled at its own position: between the two old points
+ * around its centre, so the drawn shape is unchanged at the first frame,
+ * whichever way the bins went. A zoom in does not start every child at its
+ * parent's value (a plateau at each old vertex); a merge does not start at the
+ * mean of what it covers, which at a peak sits below it and made the path dip
+ * and climb back, the swap at a hold's end most of all, where the held points
+ * already lie on the new path and a sample of them is the new value. A moved
+ * window samples each point where it was. Before the first old point or after
+ * the last, inside the old bins, it takes that end point's value; outside
+ * them it is uncovered, and starts at its new value. An old point that is NaN
+ * (a gap) makes the start NaN, and the resolve takes the new value at once
+ * (RemapShader).
+ *
  * One `Uint32Array`, uploaded as the map buffer:
  *
  *   [0..7]   header: newBins, oldBins, series, facets, K (overlaps), 0, 0, 0
@@ -23,6 +37,9 @@ import type { RowLayout } from '$lib/components/marks/lifecycle/row-layout';
  *   then     oldBin: K
  *   then     weight: K (f32 bits)
  *   then     uncovered: newBins (f32 bits)
+ *   then     (point maps, header[5] = 1) the old bins' centres: oldBins (f32
+ *            bits), for a kernel that samples the curve the rows are drawn
+ *            with, which needs the points' spacing (RemapShader's curve)
  */
 export const REMAP_HEADER_WORDS = 8;
 
@@ -92,6 +109,47 @@ export interface RebinSource {
 	layout(): RowLayout;
 }
 
+/**
+ * `take`, asked once per data version and `canHold`: every later ask of that
+ * version with the same `canHold` gets the same decision. A mark's renderers
+ * (an area's fill, its outline) each ask on their first write of a version,
+ * and the first commits the new layout: taken afresh, the second would compare
+ * that layout with itself, find nothing, and snap while the first rides.
+ *
+ * Per `canHold` as well: a hold's end asks again for its own version without
+ * holding (BaseGPURenderer.#endHoldNow), for the forward map it swaps through,
+ * which the hold decision is not. The state is four plain fields.
+ */
+export function oncePerVersion(
+	version: () => number,
+	take: (canHold: boolean) => RebinDecision
+): (canHold: boolean) => RebinDecision {
+	let taken = -1;
+	let holding: RebinDecision = null;
+	let forward: RebinDecision = null;
+	let tookHolding = false;
+	let tookForward = false;
+	return (canHold) => {
+		const v = version();
+		if (v !== taken) {
+			taken = v;
+			tookHolding = tookForward = false;
+		}
+		if (canHold) {
+			if (!tookHolding) {
+				holding = take(true);
+				tookHolding = true;
+			}
+			return holding;
+		}
+		if (!tookForward) {
+			forward = take(false);
+			tookForward = true;
+		}
+		return forward;
+	};
+}
+
 /** One side of a rebin: its rows' bin edges, their layout, and the crossed keys' ids per row. */
 export interface BinRemapSide {
 	lower: ArrayLike<number>;
@@ -136,7 +194,9 @@ export function buildBinRemap(
 	 * count as uncovered): slivers from Float32 edges that are one rounding
 	 * apart, which would make a nested bin look like it straddles two.
 	 */
-	minWeight = 0
+	minWeight = 0,
+	/** How the rows sit in their bins (see BinGeometry): `point` samples the old path. */
+	geometry: BinGeometry = 'interval'
 ): Uint32Array | null {
 	const { series: S, facets: F } = next.layout;
 	if (prev.layout.series !== S || prev.layout.facets !== F) return null;
@@ -162,6 +222,14 @@ export function buildBinRemap(
 		}
 		// Old bins wholly left of this one are left of every later one too.
 		while (first < Bo && Number(prev.upper[first * S]) <= lo) first++;
+		if (geometry === 'point' && interpolate(prev, S, Bo, lo, hi, first, oldBin, weight)) {
+			uncovered[b] = 0;
+			continue;
+		}
+		if (geometry === 'point' && outside(prev, S, Bo, lo, hi)) {
+			uncovered[b] = 1;
+			continue;
+		}
 		let covered = 0;
 		for (let k = first; k < Bo; k++) {
 			const oLo = Number(prev.lower[k * S]);
@@ -177,12 +245,14 @@ export function buildBinRemap(
 	offsets[Bn] = oldBin.length;
 
 	const K = oldBin.length;
-	const words = new Uint32Array(REMAP_HEADER_WORDS + Bn + 1 + K + K + Bn);
+	const centres = geometry === 'point' ? Bo : 0;
+	const words = new Uint32Array(REMAP_HEADER_WORDS + Bn + 1 + K + K + Bn + centres);
 	words[0] = Bn;
 	words[1] = Bo;
 	words[2] = S;
 	words[3] = F;
 	words[4] = K;
+	words[5] = centres > 0 ? 1 : 0;
 	let at = REMAP_HEADER_WORDS;
 	words.set(offsets, at);
 	at += Bn + 1;
@@ -191,7 +261,62 @@ export function buildBinRemap(
 	new Float32Array(words.buffer, at * 4, K).set(weight);
 	at += K;
 	new Float32Array(words.buffer, at * 4, Bn).set(uncovered);
+	if (centres > 0) {
+		at += Bn;
+		const centre = new Float32Array(words.buffer, at * 4, Bo);
+		for (let k = 0; k < Bo; k++) {
+			centre[k] = (Number(prev.lower[k * S]) + Number(prev.upper[k * S])) / 2;
+		}
+	}
 	return words;
+}
+
+/**
+ * A `point` row's start: the old path sampled at the new bin's centre. Push
+ * the old points around that centre with linear weights (or the one end point
+ * past the first or last old centre) and return true; false when no old bin is
+ * under the centre (the point is then uncovered, or takes the overlap of the
+ * old bins it reaches).
+ */
+function interpolate(
+	prev: BinRemapSide,
+	S: number,
+	Bo: number,
+	lo: number,
+	hi: number,
+	first: number,
+	oldBin: number[],
+	weight: number[]
+): boolean {
+	const centre = (lo + hi) / 2;
+	const lower = (k: number) => Number(prev.lower[k * S]);
+	const upper = (k: number) => Number(prev.upper[k * S]);
+	const mid = (k: number) => (lower(k) + upper(k)) / 2;
+	// The old bin under the centre: from the first one reaching this new bin.
+	let under = first;
+	while (under < Bo && upper(under) <= centre) under++;
+	if (under >= Bo || lower(under) > centre) return false;
+	// The two old centres around this one.
+	const right = mid(under) > centre ? under : under + 1;
+	const left = right - 1;
+	if (left < 0) {
+		oldBin.push(0);
+		weight.push(1);
+	} else if (right >= Bo) {
+		oldBin.push(Bo - 1);
+		weight.push(1);
+	} else {
+		const t = (centre - mid(left)) / (mid(right) - mid(left));
+		oldBin.push(left, right);
+		weight.push(1 - t, t);
+	}
+	return true;
+}
+
+/** Whether `[lo, hi)` lies wholly outside the old bins: a new point with nothing to start from. */
+function outside(prev: BinRemapSide, S: number, Bo: number, lo: number, hi: number): boolean {
+	if (Bo === 0) return true;
+	return hi <= Number(prev.lower[0]) || lo >= Number(prev.upper[(Bo - 1) * S]);
 }
 
 /** Edge rounding tolerated when telling nested bins (`buildBinRemap`'s minWeight, `isNested`). */

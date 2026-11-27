@@ -98,6 +98,7 @@ import {
 import { binLayout } from './bin-layout';
 import { layoutFor, rowLayoutOf, RUNS, type ReadableLayout, type RowLayout } from './row-layout';
 import {
+	oncePerVersion,
 	buildBinCut,
 	buildBinRemap,
 	isNested,
@@ -3209,7 +3210,11 @@ export class MarkLifecycleV2 {
 	 */
 	readonly rebinSource: RebinSource = {
 		dataVersion: () => this.dataVersion,
-		takeRebin: (canHold) => this.#takeRebin(canHold),
+		// One decision per data version for every renderer of the mark.
+		takeRebin: oncePerVersion(
+			() => this.dataVersion,
+			(canHold) => this.#takeRebin(canHold)
+		),
 		commitLayout: () => {
 			this.#takenSide = this.#pendingSide;
 		},
@@ -3282,7 +3287,8 @@ export class MarkLifecycleV2 {
 			};
 			return { kind: 'cut', cut: held };
 		}
-		const map = buildBinRemap(last, side);
+		// A path's points start on the old path on a split (bin-remap's `point`).
+		const map = buildBinRemap(last, side, 0, this.#config._rowLayouts ? 'point' : 'interval');
 		return map ? { kind: 'forward', map, why: held } : null;
 	}
 
@@ -3305,6 +3311,13 @@ export class MarkLifecycleV2 {
 		if (!canHold) return 'renderer cannot hold';
 		if (this.#handle?.resultCause === 'catchUp') return 'catch-up';
 		if (!this.#heldCoversView(held, next)) return 'not covered';
+		// A path holds its finer points and moves each onto the new, coarser path
+		// at its own position (bin-remap's `point` interpolation, from the new
+		// points): the zoom in run backwards. Then the coarse layout is swapped
+		// in under it. Nested or not, a point needs no cut.
+		if (this.#config._rowLayouts) {
+			return buildBinRemap(next, held, 0, 'point') ?? 'not nested';
+		}
 		const map = buildBinRemap(next, held, NEST_EPSILON);
 		if (map && isNested(map)) return map;
 		return buildBinCut(held, next) ?? 'not nested';

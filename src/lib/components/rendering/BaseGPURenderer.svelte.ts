@@ -2,6 +2,7 @@ import { untrack } from 'svelte';
 import { UNIFORM_STAND_IN_BYTES } from './uniform-sizes';
 import type { GPUCoordinator, DataBindingEntry, LayerRegistrationResult } from '$lib/gpu';
 import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
+import type { RemapCurve } from '$lib/gpu/RemapShader';
 import { MorphedChannels, type ClockHost, type ChannelScale } from '$lib/gpu/MorphedChannels';
 import { TransitionClock } from '$lib/animation/TransitionClock';
 import {
@@ -92,6 +93,12 @@ const SEAM_FADE_PRECISION = 0.02;
 /** How a binned renderer draws rows over bins (setBinning). */
 export interface BinningOptions {
 	geometry: BinGeometry;
+	/**
+	 * The curve a path's rows are drawn with (`point` geometry): a rebin's new
+	 * points start on it, not on its chords (RemapShader's RemapCurve). Null or
+	 * absent: the chord, which is the curve of a linear path.
+	 */
+	curve?: RemapCurve | null;
 	/** The static bindings holding each row's bin edges (lower, upper): a cut writes them. */
 	edges?: readonly [number, number] | null;
 	/**
@@ -128,6 +135,13 @@ interface Hold {
 	morph: Parameters<BaseGPURenderer['writeMorphed']> | null;
 	attributes: Map<number, AllowSharedBufferSource>;
 	vertex: Map<number, AllowSharedBufferSource>;
+	/**
+	 * The mark's uniforms, written whole: held too, as they can describe the
+	 * layout (a path's grid: bins per series, series), which must stay the held
+	 * rows' until the swap. Addressed with the new result's grid, a held path's
+	 * last points were read from the wrong rows.
+	 */
+	uniforms: Map<number, AllowSharedBufferSource>;
 	count: number | null;
 }
 
@@ -169,6 +183,7 @@ export class BaseGPURenderer {
 		edges: readonly [number, number] | null;
 		seams: number | null;
 		seamFade: { binding: number; offset: number } | null;
+		curve: RemapCurve | null;
 	} | null = null;
 	/** Whether the seams slot holds seams (dropped with their layout). */
 	#seamsWritten = false;
@@ -656,6 +671,9 @@ export class BaseGPURenderer {
 			affectedCharts: () => this.#chartsToRedraw(),
 			// The value axis's scale, for the bindings measured on it. Runs on
 			// every encode: an array scan of two, no allocation.
+			// The curve the rows are drawn with, per rebin: a binning set later than
+			// the first morphed write is still seen.
+			curve: () => this.#binning?.curve ?? null,
 			scaleFor: (binding) => {
 				if (!this.#scaledBindings.includes(binding)) return null;
 				const axis = this.#morphAxis;
@@ -696,6 +714,10 @@ export class BaseGPURenderer {
 	 */
 	writeUniform(binding: number, data: AllowSharedBufferSource): void {
 		if (!this.#device || !data) return;
+		if (this.#hold) {
+			this.#hold.uniforms.set(binding, data);
+			return;
+		}
 
 		let buffer = this.#ownedResources.buffers.get(binding);
 
@@ -998,10 +1020,12 @@ export class BaseGPURenderer {
 	 */
 	setBinning(source: RebinSource | null, options: BinningOptions): void {
 		const b = this.#binning;
-		const { geometry, edges = null, seams = null, seamFade = null } = options;
+		const { geometry, edges = null, seams = null, seamFade = null, curve = null } = options;
 		if (
 			b?.source === source &&
 			b?.geometry === geometry &&
+			b?.curve?.curve === curve?.curve &&
+			b?.curve?.swap === curve?.swap &&
 			b?.edges?.[0] === edges?.[0] &&
 			b?.edges?.[1] === edges?.[1] &&
 			b?.seams === seams &&
@@ -1013,7 +1037,7 @@ export class BaseGPURenderer {
 		if (this.#hold) this.#releaseHold();
 		this.#stopFade();
 		this.#dropSeams();
-		this.#binning = source ? { source, geometry, edges, seams, seamFade } : null;
+		this.#binning = source ? { source, geometry, edges, seams, seamFade, curve } : null;
 		this.#rebinVersion = -1;
 		this.#pendingRemap = null;
 	}
@@ -1035,9 +1059,10 @@ export class BaseGPURenderer {
 		const version = untrack(this.#readVersion);
 		if (version === this.#rebinVersion) return;
 		this.#rebinVersion = version;
+		// Intervals hold with their edge bindings (a cut writes them); points hold
+		// without: they need no cut, and a held point moves onto the new path.
 		const canHold =
-			binning.geometry === 'interval' &&
-			binning.edges !== null &&
+			(binning.geometry === 'point' || binning.edges !== null) &&
 			this.#morphed !== null &&
 			MorphedChannels.supported;
 		const decision = this.#take(canHold);
@@ -1120,6 +1145,7 @@ export class BaseGPURenderer {
 			morph: null,
 			attributes: new Map(),
 			vertex: new Map(),
+			uniforms: new Map(),
 			count: null
 		};
 		return this.#hold;
@@ -1247,6 +1273,7 @@ export class BaseGPURenderer {
 		this.#dropSeams();
 		for (const [binding, data] of hold.attributes) this.writeAttribute(binding, data);
 		for (const [slot, data] of hold.vertex) this.writeVertexBuffer(slot, data);
+		for (const [binding, data] of hold.uniforms) this.writeUniform(binding, data);
 		if (hold.count !== null) this.updateInstanceCount(hold.count);
 	}
 

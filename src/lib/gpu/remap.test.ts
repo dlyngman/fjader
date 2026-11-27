@@ -155,6 +155,82 @@ describe('the bins remap', () => {
 	});
 });
 
+/** As `remap`, for rows that sit at a point in their bin (a line's vertices). */
+function remapPoints(
+	prev: BinRemapSide,
+	next: BinRemapSide,
+	old: number[],
+	to: number[]
+): number[] {
+	const map = buildBinRemap(prev, next, 0, 'point')!;
+	const out = new Float32Array(to.length);
+	return Array.from(remapReference('linear', old, to, map, SAME, SAME, to.length, out));
+}
+
+describe('the bins remap for points (lines, areas)', () => {
+	it('starts a split’s points on the old path: interpolated between the old points around them', () => {
+		// Old points at 5, 15 and 25; new ones at 2.5, 7.5, …, 27.5.
+		const from = remapPoints(
+			side([0, 10, 20, 30]),
+			side([0, 5, 10, 15, 20, 25, 30]),
+			[0, 10, 20],
+			[9, 9, 9, 9, 9, 9]
+		);
+		// Before the first old point and after the last: that end point's value.
+		expect(from).toEqual([0, 2.5, 7.5, 12.5, 17.5, 20]);
+	});
+
+	it('a split that does not nest (5 to 2) interpolates by the centres all the same', () => {
+		const from = remapPoints(side([0, 5, 10]), side([0, 2, 4, 6, 8, 10]), [0, 10], [9, 9, 9, 9, 9]);
+		// Centres 1, 3, 5, 7, 9 against old points at 2.5 and 7.5.
+		expect(from).toEqual([0, 1, 5, 9, 10]);
+	});
+
+	it('samples the old path on a merge too, so a peak is not averaged away', () => {
+		// Old points at 0.5, 1.5, 2.5 with a peak in the middle; one new point at 1.5.
+		const peak = remapPoints(side([0, 1, 2, 3]), side([0, 3]), [0, 10, 0], [9]);
+		// The mean of what it covers would start it at 3.33 and climb back.
+		expect(peak).toEqual([10]);
+		// 2 into 5: old centres 1, 3, 5, 7, 9; new ones at 2.5 and 7.5.
+		const from = remapPoints(side([0, 2, 4, 6, 8, 10]), side([0, 5, 10]), [1, 2, 3, 4, 5], [9, 9]);
+		expect(from[0]).toBeCloseTo(1.75);
+		expect(from[1]).toBeCloseTo(4.25);
+	});
+
+	it('maps the same bins over a moved window one to one', () => {
+		const from = remapPoints(
+			side([0, 1, 2, 3, 4]),
+			side([1, 2, 3, 4, 5]),
+			[7, 8, 9, 10],
+			[0, 0, 0, 6]
+		);
+		// The point past the old rows has nothing to start from: it starts at its new value.
+		expect(from).toEqual([8, 9, 10, 6]);
+	});
+
+	it('a new point outside the old rows starts at its new value: it appears at once', () => {
+		const from = remapPoints(
+			side([10, 20, 30]),
+			side([0, 5, 10, 15, 20, 25, 30, 35, 40]),
+			[4, 8],
+			[1, 1, 9, 9, 9, 9, 3, 3]
+		);
+		expect(from.slice(0, 2)).toEqual([1, 1]);
+		expect(from.slice(6)).toEqual([3, 3]);
+	});
+
+	it('a gap next to a new point makes its start NaN, so it lands rather than averaging the gap away', () => {
+		const from = remapPoints(
+			side([0, 10, 20, 30]),
+			side([0, 5, 10, 15, 20, 25, 30]),
+			[0, NaN, 20],
+			[9, 9, 9, 9, 9, 9]
+		);
+		expect(from[0]).toBe(0);
+		expect(Number.isNaN(from[1]) && Number.isNaN(from[2]) && Number.isNaN(from[3])).toBe(true);
+	});
+});
+
 /** A held side's rows gathered from a new side's (the hold's `to`), from `to` as it was. */
 function gather(held: BinRemapSide, next: BinRemapSide, src: number[], to: number[]): number[] {
 	const map = buildBinRemap(next, held, NEST_EPSILON)!;
@@ -210,6 +286,98 @@ describe('a merge that holds: nesting and the gather', () => {
 		const next = side([0, 10, 20]);
 		const landed = gather(held, next, [8, 4], [2, 6, 1, 3]);
 		expect(remap(held, next, landed, [8, 4])).toEqual([8, 4]);
+	});
+});
+
+describe('a rebin’s points start on the drawn curve, not its chord', () => {
+	const MONOTONE = { curve: 'monotone-x', swap: false } as const;
+	const sampleOn = (
+		curve: { curve: 'monotone-x' | 'monotone-y'; swap: boolean } | null,
+		prev: BinRemapSide,
+		next: BinRemapSide,
+		old: number[]
+	) => {
+		const map = buildBinRemap(prev, next, 0, 'point')!;
+		const to = new Array(next.lower.length).fill(9);
+		const out = new Float32Array(to.length);
+		return Array.from(remapReference('linear', old, to, map, SAME, SAME, to.length, out, curve));
+	};
+
+	it('samples the monotone curve through the old points', () => {
+		// Old points at 5, 15, 25, 35; the new point at 7.5 is a quarter of the way to 15.
+		const from = sampleOn(
+			MONOTONE,
+			side([0, 10, 20, 30, 40]),
+			side([0, 5, 10, 15, 20, 25, 30, 35, 40]),
+			[0, 10, 0, 10]
+		);
+		// Hermite at t = 0.25 with tangents 1 (one-sided at the series' start) and 0 (the
+		// peak at 15): 0.140625 · 10 + 0.15625 · 10. The chord gives 2.5.
+		expect(from[1]).toBeCloseTo(2.96875, 5);
+		expect(
+			sampleOn(
+				null,
+				side([0, 10, 20, 30, 40]),
+				side([0, 5, 10, 15, 20, 25, 30, 35, 40]),
+				[0, 10, 0, 10]
+			)[1]
+		).toBeCloseTo(2.5, 5);
+	});
+
+	it('does not overshoot at a peak, as the drawn monotone curve does not', () => {
+		const from = sampleOn(
+			MONOTONE,
+			side([0, 10, 20, 30, 40]),
+			side([0, 5, 10, 15, 20, 25, 30, 35, 40]),
+			[0, 10, 0, 10]
+		);
+		for (const v of from) expect(v).toBeLessThanOrEqual(10);
+	});
+
+	it('a held point moves onto the new curve the same way', () => {
+		const held = side([0, 5, 10, 15, 20, 25, 30, 35, 40]);
+		const next = side([0, 10, 20, 30, 40]);
+		const map = buildBinRemap(next, held, 0, 'point')!;
+		const out = gatherReference(
+			[0, 10, 0, 10],
+			Float32Array.from(new Array(8).fill(1)),
+			map,
+			8,
+			MONOTONE
+		);
+		expect(out[1]).toBeCloseTo(2.96875, 5);
+	});
+
+	it('a gap among the four points makes the start NaN, as the drawn segment breaks', () => {
+		const from = sampleOn(
+			MONOTONE,
+			side([0, 10, 20, 30, 40]),
+			side([0, 5, 10, 15, 20, 25, 30, 35, 40]),
+			[0, 10, NaN, 10]
+		);
+		// 12.5 sits between 5 and 15, with 25 (the gap) as the point after next.
+		expect(Number.isNaN(from[2])).toBe(true);
+	});
+});
+
+describe('a merge that holds, for points (lines, areas)', () => {
+	it('moves each held point onto the new, coarser path at its own position', () => {
+		// Held points at 2.5, 7.5, 12.5, 17.5; the new ones at 5 and 15, worth 4 and 8.
+		const held = side([0, 5, 10, 15, 20]);
+		const next = side([0, 10, 20]);
+		const map = buildBinRemap(next, held, 0, 'point')!;
+		const out = gatherReference([4, 8], Float32Array.from([1, 1, 1, 1]), map, 4);
+		// Past the first new point and the last: that end point's value.
+		expect(Array.from(out)).toEqual([4, 5, 7, 8]);
+	});
+
+	it('needs no nesting: 2 into 5 holds the same way', () => {
+		const held = side([0, 2, 4, 6, 8, 10]);
+		const next = side([0, 5, 10]);
+		const map = buildBinRemap(next, held, 0, 'point')!;
+		const out = gatherReference([0, 10], Float32Array.from([1, 1, 1, 1, 1]), map, 5);
+		// Held centres 1, 3, 5, 7, 9 against new points at 2.5 and 7.5.
+		expect(Array.from(out)).toEqual([0, 1, 5, 9, 10]);
 	});
 });
 

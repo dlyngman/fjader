@@ -14,6 +14,7 @@ import {
 	REMAP_IMMEDIATE_SIZE,
 	gatherPipelineFor,
 	remapPipelineFor,
+	type RemapCurve,
 	type RemapKind
 } from './RemapShader';
 
@@ -137,6 +138,12 @@ export interface MorphedChannelsOptions {
 	 * Absent: every binding resolves as a plain mix.
 	 */
 	scaleFor?(binding: number): ChannelScale | null;
+	/**
+	 * The curve a path's rows are drawn with, for a rebin's remap and gather
+	 * to sample it (RemapShader's RemapCurve), or null to apply the map's
+	 * weights as they are. Asked per dispatch, once per rebin. Absent: null.
+	 */
+	curve?(): RemapCurve | null;
 }
 
 interface Channel {
@@ -234,6 +241,7 @@ export class MorphedChannels {
 	#clockHostFor: () => ClockHost | null;
 	#affectedCharts: () => string[];
 	#scaleFor: ((binding: number) => ChannelScale | null) | null;
+	#curve: (() => RemapCurve | null) | null;
 
 	#channels = new Map<number, Channel>();
 	/**
@@ -324,6 +332,7 @@ export class MorphedChannels {
 		this.#clockHostFor = options.clockHost;
 		this.#affectedCharts = options.affectedCharts;
 		this.#scaleFor = options.scaleFor ?? null;
+		this.#curve = options.curve ?? null;
 		this.#passDescriptor = { label: `${options.label}-resolve` };
 	}
 
@@ -605,7 +614,7 @@ export class MorphedChannels {
 	 */
 	#encodeGathers(pass: GPUComputePassEncoder, map: GPUBuffer): void {
 		const channels = this.#channelList;
-		const { pipeline, layout } = gatherPipelineFor(this.#device);
+		const { pipeline, layout } = gatherPipelineFor(this.#device, this.#curve?.() ?? null);
 		for (let i = 0; i < channels.length; i++) {
 			const channel = channels[i];
 			const source = channel.gatherSource;
@@ -987,7 +996,7 @@ export class MorphedChannels {
 			const drawn = channel.drawnSet ? channel.drawn : channel.current;
 			const kind: RemapKind = channel.kind ?? 'none';
 			if (channel.count > 0) {
-				const { pipeline, layout } = remapPipelineFor(this.#device, kind);
+				const { pipeline, layout } = remapPipelineFor(this.#device, kind, this.#curve?.() ?? null);
 				pass.setPipeline(pipeline);
 				// Per remap: the old buffer is a different one each rebin.
 				const bindGroup = this.#device.createBindGroup({
