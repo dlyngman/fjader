@@ -259,6 +259,11 @@ class PassTimer {
 			});
 		}
 		const querySet = this.#querySet;
+		// The prototype's method, which the creation counter may have patched. It
+		// is put back by removing this override, not by assigning what was read:
+		// assigning would leave the counter's wrapper on the device as its own
+		// property, still counting after the counter restored the prototype.
+		const own = Object.hasOwn(device, 'createCommandEncoder');
 		const original = device.createCommandEncoder;
 		device.createCommandEncoder = (descriptor?: GPUCommandEncoderDescriptor) => {
 			const encoder = original.call(device, descriptor);
@@ -312,7 +317,8 @@ class PassTimer {
 			return encoder;
 		};
 		this.#restore = () => {
-			device.createCommandEncoder = original;
+			if (own) device.createCommandEncoder = original;
+			else delete (device as Partial<GPUDevice>).createCommandEncoder;
 		};
 	}
 
@@ -478,8 +484,11 @@ export class FrameProbe {
 				queue.onSubmittedWorkDone().then(() => {
 					this.#submitDone[i] = performance.now();
 				});
-				// That one was the probe's own, not the page's.
-				this.#counter.pending[WORK_DONE]--;
+				// That one was the probe's own, not the page's. Guarded: where the
+				// method could not be patched nothing was counted, and an unsigned
+				// count would wrap.
+				const pending = this.#counter.pending;
+				if (pending[WORK_DONE] > 0) pending[WORK_DONE]--;
 				this.#submitTimings[i] = null;
 				this.#passTimer?.afterSubmit((timing) => {
 					this.#submitPassMs[i] = timing.sumMs;

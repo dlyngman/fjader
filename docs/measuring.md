@@ -94,6 +94,10 @@ is in aggregated queries, and say so with the numbers (the log's name carries `-
   - **Timing the GPU allocates per submit** (a promise; with pass timestamps, closures and a
     readback). For a run that measures garbage collection, `?gputime=0` leaves it out; the counts
     stay.
+  - **`?churn=N`** is an experiment, not a setting for timing runs: N texture views of one small
+    unused texture, made and dropped on every frame of the session (they show in `created` as
+    `textureViews`). Wrapper garbage and nothing else, so a trace with and without it is a dose
+    test of whether that garbage is what the collector's sweeps cost.
 - **Entrance observer**: `gpuCoordinator.observeEntrances` for when charts enter.
 
 ## Scripted interactions
