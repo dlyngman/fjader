@@ -73,6 +73,24 @@ first, so drift (thermal, background work) spreads over both. Remove the worktre
 
 Each page's header comment lists its options and session in full.
 
+### Pixels: did a change alter what is drawn?
+
+`/test/path-grid?capture=1` adds **Save captures**: a scripted sequence of states (load, a low and
+a high brush, cleared, a toggle, cleared, fine bins, zoomed in) and, in each, a readback of every
+case's canvases once they are at rest, saved as `captures-pathgrid.json`. There is no GPU or
+browser test in CI; this is the net under a change that should not alter what any case draws.
+
+```bash
+uv run scripts/measure/captures.py main=captures-a.json branch=captures-b.json --out /tmp/diffs
+```
+
+- **Two runs of one build first.** A capture that differs between them is not stable and says
+  nothing about a change; `captures.py` lists captures that never came to rest.
+- **Same window size and display** for runs you compare: a different width is a different chart.
+- **At rest only.** A frame in the middle of a transition is not captured: the animation clock
+  follows real time, so two runs would not land on the same frame.
+- Readback is opt-in because a canvas that can be read back is configured with another usage.
+
 `?dots=0` leaves out the raw-row scatters. They read every row on every update, so at
 `?scale=N` they swamp what the aggregated marks' queries cost: use it when the change under test
 is in aggregated queries, and say so with the numbers (the log's name carries `-nodots`).

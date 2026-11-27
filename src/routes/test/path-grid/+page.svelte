@@ -13,10 +13,21 @@
 	 *
 	 * The console says nothing for these. An error starting "fjader: … draws
 	 * nothing" means a result was padded and its rows did not check out.
+	 *
+	 *   ?capture=1   adds "Save captures": a scripted sequence of states (load,
+	 *                two brushes, cleared, a toggle, cleared, fine bins, zoomed
+	 *                in), and in each a readback of every case's canvases once
+	 *                they are at rest. Saved as captures-pathgrid.json, for
+	 *                scripts/measure/captures.py to compare two builds' pixels.
+	 *                Opt-in: a canvas that can be read back is configured with
+	 *                another usage. Same window size and display for runs you
+	 *                compare. Frames in the middle of a transition are not
+	 *                captured: only what a chart comes to rest at.
 	 */
 	import { count, avg } from '@uwdata/mosaic-sql';
 	import { initFjader } from '$lib';
 	import { onDestroy, onMount } from 'svelte';
+	import { page } from '$app/state';
 	import {
 		ChartContainer,
 		Frame,
@@ -36,6 +47,9 @@
 	import { attachQueryLog } from '$lib/query-engine/debug/query-log';
 
 	const { queryEngine, gpuCoordinator } = initFjader();
+	const CAPTURE = page.url.searchParams.get('capture') === '1';
+	// Before any chart mounts: a canvas reads it when it configures its context.
+	if (CAPTURE) gpuCoordinator.readbackEnabled = true;
 	// Every transition that starts (lib/animation/transition-log.ts): each
 	// renderer's rebin decision (hold, forward and why, swap) and each morph
 	// that snaps, with the time, for a flicker seen by eye. In "Save log".
@@ -219,9 +233,8 @@
 	 * minute) or the quick one (case 1: zoom and the long drags; about 15 s).
 	 * Saves its log when it ends: no button to wait for.
 	 */
-	async function runSession(quick = false) {
-		running = true;
-		done = null;
+	/** Run `session` with pointer capture made safe for its synthetic pointer. */
+	async function withSyntheticPointer(session) {
 		// A synthetic pointer id has no active pointer: capture throws.
 		const capture = Element.prototype.setPointerCapture;
 		const release = Element.prototype.releasePointerCapture;
@@ -240,18 +253,249 @@
 			}
 		};
 		try {
-			// The page's load: until the first input, by hand or this session's, so a
-			// zoom tried by hand before the session is not counted as load.
-			windows = { load: { start: 0, end: firstInput ?? performance.now() } };
-			const centre = await dataCentre();
-			await zoomAndPan(1, centre, quick);
-			if (!quick) await zoomAndPan(4, centre, quick);
-			const name = `qlog-pathgrid${quick ? '-quick' : ''}.json`;
-			log.download(name, { windows, quick, transitions, cases: caseCharts() });
-			done = name;
+			await session();
 		} finally {
 			Element.prototype.setPointerCapture = capture;
 			Element.prototype.releasePointerCapture = release;
+		}
+	}
+
+	async function runSession(quick = false) {
+		running = true;
+		done = null;
+		try {
+			await withSyntheticPointer(async () => {
+				// The page's load: until the first input, by hand or this session's, so a
+				// zoom tried by hand before the session is not counted as load.
+				windows = { load: { start: 0, end: firstInput ?? performance.now() } };
+				const centre = await dataCentre();
+				await zoomAndPan(1, centre, quick);
+				if (!quick) await zoomAndPan(4, centre, quick);
+				const name = `qlog-pathgrid${quick ? '-quick' : ''}.json`;
+				log.download(name, { windows, quick, transitions, cases: caseCharts() });
+				done = name;
+			});
+		} finally {
+			running = false;
+		}
+	}
+
+	// --- Captures (?capture=1) -------------------------------------------------
+	// What every case comes to rest at, in a fixed sequence of states, as
+	// pixels: a net under changes that should not change what is drawn.
+	/** The state being captured, for the status line; '' when not running. */
+	let capturing = $state('');
+	const caseEls = () => [...document.querySelectorAll('.case')];
+	const titled = (prefix) =>
+		caseEls().find((el) => el.querySelector('h3')?.textContent.startsWith(prefix));
+	const fgOf = (el) => el.querySelector('svg.svg-foreground');
+	const rectOf = (el) => el.querySelector('rect.interaction-target').getBoundingClientRect();
+
+	function hashPixels(pixels) {
+		const words = new Uint32Array(pixels.buffer, pixels.byteOffset, pixels.byteLength >> 2);
+		let hash = words.length;
+		for (let i = 0; i < words.length; i++) hash = (Math.imul(hash, 31) + words[i]) | 0;
+		return hash >>> 0;
+	}
+
+	/** Gzipped, as base64: the pixels exactly, where a PNG through a 2D canvas would premultiply. */
+	async function packed(bytes) {
+		const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'));
+		const zipped = new Uint8Array(await new Response(stream).arrayBuffer());
+		let text = '';
+		for (let i = 0; i < zipped.length; i += 0x8000) {
+			text += String.fromCharCode.apply(null, zipped.subarray(i, i + 0x8000));
+		}
+		return btoa(text);
+	}
+
+	/**
+	 * One case's canvases, once two readbacks in a row are the same pixels: a
+	 * case scrolled into view may still be querying or travelling. `settled`
+	 * false means ten tries never agreed.
+	 */
+	async function captureCase(el) {
+		// A chart off screen neither queries nor draws.
+		el.scrollIntoView({ block: 'center' });
+		await sleep(700);
+		let last = null;
+		let settled = false;
+		for (let attempt = 0; attempt < 10 && !settled; attempt++) {
+			const map = await gpuCoordinator.captureCharts();
+			const shots = [...el.querySelectorAll('canvas')].map((c) => map.get(c) ?? null);
+			const hashes = shots.map((shot) => (shot ? hashPixels(shot.pixels) : null));
+			settled =
+				last !== null &&
+				hashes.length === last.hashes.length &&
+				hashes.every((h, i) => h !== null && h === last.hashes[i]);
+			last = { shots, hashes };
+			if (!settled) await sleep(400);
+		}
+		return last.shots.map((shot, index) => ({ shot, index, hash: last.hashes[index], settled }));
+	}
+
+	async function captureState(state, out) {
+		capturing = state;
+		// Queries for the new state, and the travel to it.
+		await sleep(1500);
+		for (const el of caseEls()) {
+			const title = el.querySelector('h3')?.textContent ?? '';
+			for (const { shot, index, hash, settled } of await captureCase(el)) {
+				out.push({
+					state,
+					case: title,
+					index,
+					settled,
+					hash,
+					drew: shot?.drew ?? false,
+					width: shot?.width ?? 0,
+					height: shot?.height ?? 0,
+					pixels: shot ? await packed(shot.pixels) : null
+				});
+			}
+		}
+		window.scrollTo(0, 0);
+		await sleep(300);
+	}
+
+	async function captureSession() {
+		running = true;
+		const out = [];
+		// The real pointer out of it: a case scrolled under a resting mouse is
+		// hovered, and draws its hover. Dispatched events are not hit-tested.
+		const pointerEvents = document.body.style.pointerEvents;
+		document.body.style.pointerEvents = 'none';
+		try {
+			await withSyntheticPointer(async () => {
+				const brushEl = titled('Brush');
+				const toggleEl = titled('Toggle');
+				const at = (el, fx) => {
+					const r = rectOf(el);
+					return r.left + r.width * fx;
+				};
+				const mid = (el) => {
+					const r = rectOf(el);
+					return r.top + r.height / 2;
+				};
+				// A cell takes a gesture only once the pointer has entered it: without
+				// this a drag in the plot panned the axis in one run and brushed in
+				// another, by where the real mouse had been.
+				const enter = async (el, x, y) => {
+					const svg = fgOf(el);
+					pointer(svg.closest('.chart-cell') ?? svg, 'pointerenter', x, y);
+					pointer(svg, 'pointerenter', x, y);
+					await sleep(200);
+				};
+				const leave = (el) => {
+					const r = rectOf(el);
+					const svg = fgOf(el);
+					pointer(svg, 'pointerleave', r.right + 1, r.top - 1);
+					pointer(svg.closest('.chart-cell') ?? svg, 'pointerleave', r.right + 1, r.top - 1);
+				};
+				const brush = async (f0, f1) => {
+					const svg = fgOf(brushEl);
+					const y = mid(brushEl);
+					await enter(brushEl, at(brushEl, f0), y);
+					pointer(svg, 'pointerdown', at(brushEl, f0), y, 1);
+					for (let k = 1; k <= 12; k++) {
+						await frame();
+						pointer(svg, moveType, at(brushEl, f0 + ((f1 - f0) * k) / 12), y, 1);
+					}
+					pointer(svg, 'pointerup', at(brushEl, f1), y, 0);
+					leave(brushEl);
+				};
+				const click = async (el, x, y) => {
+					await enter(el, x, y);
+					fgOf(el).dispatchEvent(
+						new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y })
+					);
+					leave(el);
+				};
+				const zoomIn = async (el, centre) => {
+					el.scrollIntoView({ block: 'center' });
+					await sleep(500);
+					const r = rectOf(el);
+					const x = r.left + r.width * centre;
+					const y = r.bottom + 10;
+					const svg = fgOf(el);
+					pointer(svg.closest('.chart-cell') ?? svg, 'pointerenter', x, y);
+					pointer(svg, 'pointerenter', x, y);
+					// The wheel handler zooms only after the pointer has dwelt.
+					await sleep(400);
+					// Each step left to settle before the next: steps that overlap end
+					// at a view that depends on their timing.
+					for (let i = 0; i < 8; i++) {
+						svg.dispatchEvent(
+							new WheelEvent('wheel', {
+								bubbles: true,
+								cancelable: true,
+								clientX: x,
+								clientY: y,
+								deltaY: -100
+							})
+						);
+						await sleep(500);
+					}
+					leave(el);
+				};
+
+				window.scrollTo(0, 0);
+				await captureState('load', out);
+
+				// Under 310 miles: short flights only.
+				await brush(0.02, 0.1);
+				await captureState('brush-low', out);
+
+				// Past 1 500 miles: the flights with no carrier come in.
+				await brush(0.55, 0.95);
+				await captureState('brush-high', out);
+
+				// A press outside the range clears it.
+				await enter(brushEl, at(brushEl, 0.3), mid(brushEl));
+				pointer(fgOf(brushEl), 'pointerdown', at(brushEl, 0.3), mid(brushEl), 1);
+				pointer(fgOf(brushEl), 'pointerup', at(brushEl, 0.3), mid(brushEl), 0);
+				leave(brushEl);
+				await captureState('unbrushed', out);
+
+				// The first of the three bands, by its axis label.
+				const tr = rectOf(toggleEl);
+				await click(toggleEl, tr.left + tr.width / 6, tr.bottom + 10);
+				await captureState('toggle', out);
+
+				// Empty plot space clears the toggle.
+				await click(toggleEl, tr.right - 4, tr.top + 4);
+				await captureState('untoggled', out);
+
+				fine = true;
+				await captureState('fine-bins', out);
+				fine = false;
+				await sleep(1500);
+
+				const centre = await dataCentre();
+				for (const prefix of ['1.', '11.', '12.']) await zoomIn(titled(prefix), centre);
+				await captureState('zoomed', out);
+			});
+			const blob = new Blob(
+				[
+					JSON.stringify({
+						page: 'path-grid',
+						format: navigator.gpu.getPreferredCanvasFormat(),
+						viewport: { w: innerWidth, h: innerHeight, dpr: devicePixelRatio },
+						userAgent: navigator.userAgent,
+						captures: out
+					})
+				],
+				{ type: 'application/json' }
+			);
+			const a = document.createElement('a');
+			a.href = URL.createObjectURL(blob);
+			a.download = 'captures-pathgrid.json';
+			a.click();
+			URL.revokeObjectURL(a.href);
+			done = a.download;
+		} finally {
+			document.body.style.pointerEvents = pointerEvents;
+			capturing = '';
 			running = false;
 		}
 	}
@@ -326,8 +570,13 @@
 			>
 				Save log
 			</button>
+			{#if CAPTURE}
+				<button onclick={captureSession} disabled={running}>Save captures (3 min)</button>
+			{/if}
 			{#if running}
-				<strong class="session-status">Running: don't move the mouse.</strong>
+				<strong class="session-status"
+					>Running{capturing ? ` (${capturing})` : ''}: don't move the mouse.</strong
+				>
 			{:else if done}
 				<strong class="session-status"
 					>Done: saved {done} to Downloads. Reload for the next run.</strong
