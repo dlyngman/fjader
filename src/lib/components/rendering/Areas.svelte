@@ -487,7 +487,13 @@
 	// gives each new point its start on the old path. Before the writes below,
 	// which take the decision on their first write of a version.
 	$effect(() => {
-		if (renderer?.resourcesCreated) renderer.setBinning(rebinSource, { geometry: 'point' });
+		if (!renderer?.resourcesCreated) return;
+		// A new point starts on the curve drawn, not on its chord; a linear
+		// path's chord is its curve.
+		renderer.setBinning(rebinSource, {
+			geometry: 'point',
+			curve: curve === 'linear' ? null : { curve, swap: orientation === 'horizontal' }
+		});
 	});
 
 	// --- DATA WRITING EFFECTS ---

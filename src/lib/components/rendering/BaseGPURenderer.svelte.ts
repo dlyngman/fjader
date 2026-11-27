@@ -2,6 +2,7 @@ import { untrack } from 'svelte';
 import { UNIFORM_STAND_IN_BYTES } from './uniform-sizes';
 import type { GPUCoordinator, DataBindingEntry, LayerRegistrationResult } from '$lib/gpu';
 import type { ChartContext, WebGPUCanvasContext } from '$lib/types';
+import type { RemapCurve } from '$lib/gpu/RemapShader';
 import { MorphedChannels, type ClockHost, type ChannelScale } from '$lib/gpu/MorphedChannels';
 import { TransitionClock } from '$lib/animation/TransitionClock';
 import {
@@ -92,6 +93,12 @@ const SEAM_FADE_PRECISION = 0.02;
 /** How a binned renderer draws rows over bins (setBinning). */
 export interface BinningOptions {
 	geometry: BinGeometry;
+	/**
+	 * The curve a path's rows are drawn with (`point` geometry): a rebin's new
+	 * points start on it, not on its chords (RemapShader's RemapCurve). Null or
+	 * absent: the chord, which is the curve of a linear path.
+	 */
+	curve?: RemapCurve | null;
 	/** The static bindings holding each row's bin edges (lower, upper): a cut writes them. */
 	edges?: readonly [number, number] | null;
 	/**
@@ -176,6 +183,7 @@ export class BaseGPURenderer {
 		edges: readonly [number, number] | null;
 		seams: number | null;
 		seamFade: { binding: number; offset: number } | null;
+		curve: RemapCurve | null;
 	} | null = null;
 	/** Whether the seams slot holds seams (dropped with their layout). */
 	#seamsWritten = false;
@@ -663,6 +671,9 @@ export class BaseGPURenderer {
 			affectedCharts: () => this.#chartsToRedraw(),
 			// The value axis's scale, for the bindings measured on it. Runs on
 			// every encode: an array scan of two, no allocation.
+			// The curve the rows are drawn with, per rebin: a binning set later than
+			// the first morphed write is still seen.
+			curve: () => this.#binning?.curve ?? null,
 			scaleFor: (binding) => {
 				if (!this.#scaledBindings.includes(binding)) return null;
 				const axis = this.#morphAxis;
@@ -1009,10 +1020,12 @@ export class BaseGPURenderer {
 	 */
 	setBinning(source: RebinSource | null, options: BinningOptions): void {
 		const b = this.#binning;
-		const { geometry, edges = null, seams = null, seamFade = null } = options;
+		const { geometry, edges = null, seams = null, seamFade = null, curve = null } = options;
 		if (
 			b?.source === source &&
 			b?.geometry === geometry &&
+			b?.curve?.curve === curve?.curve &&
+			b?.curve?.swap === curve?.swap &&
 			b?.edges?.[0] === edges?.[0] &&
 			b?.edges?.[1] === edges?.[1] &&
 			b?.seams === seams &&
@@ -1024,7 +1037,7 @@ export class BaseGPURenderer {
 		if (this.#hold) this.#releaseHold();
 		this.#stopFade();
 		this.#dropSeams();
-		this.#binning = source ? { source, geometry, edges, seams, seamFade } : null;
+		this.#binning = source ? { source, geometry, edges, seams, seamFade, curve } : null;
 		this.#rebinVersion = -1;
 		this.#pendingRemap = null;
 	}

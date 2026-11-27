@@ -186,14 +186,15 @@ describe('the bins remap for points (lines, areas)', () => {
 		expect(from).toEqual([0, 1, 5, 9, 10]);
 	});
 
-	it('starts a merge at the overlap-weighted mean of the old points, as an interval does', () => {
-		expect(remapPoints(side([0, 5, 10, 15, 20]), side([0, 10, 20]), [2, 6, 1, 3], [8, 4])).toEqual([
-			4, 2
-		]);
-		// 2 into 5: old bins straddle the new edges, weighted by what falls inside.
+	it('samples the old path on a merge too, so a peak is not averaged away', () => {
+		// Old points at 0.5, 1.5, 2.5 with a peak in the middle; one new point at 1.5.
+		const peak = remapPoints(side([0, 1, 2, 3]), side([0, 3]), [0, 10, 0], [9]);
+		// The mean of what it covers would start it at 3.33 and climb back.
+		expect(peak).toEqual([10]);
+		// 2 into 5: old centres 1, 3, 5, 7, 9; new ones at 2.5 and 7.5.
 		const from = remapPoints(side([0, 2, 4, 6, 8, 10]), side([0, 5, 10]), [1, 2, 3, 4, 5], [9, 9]);
-		expect(from[0]).toBeCloseTo((2 * 1 + 2 * 2 + 1 * 3) / 5);
-		expect(from[1]).toBeCloseTo((1 * 3 + 2 * 4 + 2 * 5) / 5);
+		expect(from[0]).toBeCloseTo(1.75);
+		expect(from[1]).toBeCloseTo(4.25);
 	});
 
 	it('maps the same bins over a moved window one to one', () => {
@@ -285,6 +286,77 @@ describe('a merge that holds: nesting and the gather', () => {
 		const next = side([0, 10, 20]);
 		const landed = gather(held, next, [8, 4], [2, 6, 1, 3]);
 		expect(remap(held, next, landed, [8, 4])).toEqual([8, 4]);
+	});
+});
+
+describe('a rebin’s points start on the drawn curve, not its chord', () => {
+	const MONOTONE = { curve: 'monotone-x', swap: false } as const;
+	const sampleOn = (
+		curve: { curve: 'monotone-x' | 'monotone-y'; swap: boolean } | null,
+		prev: BinRemapSide,
+		next: BinRemapSide,
+		old: number[]
+	) => {
+		const map = buildBinRemap(prev, next, 0, 'point')!;
+		const to = new Array(next.lower.length).fill(9);
+		const out = new Float32Array(to.length);
+		return Array.from(remapReference('linear', old, to, map, SAME, SAME, to.length, out, curve));
+	};
+
+	it('samples the monotone curve through the old points', () => {
+		// Old points at 5, 15, 25, 35; the new point at 7.5 is a quarter of the way to 15.
+		const from = sampleOn(
+			MONOTONE,
+			side([0, 10, 20, 30, 40]),
+			side([0, 5, 10, 15, 20, 25, 30, 35, 40]),
+			[0, 10, 0, 10]
+		);
+		// Hermite at t = 0.25 with tangents 1 (one-sided at the series' start) and 0 (the
+		// peak at 15): 0.140625 · 10 + 0.15625 · 10. The chord gives 2.5.
+		expect(from[1]).toBeCloseTo(2.96875, 5);
+		expect(
+			sampleOn(
+				null,
+				side([0, 10, 20, 30, 40]),
+				side([0, 5, 10, 15, 20, 25, 30, 35, 40]),
+				[0, 10, 0, 10]
+			)[1]
+		).toBeCloseTo(2.5, 5);
+	});
+
+	it('does not overshoot at a peak, as the drawn monotone curve does not', () => {
+		const from = sampleOn(
+			MONOTONE,
+			side([0, 10, 20, 30, 40]),
+			side([0, 5, 10, 15, 20, 25, 30, 35, 40]),
+			[0, 10, 0, 10]
+		);
+		for (const v of from) expect(v).toBeLessThanOrEqual(10);
+	});
+
+	it('a held point moves onto the new curve the same way', () => {
+		const held = side([0, 5, 10, 15, 20, 25, 30, 35, 40]);
+		const next = side([0, 10, 20, 30, 40]);
+		const map = buildBinRemap(next, held, 0, 'point')!;
+		const out = gatherReference(
+			[0, 10, 0, 10],
+			Float32Array.from(new Array(8).fill(1)),
+			map,
+			8,
+			MONOTONE
+		);
+		expect(out[1]).toBeCloseTo(2.96875, 5);
+	});
+
+	it('a gap among the four points makes the start NaN, as the drawn segment breaks', () => {
+		const from = sampleOn(
+			MONOTONE,
+			side([0, 10, 20, 30, 40]),
+			side([0, 5, 10, 15, 20, 25, 30, 35, 40]),
+			[0, 10, NaN, 10]
+		);
+		// 12.5 sits between 5 and 15, with 25 (the gap) as the point after next.
+		expect(Number.isNaN(from[2])).toBe(true);
 	});
 });
 
