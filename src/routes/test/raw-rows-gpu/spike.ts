@@ -664,7 +664,19 @@ export class Spike {
 		);
 	}
 
-	summarize(): { cadence: number; phases: PhaseSummary[] } {
+	/** Forget the frames recorded so far: the session starts here. */
+	reset(): void {
+		this.#frames = 0;
+		this.#phases.length = 0;
+		for (const times of this.#gpu) times.fill(NaN);
+	}
+
+	/**
+	 * Per phase. `cadence` is the display's frame interval, measured by the
+	 * page before the session: a phase too slow to keep up cannot say what the
+	 * display's rate was.
+	 */
+	summarize(cadence: number): { cadence: number; phases: PhaseSummary[] } {
 		const n = this.#frames;
 		const of = (p: number) => {
 			const dt: number[] = [];
@@ -687,7 +699,6 @@ export class Spike {
 			return { dt, encode, gpu, total };
 		};
 		const sorted = (xs: number[]) => Float64Array.from(xs).sort();
-		const cadence = quantile(sorted(of(0).dt), 0.5);
 		const stat = (xs: number[]) => {
 			const s = sorted(xs);
 			return { p50: quantile(s, 0.5), p95: quantile(s, 0.95), max: s[s.length - 1] ?? NaN };

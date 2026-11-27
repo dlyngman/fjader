@@ -118,8 +118,25 @@
 		return null;
 	}
 
-	function runSession() {
+	/** The display's frame interval: the median of 60 frames in which nothing is drawn. */
+	function measureCadence() {
+		return new Promise((resolve) => {
+			const dts = [];
+			let last = 0;
+			const tick = (ts) => {
+				if (last) dts.push(ts - last);
+				last = ts;
+				if (dts.length < 60) raf = requestAnimationFrame(tick);
+				else resolve(dts.sort((a, b) => a - b)[30]);
+			};
+			raf = requestAnimationFrame(tick);
+		});
+	}
+
+	async function runSession() {
 		running = true;
+		const cadence = await measureCadence();
+		spike.reset();
 		let t0 = 0;
 		let last = '';
 		const tick = (ts) => {
@@ -130,7 +147,7 @@
 			const name = at(ts - t0);
 			if (name === null) {
 				performance.mark(`fjader:end:${VARIANT}`);
-				summary = spike.summarize();
+				summary = spike.summarize(cadence);
 				running = false;
 				done = true;
 				return;
@@ -275,9 +292,9 @@
 			</tbody>
 		</table>
 		<p class="note">
-			ms. Cadence {fmt(summary.cadence)} ms (the first phase's median interval). encode = main thread,
-			one frame's commands and submit. mask, bin, render = GPU time of each pass (timestamp queries);
-			a pass that did not run counts 0.
+			ms. Cadence {fmt(summary.cadence)} ms (the display's, measured before the session with nothing
+			drawn). encode = main thread, one frame's commands and submit. mask, bin, render = GPU time of
+			each pass (timestamp queries); a pass that did not run counts 0.
 		</p>
 	{/if}
 </div>
