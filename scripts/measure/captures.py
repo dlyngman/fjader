@@ -18,7 +18,8 @@ taken mid-travel, a chart whose text or timing varies) and cannot say anything a
 `--tolerance N` passes a capture whose channels differ by at most N.
 
 Compare runs of the same window size and display: the file records them and this warns.
-Exit status 1 when any capture differs or is missing.
+Exit status 1 when any capture differs, is missing, was not drawn in either run, or never came to
+rest.
 
 See docs/measuring.md.
 """
@@ -148,6 +149,10 @@ def main() -> int:
         for label, c in zip(labels, (ca, cb)):
             if not c.get('settled'):
                 unsettled.append(f'{name} ({label})')
+        # A canvas that drew in neither run has no pixels and an equal (absent) hash: not a match.
+        if ca.get('pixels') is None and cb.get('pixels') is None:
+            rows.append(f'| {name} | not drawn in either | | |')
+            continue
         if ca['hash'] == cb['hash'] and (ca['width'], ca['height']) == (cb['width'], cb['height']):
             same += 1
             continue
@@ -182,7 +187,7 @@ def main() -> int:
             print(row)
         if args.out:
             print(f'\nPNGs in {args.out}: {labels[0]}, {labels[1]}, and the differing pixels in red.')
-    return 1 if rows else 0
+    return 1 if rows or unsettled else 0
 
 
 if __name__ == '__main__':
