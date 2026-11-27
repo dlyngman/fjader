@@ -22,6 +22,11 @@
 	 *                 promise, closures and a readback per submit, which a run
 	 *                 that measures garbage collection should not add. The
 	 *                 counts of WebGPU objects made per frame stay.
+	 *   ?churn=N      an experiment: N extra texture views made and dropped on
+	 *                 every frame of the session (views of one small texture,
+	 *                 never used). They add wrapper objects for Blink's
+	 *                 collector and nothing else, so a trace with and without
+	 *                 them says whether that garbage is what its sweeps cost.
 	 *   ?scale=N      the flights table N times over (default 1: 200k rows)
 	 *   ?dots=0       without the three raw-row scatters (charts 26-28)
 	 *   ?stack=js     the stacked histogram and area charts (20 and 25) stack
@@ -107,6 +112,7 @@
 	const AXES = params.get('axes') !== '0';
 	const MUTATIONS = params.get('mutations') === '1';
 	const GPU_TIME = params.get('gputime') !== '0';
+	const CHURN = Math.max(0, Number(params.get('churn')) || 0);
 	const SCALE = Math.max(1, Number(params.get('scale')) || 1);
 	const CHART_COUNT = Math.min(30, Math.max(1, Number(params.get('charts')) || 30));
 	const STACK_JS = params.get('stack') === 'js';
@@ -115,7 +121,7 @@
 	const DOTS = params.get('dots') !== '0';
 	const VARIANT = `${LABEL_MODE === 'none' ? 'nolabels' : LABEL_MODE === 'text' ? 'textmark' : 'attached'}-${AXES ? 'axes' : 'noaxes'}${
 		CHART_COUNT < 30 ? `-c${CHART_COUNT}` : ''
-	}${SCALE > 1 ? `-x${SCALE}` : ''}${DOTS ? '' : '-nodots'}${MUTATIONS ? '-mut' : ''}${GPU_TIME ? '' : '-nogputime'}${STACK_JS ? '-stackjs' : ''}`;
+	}${SCALE > 1 ? `-x${SCALE}` : ''}${DOTS ? '' : '-nodots'}${MUTATIONS ? '-mut' : ''}${GPU_TIME ? '' : '-nogputime'}${CHURN ? `-churn${CHURN}` : ''}${STACK_JS ? '-stackjs' : ''}`;
 
 	/** Runs of the JS stack transform so far (?stack=js), over every chart using it. */
 	let jsApplies = 0;
@@ -465,8 +471,23 @@
 			}
 		};
 		const has = (id) => charts.some((c) => c.id === id);
+		// ?churn=N: wrapper garbage, on every frame of the session.
+		let churning = CHURN > 0;
+		const churnTexture = churning
+			? gpuCoordinator.device.createTexture({
+					size: [4, 4],
+					format: 'rgba8unorm',
+					usage: GPUTextureUsage.TEXTURE_BINDING
+				})
+			: null;
+		const churn = () => {
+			if (!churning) return;
+			for (let i = 0; i < CHURN; i++) churnTexture.createView();
+			requestAnimationFrame(churn);
+		};
 		try {
 			probe.start();
+			churn();
 			mark('session', VARIANT);
 
 			phase('idle');
@@ -553,6 +574,8 @@
 			mark('end', VARIANT);
 		} finally {
 			probe.stop();
+			churning = false;
+			churnTexture?.destroy();
 			Element.prototype.setPointerCapture = capture;
 			Element.prototype.releasePointerCapture = release;
 			summary = probe.summarize('idle');
