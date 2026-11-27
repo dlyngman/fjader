@@ -361,6 +361,10 @@
 	async function captureSession() {
 		running = true;
 		const out = [];
+		// The real pointer out of it: a case scrolled under a resting mouse is
+		// hovered, and draws its hover. Dispatched events are not hit-tested.
+		const pointerEvents = document.body.style.pointerEvents;
+		document.body.style.pointerEvents = 'none';
 		try {
 			await withSyntheticPointer(async () => {
 				const brushEl = titled('Brush');
@@ -373,20 +377,40 @@
 					const r = rectOf(el);
 					return r.top + r.height / 2;
 				};
+				// A cell takes a gesture only once the pointer has entered it: without
+				// this a drag in the plot panned the axis in one run and brushed in
+				// another, by where the real mouse had been.
+				const enter = async (el, x, y) => {
+					const svg = fgOf(el);
+					pointer(svg.closest('.chart-cell') ?? svg, 'pointerenter', x, y);
+					pointer(svg, 'pointerenter', x, y);
+					await sleep(200);
+				};
+				const leave = (el) => {
+					const r = rectOf(el);
+					const svg = fgOf(el);
+					pointer(svg, 'pointerleave', r.right + 1, r.top - 1);
+					pointer(svg.closest('.chart-cell') ?? svg, 'pointerleave', r.right + 1, r.top - 1);
+				};
 				const brush = async (f0, f1) => {
 					const svg = fgOf(brushEl);
 					const y = mid(brushEl);
+					await enter(brushEl, at(brushEl, f0), y);
 					pointer(svg, 'pointerdown', at(brushEl, f0), y, 1);
 					for (let k = 1; k <= 12; k++) {
 						await frame();
 						pointer(svg, moveType, at(brushEl, f0 + ((f1 - f0) * k) / 12), y, 1);
 					}
 					pointer(svg, 'pointerup', at(brushEl, f1), y, 0);
+					leave(brushEl);
 				};
-				const click = (el, x, y) =>
+				const click = async (el, x, y) => {
+					await enter(el, x, y);
 					fgOf(el).dispatchEvent(
 						new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y })
 					);
+					leave(el);
+				};
 				const zoomIn = async (el, centre) => {
 					el.scrollIntoView({ block: 'center' });
 					await sleep(500);
@@ -398,7 +422,9 @@
 					pointer(svg, 'pointerenter', x, y);
 					// The wheel handler zooms only after the pointer has dwelt.
 					await sleep(400);
-					for (let i = 0; i < 12; i++) {
+					// Each step left to settle before the next: steps that overlap end
+					// at a view that depends on their timing.
+					for (let i = 0; i < 8; i++) {
 						svg.dispatchEvent(
 							new WheelEvent('wheel', {
 								bubbles: true,
@@ -408,10 +434,9 @@
 								deltaY: -100
 							})
 						);
-						await sleep(60);
+						await sleep(500);
 					}
-					await sleep(300);
-					pointer(svg, 'pointerleave', r.right + 1, r.top - 1);
+					leave(el);
 				};
 
 				window.scrollTo(0, 0);
@@ -426,17 +451,19 @@
 				await captureState('brush-high', out);
 
 				// A press outside the range clears it.
+				await enter(brushEl, at(brushEl, 0.3), mid(brushEl));
 				pointer(fgOf(brushEl), 'pointerdown', at(brushEl, 0.3), mid(brushEl), 1);
 				pointer(fgOf(brushEl), 'pointerup', at(brushEl, 0.3), mid(brushEl), 0);
+				leave(brushEl);
 				await captureState('unbrushed', out);
 
 				// The first of the three bands, by its axis label.
 				const tr = rectOf(toggleEl);
-				click(toggleEl, tr.left + tr.width / 6, tr.bottom + 10);
+				await click(toggleEl, tr.left + tr.width / 6, tr.bottom + 10);
 				await captureState('toggle', out);
 
 				// Empty plot space clears the toggle.
-				click(toggleEl, tr.right - 4, tr.top + 4);
+				await click(toggleEl, tr.right - 4, tr.top + 4);
 				await captureState('untoggled', out);
 
 				fine = true;
@@ -467,6 +494,7 @@
 			URL.revokeObjectURL(a.href);
 			done = a.download;
 		} finally {
+			document.body.style.pointerEvents = pointerEvents;
 			capturing = '';
 			running = false;
 		}
@@ -543,7 +571,7 @@
 				Save log
 			</button>
 			{#if CAPTURE}
-				<button onclick={captureSession} disabled={running}>Save captures (2 min)</button>
+				<button onclick={captureSession} disabled={running}>Save captures (3 min)</button>
 			{/if}
 			{#if running}
 				<strong class="session-status"
