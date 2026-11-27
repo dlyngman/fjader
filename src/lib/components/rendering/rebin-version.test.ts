@@ -73,8 +73,8 @@ function setup() {
 		rebuildRenderPlan: () => {},
 		registerLayer: () => ({ remove: () => {} }),
 		invalidateChart: () => {},
-		registerComputeWork: () => {},
-		removeComputeWork: () => {},
+		registerMorphWork: () => {},
+		removeMorphWork: () => {},
 		addAnimatedSource: (c: { finish(): void }) => clocks.add(c),
 		removeAnimatedSource: (c: { finish(): void }) => clocks.delete(c)
 	};

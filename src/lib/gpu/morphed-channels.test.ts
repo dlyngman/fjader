@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { MorphedChannels, alignmentKey, type ClockHost, type MorphHost } from './MorphedChannels';
+import {
+	MorphedChannels,
+	alignmentKey,
+	type ClockHost,
+	type MorphHost,
+	type MorphWork
+} from './MorphedChannels';
 import { TransitionClock } from '$lib/animation/TransitionClock';
 import { LinearScaleState } from '$lib/scales/LinearScaleState.svelte';
 import { scaledResolveReference } from './ResolveShader';
@@ -26,6 +32,8 @@ interface FakeBuffer {
 
 function fakes() {
 	const log: string[] = [];
+	/** Every pipeline set and every dispatch of a frame, in order, whatever the pipeline. */
+	const calls: string[] = [];
 	const device = {
 		createBuffer({ label, size }: { label: string; size: number }): FakeBuffer {
 			const buffer: FakeBuffer = {
@@ -61,6 +69,7 @@ function fakes() {
 				// Pixel-space resolve and remap pipelines only: the plain resolve's
 				// would change every exact list below.
 				setPipeline(pipeline: { label?: string }) {
+					calls.push('pipeline');
 					const label = pipeline.label ?? '';
 					if (label.startsWith('resolve-') || label.startsWith('remap') || label === 'gather') {
 						log.push(`pipeline ${label}`);
@@ -87,6 +96,7 @@ function fakes() {
 					log.push(head + params);
 				},
 				dispatchWorkgroups(n: number) {
+					calls.push('dispatch');
 					log.push(`dispatch ${n}`);
 				},
 				end() {}
@@ -95,14 +105,23 @@ function fakes() {
 	} as unknown as GPUCommandEncoder;
 
 	const sources: TransitionClock[] = [];
-	let computeWork: ((e: GPUCommandEncoder) => void) | null = null;
+	const works = new Map<string, MorphWork>();
+	// As the coordinator runs them: every mark's copies, then one pass with the
+	// dispatches of those that have any.
+	const computeWork = (e: GPUCommandEncoder) => {
+		const staged = [...works.values()].filter((work) => work.prepare(e));
+		if (staged.length === 0) return;
+		const pass = e.beginComputePass();
+		for (const work of staged) work.dispatch(pass);
+		pass.end();
+	};
 	const host: MorphHost = {
-		registerComputeWork: (_key, fn) => {
-			computeWork = fn;
+		registerMorphWork: (key, work) => {
+			works.set(key, work);
 			log.push('register');
 		},
-		removeComputeWork: () => {
-			computeWork = null;
+		removeMorphWork: (key) => {
+			works.delete(key);
 			log.push('unregister');
 		},
 		addAnimatedSource: (s) => {
@@ -127,21 +146,22 @@ function fakes() {
 	/** Run one frame's compute work and return what it issued. */
 	const frame = () => {
 		log.length = 0;
-		computeWork?.(encoder);
+		calls.length = 0;
+		computeWork(encoder);
 		return [...log];
 	};
 
-	return { device, host, log, slots, sources, frame, hasWork: () => computeWork !== null };
+	return { device, host, log, calls, slots, sources, frame, hasWork: () => works.size > 0 };
 }
 
 const ids = new Float32Array([0, 1, 2]);
 const values = (...v: number[]) => new Float32Array(v);
 
-function morphed(f: ReturnType<typeof fakes>, withScale = true) {
+function morphed(f: ReturnType<typeof fakes>, withScale = true, label = 'm') {
 	return new MorphedChannels({
 		device: f.device,
 		host: f.host,
-		label: 'm',
+		label,
 		clockHost: () => (withScale ? f.slots : null),
 		affectedCharts: () => ['chart-1']
 	});
@@ -154,6 +174,62 @@ const update = (m: MorphedChannels, y0: Float32Array, y1: Float32Array, bandIds 
 	]);
 
 describe('MorphedChannels', () => {
+	describe('in a pass shared with another mark', () => {
+		it("puts every mark's copies ahead of the one pass", () => {
+			const f = fakes();
+			const m = morphed(f, false, 'm');
+			const n = morphed(f, false, 'n');
+			update(m, values(1, 2, 3), values(4, 5, 6));
+			update(n, values(7, 8, 9), values(1, 1, 1));
+
+			const issued = f.frame();
+			expect(issued.filter((c) => c === 'pass')).toHaveLength(1);
+			const pass = issued.indexOf('pass');
+			const copies = issued.flatMap((c, i) => (c.startsWith('copy') ? [i] : []));
+			expect(copies.length).toBeGreaterThanOrEqual(4);
+			expect(copies.every((i) => i < pass)).toBe(true);
+			expect(issued.some((c) => c.startsWith('copy m-'))).toBe(true);
+			expect(issued.some((c) => c.startsWith('copy n-'))).toBe(true);
+			expect(issued.filter((c) => c.startsWith('dispatch'))).toHaveLength(4);
+		});
+
+		it('sets its own pipeline: nothing is taken from the mark before it', () => {
+			const f = fakes();
+			const m = morphed(f, false, 'm');
+			const n = morphed(f, false, 'n');
+			update(m, values(1, 2, 3), values(4, 5, 6));
+			update(n, values(7, 8, 9), values(1, 1, 1));
+
+			f.frame();
+			// Two plain channels each: a pipeline, its two dispatches, then the
+			// second mark's own pipeline before its two.
+			expect(f.calls).toEqual([
+				'pipeline',
+				'dispatch',
+				'dispatch',
+				'pipeline',
+				'dispatch',
+				'dispatch'
+			]);
+		});
+
+		it('leaves a mark at rest out of the pass', () => {
+			const f = fakes();
+			const m = morphed(f, false, 'm');
+			const n = morphed(f, false, 'n');
+			update(m, values(1, 2, 3), values(4, 5, 6));
+			update(n, values(7, 8, 9), values(1, 1, 1));
+			f.frame();
+
+			// Only the second mark gets new values.
+			update(n, values(2, 2, 2), values(3, 3, 3));
+			const issued = f.frame();
+			expect(issued.filter((c) => c === 'pass')).toHaveLength(1);
+			expect(issued.some((c) => c.startsWith('copy m-'))).toBe(false);
+			expect(issued.filter((c) => c.startsWith('dispatch'))).toHaveLength(2);
+		});
+	});
+
 	it('snaps the first write: nothing was on screen to travel from', () => {
 		const f = fakes();
 		const m = morphed(f);
