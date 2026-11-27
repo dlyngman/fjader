@@ -395,7 +395,12 @@ export class Spike {
 		const cells = this.gridW * this.gridH;
 		const gridBytes = mode === 'density' ? cells * 8 : mode === 'rep' ? cells * 4 : 0;
 		this.#grid = gridBytes
-			? device.createBuffer({ label: 'grid', size: gridBytes, usage: GPUBufferUsage.STORAGE })
+			? device.createBuffer({
+					label: 'grid',
+					size: gridBytes,
+					// COPY_DST for the frame's clearBuffer.
+					usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+				})
 			: null;
 
 		const samples = msaa === 4 && mode !== 'density' ? 4 : 1;
