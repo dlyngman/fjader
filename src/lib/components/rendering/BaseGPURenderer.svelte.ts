@@ -25,6 +25,8 @@ import {
 
 export interface RendererOptions {
 	zIndex?: number;
+	/** The layer's place in declaration order (the coordinator's `nextLayerOrder`). */
+	order?: number;
 	xScaleType?: string;
 	yScaleType?: string;
 	/** False for a mark whose shader never reads the chart's x and y scales. */
@@ -224,6 +226,7 @@ export class BaseGPURenderer {
 	#bindGroupUpdateScheduled = false;
 
 	#zIndex: number;
+	#order: number | undefined;
 	#readsChartScales: boolean;
 	#space: 'plot' | 'cell';
 	#xScaleType: string;
@@ -304,6 +307,7 @@ export class BaseGPURenderer {
 		this.#chartContext = chartContext;
 		this.#rendererId = `${markType}-${crypto.randomUUID()}`;
 		this.#zIndex = options.zIndex || 0;
+		this.#order = options.order;
 		this.#readsChartScales = options.readsChartScales ?? true;
 		this.#space = options.space ?? 'plot';
 		this.#xScaleType = options.xScaleType || 'linear';
@@ -1466,6 +1470,7 @@ export class BaseGPURenderer {
 			renderer: this,
 			componentId: this.#rendererId,
 			zIndex: this.#zIndex,
+			order: this.#order,
 			readsChartScales: this.#readsChartScales,
 			space: this.#space
 		});
@@ -1495,6 +1500,7 @@ export class BaseGPURenderer {
 				renderer: this,
 				componentId: this.#rendererId,
 				zIndex: this.#zIndex,
+				order: this.#order,
 				readsChartScales: this.#readsChartScales,
 				space: this.#space
 			});

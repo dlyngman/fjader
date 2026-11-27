@@ -74,6 +74,8 @@ export class RendererHost {
 	error: string | null = $state(null);
 
 	#options: RendererHostOptions;
+	/** The layer's place among its chart's, in declaration order. */
+	#order: number;
 	#mounted = false;
 	/**
 	 * Its component was destroyed. `mount` awaits the canvas, which can take all
@@ -91,6 +93,10 @@ export class RendererHost {
 	 */
 	constructor(options: RendererHostOptions) {
 		this.#options = options;
+		// Taken now, as the component is created: components are created in the
+		// order they are declared, and the renderer registers its layer whenever
+		// its setup ends.
+		this.#order = options.gpuCoordinator.nextLayerOrder();
 		onDestroy(() => {
 			this.#destroyed = true;
 		});
@@ -167,6 +173,7 @@ export class RendererHost {
 		try {
 			const renderer = new BaseGPURenderer(markType, ctx, gpuCoordinator, chartContext, {
 				zIndex,
+				order: this.#order,
 				xScaleType,
 				yScaleType,
 				readsChartScales,
