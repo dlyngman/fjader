@@ -25,7 +25,7 @@ import {
 
 export interface RendererOptions {
 	zIndex?: number;
-	/** The layer's place in declaration order (the coordinator's `nextLayerOrder`). */
+	/** The layer's place among its chart's (`ChartConfig.orderFor`). */
 	order?: number;
 	xScaleType?: string;
 	yScaleType?: string;

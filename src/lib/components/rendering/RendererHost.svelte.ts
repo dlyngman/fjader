@@ -30,6 +30,11 @@ export interface RendererHostOptions {
 	chartContext: ChartContext;
 	zIndex?: number;
 	/**
+	 * The mark this layer belongs to: it draws at that mark's place in
+	 * declaration order. Without one it takes the next place.
+	 */
+	markId?: string;
+	/**
 	 * What to specialise an axis's shader on when the CHART names no type for
 	 * it. The chart wins whenever it has one — see `BaseGPURenderer.initialize`
 	 * — so this is a fallback, not an override, however it reads at the call
@@ -74,7 +79,7 @@ export class RendererHost {
 	error: string | null = $state(null);
 
 	#options: RendererHostOptions;
-	/** The layer's place among its chart's, in declaration order. */
+	/** The layer's place among its chart's: its mark's, in declaration order. */
 	#order: number;
 	#mounted = false;
 	/**
@@ -93,10 +98,7 @@ export class RendererHost {
 	 */
 	constructor(options: RendererHostOptions) {
 		this.#options = options;
-		// Taken now, as the component is created: components are created in the
-		// order they are declared, and the renderer registers its layer whenever
-		// its setup ends.
-		this.#order = options.gpuCoordinator.nextLayerOrder();
+		this.#order = options.chartContext.config.orderFor(options.markId);
 		onDestroy(() => {
 			this.#destroyed = true;
 		});

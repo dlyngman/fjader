@@ -113,6 +113,7 @@
 		webGPUContext,
 		gpuCoordinator,
 		chartContext,
+		markId,
 		zIndex,
 		label: 'RuleX mark'
 	});

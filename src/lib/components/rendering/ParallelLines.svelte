@@ -79,6 +79,7 @@
 		webGPUContext,
 		gpuCoordinator,
 		chartContext,
+		markId,
 		zIndex: 0,
 		yScaleType: 'linear',
 		// Each axis has its own scale, and the chart registers no y scale at all.

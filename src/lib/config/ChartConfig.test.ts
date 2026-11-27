@@ -240,4 +240,40 @@ describe('ChartConfig', () => {
 			expect(config.getMarkLOD('dot-test')).toBe(surface2);
 		});
 	});
+
+	describe('orderFor', () => {
+		const two = () => {
+			const config = new ChartConfig();
+			config.registerMark('bars', 'rectx', {});
+			config.registerMark('area', 'areax', {});
+			return config;
+		};
+
+		it('is the order marks were registered in, whichever is asked for first', () => {
+			const config = two();
+			// The second mark's renderer is created first: its data came sooner.
+			const area = config.orderFor('area');
+			const bars = config.orderFor('bars');
+			expect(bars).toBeLessThan(area);
+		});
+
+		it('is the same for every renderer of a mark, and when one remounts', () => {
+			const config = two();
+			expect(config.orderFor('area')).toBe(config.orderFor('area'));
+		});
+
+		it('is unchanged by a registration that returns the existing entry', () => {
+			const config = two();
+			const before = config.orderFor('bars');
+			config.registerMark('bars', 'rectx', {});
+			expect(config.orderFor('bars')).toBe(before);
+		});
+
+		it('gives a layer of no registered mark the next place, after the marks', () => {
+			const config = two();
+			const loose = config.orderFor();
+			expect(loose).toBeGreaterThan(config.orderFor('area'));
+			expect(config.orderFor('gone')).toBeGreaterThan(loose);
+		});
+	});
 });

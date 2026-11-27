@@ -144,10 +144,11 @@ interface LayerConfig {
 	zIndex: number;
 	/**
 	 * Where the layer stands among those of its z level: lower draws first.
-	 * A renderer takes its number when its component is created
-	 * (`nextLayerOrder`), which is the order marks are declared in. Not when it
-	 * registers: a renderer registers once its asynchronous setup ends, so two
-	 * marks of one chart registered in either order from one load to the next.
+	 * It is its mark's place in declaration order (`ChartConfig.orderFor`),
+	 * not the order layers register in: a renderer is created when its mark's
+	 * first data arrives and registers once its asynchronous setup ends, so
+	 * two marks of one chart registered in either order from one load to the
+	 * next.
 	 */
 	order: number;
 	cachedPipeline?: GPURenderPipeline | null;
@@ -2823,21 +2824,13 @@ export class GPUCoordinator {
 	// LAYER MANAGEMENT
 	// =========================================================================
 
-	#layerOrder = 0;
-
-	/**
-	 * The next place in declaration order, for a layer registered later with
-	 * it as its `order`. Called as a renderer's component is created.
-	 */
-	nextLayerOrder(): number {
-		return this.#layerOrder++;
-	}
+	/** For a layer registered with no place of its own: after those before it. */
+	#unplacedLayers = 0;
 
 	registerLayer(chartId: string, layerConfig: Partial<LayerConfig>): LayerRegistrationResult {
 		const layerId = layerConfig.id || `layer-${crypto.randomUUID().slice(0, 8)}`;
 		const chart = this.#registeredCharts.get(chartId);
-		// A layer without a place of its own takes the next: registration order.
-		const order = layerConfig.order ?? this.nextLayerOrder();
+		const order = layerConfig.order ?? this.#unplacedLayers++;
 
 		if (!chart) {
 			// Queue for when the chart registers (e.g. facet cells registering async)
