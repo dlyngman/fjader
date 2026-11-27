@@ -37,9 +37,14 @@ import {
 	X_SCALE_IMMEDIATE_SIZE
 } from './M4Shader';
 
-/** Where the decimator gets its x scale's params: the coordinator, in practice. */
+/**
+ * What the decimator needs of the coordinator: its x scale's params, and
+ * somewhere to leave a buffer it replaces.
+ */
 export interface M4ScaleSource {
 	writeScaleParams(scaleId: string, view: Float32Array, offset: number): boolean;
+	/** Destroy `buffer` once the next frame is submitted (the coordinator's `retire`). */
+	retire(buffer: GPUBuffer): void;
 }
 
 interface M4InputBuffers {
@@ -207,8 +212,9 @@ export class M4Decimator {
 			const m4OutputCount = totalBins * 4;
 			const outputCount = Math.max(m4OutputCount, this.#pointCount);
 
-			// Reallocate bin buffer
-			this.#binBuffer?.destroy();
+			// Reallocate bin buffer. The old one is retired, as the outputs are:
+			// a bind group made before this may still be set in the coming frame.
+			if (this.#binBuffer) this.#scales.retire(this.#binBuffer);
 			this.#binBuffer = this.#device.createBuffer({
 				size: Math.max(totalBins * M4_BIN_SIZE, 16),
 				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
@@ -451,7 +457,10 @@ export class M4Decimator {
 		this.#outputCapacity = outputCount;
 
 		for (const key of ['x', 'y', 'series', 'color'] as const) {
-			this.#outputBuffers[key]?.destroy();
+			// Retired: this runs from an effect and from inside `encode`, where
+			// the frame being encoded may already hold the old buffers.
+			const old = this.#outputBuffers[key];
+			if (old) this.#scales.retire(old);
 			this.#outputBuffers[key] = this.#device.createBuffer({
 				size: outputByteSize,
 				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,

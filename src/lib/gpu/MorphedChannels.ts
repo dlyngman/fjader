@@ -87,6 +87,8 @@ const NO_BINDINGS: readonly number[] = [];
 export interface MorphHost extends ClockLoop {
 	registerMorphWork(key: string, work: MorphWork): void;
 	removeMorphWork(key: string): void;
+	/** Destroy `buffer` once the next frame is submitted (the coordinator's `retire`). */
+	retire(buffer: GPUBuffer): void;
 }
 
 /**
@@ -277,13 +279,6 @@ export class MorphedChannels implements MorphWork {
 	 * rows are its `remapSource`.
 	 */
 	#remap: GPUBuffer | null = null;
-	/**
-	 * Buffers a remap has read (its map, a source kept through a
-	 * reallocation), destroyed at the start of the next encode: by then the
-	 * frame that read them has been submitted, and destroying a buffer in use
-	 * by submitted work is allowed, where one only recorded is not.
-	 */
-	#retired: GPUBuffer[] = [];
 
 	/** A pending gather's map (a hold's write): new bins onto the held ones. */
 	#gather: GPUBuffer | null = null;
@@ -539,7 +534,7 @@ export class MorphedChannels implements MorphWork {
 		for (const [binding, data] of channels) {
 			const channel = this.#channels.get(binding);
 			if (!channel) continue;
-			if (channel.gatherSource) this.#retired.push(channel.gatherSource);
+			if (channel.gatherSource) this.#host.retire(channel.gatherSource);
 			const source = this.#device.createBuffer({
 				size: Math.max(16, data.byteLength),
 				usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
@@ -549,7 +544,7 @@ export class MorphedChannels implements MorphWork {
 			channel.gatherSource = source;
 			channel.land = false;
 		}
-		if (this.#gather) this.#retired.push(this.#gather);
+		if (this.#gather) this.#host.retire(this.#gather);
 		const map = this.#device.createBuffer({
 			size: Math.max(16, gather.byteLength),
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
@@ -618,10 +613,10 @@ export class MorphedChannels implements MorphWork {
 
 	/** Drop a pending gather (another write replaced `to`): its buffers go after this frame. */
 	#retireGather(): void {
-		if (this.#gather) this.#retired.push(this.#gather);
+		if (this.#gather) this.#host.retire(this.#gather);
 		this.#gather = null;
 		for (const channel of this.#channelList) {
-			if (channel.gatherSource) this.#retired.push(channel.gatherSource);
+			if (channel.gatherSource) this.#host.retire(channel.gatherSource);
 			channel.gatherSource = null;
 		}
 	}
@@ -655,9 +650,9 @@ export class MorphedChannels implements MorphWork {
 				pass.setBindGroup(0, bindGroup);
 				pass.dispatchWorkgroups(Math.ceil(channel.count / RESOLVE_WORKGROUP));
 			}
-			this.#retired.push(source);
+			this.#host.retire(source);
 		}
-		this.#retired.push(map);
+		this.#host.retire(map);
 		this.#gather = null;
 	}
 
@@ -725,9 +720,6 @@ export class MorphedChannels implements MorphWork {
 		const channels = this.#channelList;
 		if (channels.length === 0) return false;
 
-		// What a remap read last frame: that frame has been submitted since.
-		if (this.#retired.length > 0) this.#destroyRetired();
-
 		// Each scaled channel's params as this frame draws them.
 		this.#readScales();
 
@@ -761,7 +753,7 @@ export class MorphedChannels implements MorphWork {
 				// follows every static value's path.
 				this.#landChannel(encoder, channel);
 				if (channel.remapSource && channel.remapSource !== channel.resolved) {
-					this.#retired.push(channel.remapSource);
+					this.#host.retire(channel.remapSource);
 				}
 				channel.remapSource = null;
 			} else if (remap) {
@@ -1051,15 +1043,10 @@ export class MorphedChannels implements MorphWork {
 				pass.dispatchWorkgroups(Math.ceil(channel.count / RESOLVE_WORKGROUP));
 			}
 			channel.fromParams.set(drawn);
-			if (source !== channel.resolved) this.#retired.push(source);
+			if (source !== channel.resolved) this.#host.retire(source);
 		}
-		this.#retired.push(map);
+		this.#host.retire(map);
 		this.#remap = null;
-	}
-
-	#destroyRetired(): void {
-		for (let i = 0; i < this.#retired.length; i++) this.#retired[i].destroy();
-		this.#retired.length = 0;
 	}
 
 	/**
@@ -1076,9 +1063,9 @@ export class MorphedChannels implements MorphWork {
 		this.#ownClock?.stop();
 		this.#ownClock = null;
 		this.#restWaiter = null;
+		// Retired, not destroyed here: a frame already encoding may read them.
 		this.#retireRemap();
 		this.#retireGather();
-		this.#destroyRetired();
 		for (const channel of this.#channelList) this.#destroyChannel(channel);
 		this.#channels.clear();
 		this.#channelList = [];
@@ -1089,11 +1076,11 @@ export class MorphedChannels implements MorphWork {
 	 * map and the sources it kept go, after this frame like any it read.
 	 */
 	#retireRemap(): void {
-		if (this.#remap) this.#retired.push(this.#remap);
+		if (this.#remap) this.#host.retire(this.#remap);
 		this.#remap = null;
 		for (const channel of this.#channelList) {
 			if (channel.remapSource && channel.remapSource !== channel.resolved) {
-				this.#retired.push(channel.remapSource);
+				this.#host.retire(channel.remapSource);
 			}
 			channel.remapSource = null;
 		}

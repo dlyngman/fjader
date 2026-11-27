@@ -75,6 +75,7 @@ function setup() {
 		invalidateChart: () => {},
 		registerMorphWork: () => {},
 		removeMorphWork: () => {},
+		retire: (buffer: { destroy(): void }) => buffer.destroy(),
 		addAnimatedSource: (c: { finish(): void }) => clocks.add(c),
 		removeAnimatedSource: (c: { finish(): void }) => clocks.delete(c)
 	};

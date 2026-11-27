@@ -1681,6 +1681,8 @@ export class GPUCoordinator {
 		// PHASE 4: SUBMIT
 		this.#submitArray[0] = commandEncoder.finish();
 		this.#device!.queue.submit(this.#submitArray as [GPUCommandBuffer]);
+		// What was retired may go: the commands that could read it are submitted.
+		if (this.#retiredBuffers.length > 0) this.#destroyRetired();
 
 		if (capture) {
 			this.#captureRequest = null;
@@ -3236,6 +3238,32 @@ export class GPUCoordinator {
 		this.#computeWork.delete(key);
 	}
 
+	// =========================================================================
+	// RETIRED BUFFERS
+	// =========================================================================
+
+	#retiredBuffers: GPUBuffer[] = [];
+
+	/**
+	 * Give up a buffer that commands not yet submitted may still read: it is
+	 * destroyed right after the next frame's submit, not now. Destroying a
+	 * buffer that submitted work uses is allowed; destroying one that a
+	 * command only recorded, or that the coming frame is about to read (a
+	 * remap's old rows, a decimator's last output), invalidates that frame.
+	 *
+	 * For a buffer being REPLACED while its owner lives on. With no frame to
+	 * come it waits for one, or for `destroy()`: retire what a frame follows.
+	 */
+	retire(buffer: GPUBuffer): void {
+		this.#retiredBuffers.push(buffer);
+	}
+
+	#destroyRetired(): void {
+		const retired = this.#retiredBuffers;
+		for (let i = 0; i < retired.length; i++) retired[i].destroy();
+		retired.length = 0;
+	}
+
 	// The marks' morph work, by key and as the list a frame walks (no iterator
 	// per frame). `#morphStaged` is this frame's, between the two halves.
 	#morphWork = new Map<string, MorphWork>();
@@ -3433,6 +3461,7 @@ export class GPUCoordinator {
 		this.#morphWork.clear();
 		this.#morphList.length = 0;
 		this.#morphStaged.length = 0;
+		this.#destroyRetired();
 
 		// Destroy device
 		this.#device?.destroy();
