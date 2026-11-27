@@ -85,8 +85,26 @@ const NO_BINDINGS: readonly number[] = [];
  * It is also the loop an owned clock joins — the clock does that itself.
  */
 export interface MorphHost extends ClockLoop {
-	registerComputeWork(key: string, fn: (encoder: GPUCommandEncoder) => void): void;
-	removeComputeWork(key: string): void;
+	registerMorphWork(key: string, work: MorphWork): void;
+	removeMorphWork(key: string): void;
+}
+
+/**
+ * A mark's morph work for one frame, in the two halves a shared pass needs.
+ * The host calls `prepare` on every mark's, then opens ONE compute pass and
+ * calls `dispatch` on those that asked for it: a pass per mark was a pass
+ * object per animating mark per frame.
+ */
+export interface MorphWork {
+	/**
+	 * What must be on the encoder, outside a pass: the fold's copies. They
+	 * read what the previous frame resolved, which this frame's dispatches
+	 * overwrite, so every mark's come before the pass. False when there is
+	 * nothing to dispatch (at rest).
+	 */
+	prepare(encoder: GPUCommandEncoder): boolean;
+	/** The remaps, gathers and resolves, into the pass. After a true `prepare` only. */
+	dispatch(pass: GPUComputePassEncoder): void;
 }
 
 /**
@@ -234,7 +252,7 @@ export function alignmentKey(ids: ArrayLike<number>): number {
 	return hash;
 }
 
-export class MorphedChannels {
+export class MorphedChannels implements MorphWork {
 	#device: GPUDevice;
 	#host: MorphHost;
 	#label: string;
@@ -299,6 +317,10 @@ export class MorphedChannels {
 	#clockRestarted = false;
 	/** Built once: a descriptor per encode would be an allocation per frame. */
 	#passDescriptor: GPUComputePassDescriptor;
+	/** What `prepare` decided, for the `dispatch` that follows it. */
+	#stagedT = 1;
+	#stagedRemap: GPUBuffer | null = null;
+	#stagedRemaps = false;
 	#ownClock: TransitionClock | null = null;
 
 	/** `count`, `t`, `offset`. A channel owns its buffers, so `offset` stays 0. */
@@ -499,7 +521,7 @@ export class MorphedChannels {
 
 		if (!this.#registered) {
 			this.#registered = true;
-			this.#host.registerComputeWork(this.#label, (encoder) => this.encode(encoder));
+			this.#host.registerMorphWork(this.#label, this);
 		}
 		return reallocated;
 	}
@@ -545,7 +567,7 @@ export class MorphedChannels {
 		if (transitionsObserved()) noteTransition('morph', false, this.#affectedCharts, this.#label);
 		if (!this.#registered) {
 			this.#registered = true;
-			this.#host.registerComputeWork(this.#label, (encoder) => this.encode(encoder));
+			this.#host.registerMorphWork(this.#label, this);
 		}
 	}
 
@@ -692,22 +714,31 @@ export class MorphedChannels {
 	}
 
 	/**
-	 * Fold or snap, then resolve every channel, in one encoder and one pass.
+	 * Fold or snap, then resolve every channel, in one encoder and a pass of
+	 * its own: `prepare` and `dispatch` together, for a host with no shared
+	 * pass. The coordinator calls the halves (`MorphWork`).
+	 */
+	encode(encoder: GPUCommandEncoder): void {
+		if (!this.prepare(encoder)) return;
+		const pass = encoder.beginComputePass(this.#passDescriptor);
+		this.dispatch(pass);
+		pass.end();
+	}
+
+	/**
+	 * The fold or snap: the copies, on the encoder.
 	 *
 	 * The copy has to precede the pass: the fold reads what the previous
 	 * dispatch resolved, and this one is about to overwrite it.
 	 *
 	 * Skipped entirely when nothing would change — no pending fold or snap, no
 	 * new data, and the same t as last time. At rest that is every frame, which
-	 * matters because the coordinator runs compute work on every frame it
-	 * renders, and hover and pan render a lot of frames.
-	 *
-	 * `count` and `t` go to each dispatch as immediates, which are pass state set
-	 * in command order — so each dispatch reads its own, with no buffer to write.
+	 * matters because the coordinator runs this on every frame it renders, and
+	 * hover and pan render a lot of frames.
 	 */
-	encode(encoder: GPUCommandEncoder): void {
+	prepare(encoder: GPUCommandEncoder): boolean {
 		const channels = this.#channelList;
-		if (channels.length === 0) return;
+		if (channels.length === 0) return false;
 
 		// What a remap read last frame: that frame has been submitted since.
 		if (this.#retired.length > 0) this.#destroyRetired();
@@ -731,7 +762,7 @@ export class MorphedChannels {
 		) {
 			this.#moveDrawn();
 			this.#notifyRest();
-			return;
+			return false;
 		}
 
 		let remaps = false;
@@ -781,8 +812,26 @@ export class MorphedChannels {
 		this.#foldPending = false;
 		this.#dirty = false;
 		this.#resolvedT = resolveT;
+		this.#stagedT = resolveT;
+		this.#stagedRemap = remap;
+		this.#stagedRemaps = remaps;
+		return true;
+	}
 
-		const pass = encoder.beginComputePass(this.#passDescriptor);
+	/**
+	 * Resolve every channel, into a pass that may hold other marks' work.
+	 *
+	 * `count` and `t` go to each dispatch as immediates, which are pass state set
+	 * in command order — so each dispatch reads its own, with no buffer to write.
+	 * Nothing here relies on the pass's state as it arrives: every dispatch sets
+	 * its pipeline, its bind group and its immediates.
+	 */
+	dispatch(pass: GPUComputePassEncoder): void {
+		const channels = this.#channelList;
+		const resolveT = this.#stagedT;
+		const remap = this.#stagedRemap;
+		const remaps = this.#stagedRemaps;
+		this.#stagedRemap = null;
 		// Remaps before resolves: each writes a `from` the resolve below reads.
 		// Dispatches in one pass see each other's writes, in order.
 		if (remaps) this.#encodeRemaps(pass, remap!);
@@ -852,7 +901,6 @@ export class MorphedChannels {
 			}
 			pass.dispatchWorkgroups(Math.ceil(channel.count / RESOLVE_WORKGROUP));
 		}
-		pass.end();
 		this.#moveDrawn();
 		this.#notifyRest();
 	}
@@ -1036,7 +1084,7 @@ export class MorphedChannels {
 	 */
 	destroy(): void {
 		if (this.#registered) {
-			this.#host.removeComputeWork(this.#label);
+			this.#host.removeMorphWork(this.#label);
 			this.#registered = false;
 		}
 		this.#ownClock?.stop();

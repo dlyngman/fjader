@@ -97,11 +97,17 @@ function fakes() {
 	const sources: TransitionClock[] = [];
 	let computeWork: ((e: GPUCommandEncoder) => void) | null = null;
 	const host: MorphHost = {
-		registerComputeWork: (_key, fn) => {
-			computeWork = fn;
+		// As the coordinator runs it: the copies, then the dispatches in a pass.
+		registerMorphWork: (_key, work) => {
+			computeWork = (e) => {
+				if (!work.prepare(e)) return;
+				const pass = e.beginComputePass();
+				work.dispatch(pass);
+				pass.end();
+			};
 			log.push('register');
 		},
-		removeComputeWork: () => {
+		removeMorphWork: () => {
 			computeWork = null;
 			log.push('unregister');
 		},

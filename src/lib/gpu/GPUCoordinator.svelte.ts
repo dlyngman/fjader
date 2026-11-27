@@ -27,6 +27,7 @@ import {
 } from './identity-slot-packing';
 import { frameUniformIsStale } from './frame-uniform-sync';
 import { immediatesSupported, IMMEDIATES_MISSING_MESSAGE } from './immediates';
+import type { MorphWork } from './MorphedChannels';
 import { htmlInCanvasSupported, HTML_IN_CANVAS_MISSING_MESSAGE } from './text/TextAtlas.svelte';
 import {
 	COLOR_CONFIG_BYTES,
@@ -1576,6 +1577,10 @@ export class GPUCoordinator {
 				work.fn(commandEncoder);
 			}
 		}
+
+		// The morphs, after the work above: a decimator's output is an input a
+		// morph may one day read, never the other way round.
+		this.#encodeMorphs(commandEncoder);
 
 		// PHASE 3b: PLACEMENT. After every resolve above (slots, morphs), which
 		// placement reads, and before the render passes, which read its records.
@@ -3231,6 +3236,55 @@ export class GPUCoordinator {
 		this.#computeWork.delete(key);
 	}
 
+	// The marks' morph work, by key and as the list a frame walks (no iterator
+	// per frame). `#morphStaged` is this frame's, between the two halves.
+	#morphWork = new Map<string, MorphWork>();
+	#morphList: MorphWork[] = [];
+	#morphStaged: MorphWork[] = [];
+	#morphPassDescriptor: GPUComputePassDescriptor = { label: 'morph' };
+
+	/**
+	 * Register a mark's morph work: its folds, remaps and resolves, on every
+	 * rendered frame (it answers at once when at rest), before placement and
+	 * the render passes, which read what it resolves.
+	 */
+	registerMorphWork(key: string, work: MorphWork): void {
+		this.removeMorphWork(key);
+		this.#morphWork.set(key, work);
+		this.#morphList.push(work);
+	}
+
+	removeMorphWork(key: string): void {
+		const work = this.#morphWork.get(key);
+		if (!work) return;
+		this.#morphWork.delete(key);
+		const at = this.#morphList.indexOf(work);
+		if (at >= 0) this.#morphList.splice(at, 1);
+	}
+
+	/**
+	 * One compute pass for every mark that morphs this frame, as placement is
+	 * one pass for every placed mark: a pass per mark was a pass object per
+	 * animating mark per frame (two dozen on a dashboard under a brush). Every
+	 * mark's encoder-level copies first, since a copy cannot be encoded inside
+	 * a pass; each reads and writes its own mark's buffers only.
+	 */
+	#encodeMorphs(encoder: GPUCommandEncoder): void {
+		const list = this.#morphList;
+		if (list.length === 0) return;
+		const staged = this.#morphStaged;
+		// Empty already, unless a frame threw between the halves.
+		staged.length = 0;
+		for (let i = 0; i < list.length; i++) {
+			if (list[i].prepare(encoder)) staged.push(list[i]);
+		}
+		if (staged.length === 0) return;
+		const pass = encoder.beginComputePass(this.#morphPassDescriptor);
+		for (let i = 0; i < staged.length; i++) staged[i].dispatch(pass);
+		pass.end();
+		staged.length = 0;
+	}
+
 	#placementWork = new Map<string, PlacementWork>();
 	/**
 	 * The same, per chart: what #encodePlacement walks, by index, every frame.
@@ -3376,6 +3430,9 @@ export class GPUCoordinator {
 		this.#pendingScaleMappings.clear();
 		this.#scaleBlocks.clear();
 		this.#pendingLayers.clear();
+		this.#morphWork.clear();
+		this.#morphList.length = 0;
+		this.#morphStaged.length = 0;
 
 		// Destroy device
 		this.#device?.destroy();
