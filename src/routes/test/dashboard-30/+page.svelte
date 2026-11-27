@@ -18,6 +18,15 @@
 	 *   ?charts=N     only the first N charts (default 30)
 	 *   ?mutations=1  count DOM mutation records per frame (observing costs too,
 	 *                 so leave it off for timing runs)
+	 *   ?gputime=0    no GPU timing (per submit and per pass): timing allocates a
+	 *                 promise, closures and a readback per submit, which a run
+	 *                 that measures garbage collection should not add. The
+	 *                 counts of WebGPU objects made per frame stay.
+	 *   ?churn=N      an experiment: N extra texture views made and dropped on
+	 *                 every frame of the session (views of one small texture,
+	 *                 never used). They add wrapper objects for Blink's
+	 *                 collector and nothing else, so a trace with and without
+	 *                 them says whether that garbage is what its sweeps cost.
 	 *   ?scale=N      the flights table N times over (default 1: 200k rows)
 	 *   ?dots=0       without the three raw-row scatters (charts 26-28)
 	 *   ?stack=js     the stacked histogram and area charts (20 and 25) stack
@@ -50,8 +59,9 @@
 	 *   idle-end    1 s
 	 *
 	 * Per frame: the interval, the main-thread time to the end of rendering, the
-	 * GPU time per submit, DOM mutations (opt-in); plus Long Animation Frame
-	 * entries (frame-probe.ts). The table below the buttons summarizes per phase.
+	 * GPU time per submit, the WebGPU objects made, DOM mutations (opt-in); plus
+	 * Long Animation Frame entries (frame-probe.ts). The tables below the buttons
+	 * summarize per phase.
 	 *
 	 * Clicks are placed by slot position, not by finding an SVG <text>, so the
 	 * script still works once axis labels are drawn on the GPU.
@@ -78,7 +88,7 @@
 	import Toggle from '$lib/interactors/Toggle.svelte';
 	import { bin } from '$lib/sql/bin';
 	import { attachQueryLog } from '$lib/query-engine/debug/query-log';
-	import { FrameProbe } from './frame-probe';
+	import { FrameProbe, CREATED } from './frame-probe';
 
 	const params = page.url.searchParams;
 	/**
@@ -101,6 +111,8 @@
 	const LABELS = LABEL_MODE !== 'none';
 	const AXES = params.get('axes') !== '0';
 	const MUTATIONS = params.get('mutations') === '1';
+	const GPU_TIME = params.get('gputime') !== '0';
+	const CHURN = Math.max(0, Number(params.get('churn')) || 0);
 	const SCALE = Math.max(1, Number(params.get('scale')) || 1);
 	const CHART_COUNT = Math.min(30, Math.max(1, Number(params.get('charts')) || 30));
 	const STACK_JS = params.get('stack') === 'js';
@@ -109,7 +121,7 @@
 	const DOTS = params.get('dots') !== '0';
 	const VARIANT = `${LABEL_MODE === 'none' ? 'nolabels' : LABEL_MODE === 'text' ? 'textmark' : 'attached'}-${AXES ? 'axes' : 'noaxes'}${
 		CHART_COUNT < 30 ? `-c${CHART_COUNT}` : ''
-	}${SCALE > 1 ? `-x${SCALE}` : ''}${DOTS ? '' : '-nodots'}${MUTATIONS ? '-mut' : ''}${STACK_JS ? '-stackjs' : ''}`;
+	}${SCALE > 1 ? `-x${SCALE}` : ''}${DOTS ? '' : '-nodots'}${MUTATIONS ? '-mut' : ''}${GPU_TIME ? '' : '-nogputime'}${CHURN ? `-churn${CHURN}` : ''}${STACK_JS ? '-stackjs' : ''}`;
 
 	/** Runs of the JS stack transform so far (?stack=js), over every chart using it. */
 	let jsApplies = 0;
@@ -459,8 +471,23 @@
 			}
 		};
 		const has = (id) => charts.some((c) => c.id === id);
+		// ?churn=N: wrapper garbage, on every frame of the session.
+		let churning = CHURN > 0;
+		const churnTexture = churning
+			? gpuCoordinator.device.createTexture({
+					size: [4, 4],
+					format: 'rgba8unorm',
+					usage: GPUTextureUsage.TEXTURE_BINDING
+				})
+			: null;
+		const churn = () => {
+			if (!churning) return;
+			for (let i = 0; i < CHURN; i++) churnTexture.createView();
+			requestAnimationFrame(churn);
+		};
 		try {
 			probe.start();
+			churn();
 			mark('session', VARIANT);
 
 			phase('idle');
@@ -547,6 +574,8 @@
 			mark('end', VARIANT);
 		} finally {
 			probe.stop();
+			churning = false;
+			churnTexture?.destroy();
 			Element.prototype.setPointerCapture = capture;
 			Element.prototype.releasePointerCapture = release;
 			summary = probe.summarize('idle');
@@ -616,7 +645,7 @@
 			await tick();
 			probe = new FrameProbe({
 				mutationRoot: MUTATIONS ? dashEl : null,
-				device: gpuCoordinator.device
+				device: GPU_TIME ? gpuCoordinator.device : null
 			});
 			probeReady = true;
 		} catch (error) {
@@ -707,6 +736,29 @@
 				ms. Cadence {fmt(summary.cadence, 2)} ms (≈{Math.round(1000 / summary.cadence)} Hz, the idle
 				median). work = main thread from frame start to the end of rendering; gpu = submit to work done;
 				pass = GPU time of our passes (timestamps), and passes per submit.
+			</p>
+			<table class="summary">
+				<thead>
+					<tr>
+						<th>made per frame</th>
+						{#each CREATED as kind (kind)}<th>{kind}</th>{/each}
+					</tr>
+				</thead>
+				<tbody>
+					{#each summary.phases as p (p.phase)}
+						<tr>
+							<td>{p.phase}</td>
+							{#each CREATED as kind (kind)}
+								<td>{p.created[kind].p50} (max {p.created[kind].max}, Σ {p.created[kind].total})</td
+								>
+							{/each}
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+			<p class="note">
+				WebGPU objects made per frame, by kind: the median frame, the most in one frame, and the
+				phase's total. writeBuffers are uploads, not objects.
 			</p>
 		{/if}
 

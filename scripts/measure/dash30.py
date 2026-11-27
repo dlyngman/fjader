@@ -12,6 +12,11 @@ the page computed (frame-probe.ts `summarize`), plus each phase's total main-thr
 per-frame records. Prints a Markdown table per metric: one row per phase, one column per variant,
 each cell the median over that variant's runs, with the runs' range when there are several.
 
+With --created, also the WebGPU objects the page made (the probe's `created`), a table per
+variant: one row per phase, one column per kind, each cell the median frame's count and the
+phase's total (medians over the variant's runs). What a phase makes on every frame is what
+Blink's garbage collector later sweeps.
+
 See docs/measuring.md.
 """
 
@@ -83,6 +88,9 @@ def main() -> int:
         default=','.join(DEFAULT),
         help=f'comma-separated, from: {", ".join(METRICS)} (default: {",".join(DEFAULT)})',
     )
+    parser.add_argument(
+        '--created', action='store_true', help='also WebGPU objects made per frame, by kind'
+    )
     args = parser.parse_args()
     metrics = [m.strip() for m in args.metrics.split(',') if m.strip()]
     unknown = [m for m in metrics if m not in METRICS]
@@ -130,6 +138,36 @@ def main() -> int:
                 ]
                 cells.append(fmt(values))
             print(f'| {name} | ' + ' | '.join(cells) + ' |')
+
+    if args.created:
+        for label in labels:
+            kinds: list[str] = []
+            for rows in groups[label]:
+                for row in rows.values():
+                    for kind in row.get('created') or {}:
+                        if kind not in kinds:
+                            kinds.append(kind)
+            if not kinds:
+                print(f'\n{label}: no `created` counts in these logs (saved before the probe had them).')
+                continue
+            print(f'\n### WebGPU objects made, {label}: median frame (phase total)\n')
+            print('| phase | ' + ' | '.join(kinds) + ' |')
+            print('|---|' + '---|' * len(kinds))
+            for name in phases:
+                cells = []
+                for kind in kinds:
+                    made = [
+                        rows[name]['created'][kind]
+                        for rows in groups[label]
+                        if name in rows and kind in (rows[name].get('created') or {})
+                    ]
+                    if not made:
+                        cells.append('–')
+                        continue
+                    p50 = statistics.median(m['p50'] for m in made)
+                    total = statistics.median(m['total'] for m in made)
+                    cells.append(f'{p50:g} ({total:g})')
+                print(f'| {name} | ' + ' | '.join(cells) + ' |')
     return 0
 
 

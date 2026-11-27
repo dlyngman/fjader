@@ -62,14 +62,14 @@ first, so drift (thermal, background work) spreads over both. Remove the worktre
 
 ## Instruments
 
-| Page                   | What it measures                                                                                                                     | Options                                                                                                                                                              | Scripted                                                                        | Log file                    |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | --------------------------- |
-| `/test/dashboard-30`   | 30 charts on one selection: per-frame main-thread and GPU time, dropped frames, text atlas uploads, Long Animation Frames, per phase | `?labels=attached\|text\|0`, `?axes=0`, `?charts=N`, `?scale=N`, `?dots=0`, `?mutations=1` (costs time; off for timing runs), `?stack=js` (counts JS transform runs) | **Run session**: idle, toggle, clear, brush, unbrush, sort, pan, zoom, idle-end | `dash30-<variant>.json`     |
-| `/test/query-load`     | Every statement sent to DuckDB at load and during a brush: queue wait, work, connection                                              | `?mount=all\|visible\|top`, `?scale=10`, `?dots=0`, `?slow=1`, `?cat=1`, `?share=N`, `?tooltipSort=on\|off`                                                          | **Scripted drag**: one brush sweep                                              | `qlog-<options>.json`       |
-| `/test/entrance`       | When each chart enters, and what held it                                                                                             | `?slow=1`                                                                                                                                                            | **Replay**                                                                      | `qlog-entrance[-slow].json` |
-| `/test/click-session`  | Selection clicks: which reach the base table, and their cost                                                                         | `?rows=N`, `?variant=eager\|patient`                                                                                                                                 | **Run session**: hovers, clicks, brush moves                                    | `clog-<tag>-<variant>.json` |
-| `/test/time-stack-fit` | A binned time histogram through zoom-driven rebins: y axis fits, label lag                                                           | `?fit=0`, `?overlay=1\|line\|labels`, `?sparse=1`                                                                                                                    | **Run session**: zooms, pans, shift+scroll, zoom-outs                           | `rebin-<variant>.json`      |
-| `/test/query-slicing`  | DuckDB-WASM facts (sections 9–14): lanes, types, DDL overlap, cancelled CREATE, statistics                                           |                                                                                                                                                                      | per section                                                                     | console                     |
+| Page                   | What it measures                                                                                                                                          | Options                                                                                                                                                                                                         | Scripted                                                                        | Log file                    |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | --------------------------- |
+| `/test/dashboard-30`   | 30 charts on one selection: per-frame main-thread and GPU time, dropped frames, text atlas uploads, WebGPU objects made, Long Animation Frames, per phase | `?labels=attached\|text\|0`, `?axes=0`, `?charts=N`, `?scale=N`, `?dots=0`, `?mutations=1` (costs time; off for timing runs), `?gputime=0` (no GPU timing: for GC runs), `?stack=js` (counts JS transform runs) | **Run session**: idle, toggle, clear, brush, unbrush, sort, pan, zoom, idle-end | `dash30-<variant>.json`     |
+| `/test/query-load`     | Every statement sent to DuckDB at load and during a brush: queue wait, work, connection                                                                   | `?mount=all\|visible\|top`, `?scale=10`, `?dots=0`, `?slow=1`, `?cat=1`, `?share=N`, `?tooltipSort=on\|off`                                                                                                     | **Scripted drag**: one brush sweep                                              | `qlog-<options>.json`       |
+| `/test/entrance`       | When each chart enters, and what held it                                                                                                                  | `?slow=1`                                                                                                                                                                                                       | **Replay**                                                                      | `qlog-entrance[-slow].json` |
+| `/test/click-session`  | Selection clicks: which reach the base table, and their cost                                                                                              | `?rows=N`, `?variant=eager\|patient`                                                                                                                                                                            | **Run session**: hovers, clicks, brush moves                                    | `clog-<tag>-<variant>.json` |
+| `/test/time-stack-fit` | A binned time histogram through zoom-driven rebins: y axis fits, label lag                                                                                | `?fit=0`, `?overlay=1\|line\|labels`, `?sparse=1`                                                                                                                                                               | **Run session**: zooms, pans, shift+scroll, zoom-outs                           | `rebin-<variant>.json`      |
+| `/test/query-slicing`  | DuckDB-WASM facts (sections 9–14): lanes, types, DDL overlap, cancelled CREATE, statistics                                                                |                                                                                                                                                                                                                 | per section                                                                     | console                     |
 
 Each page's header comment lists its options and session in full.
 
@@ -86,6 +86,18 @@ is in aggregated queries, and say so with the numbers (the log's name carries `-
   interval (`dt`), the main-thread time to the end of rendering (`work`), text atlas uploads, the
   phase; per `queue.submit`, the time until the GPU reports it done; Long Animation Frame entries.
   `summarize()` gives the per-phase table the page shows.
+  - **`created`**: per frame, the WebGPU objects the page made, by kind (command encoders, compute
+    and render passes, canvas textures, texture views, bind groups, buffers, textures,
+    `onSubmittedWorkDone` promises) and its `writeBuffer` uploads. Counted on the interfaces'
+    prototypes, so whoever made them; counting allocates nothing. `dash30.py --created` tabulates
+    them.
+  - **Timing the GPU allocates per submit** (a promise; with pass timestamps, closures and a
+    readback). For a run that measures garbage collection, `?gputime=0` leaves it out; the counts
+    stay.
+  - **`?churn=N`** is an experiment, not a setting for timing runs: N texture views of one small
+    unused texture, made and dropped on every frame of the session (they show in `created` as
+    `textureViews`). Wrapper garbage and nothing else, so a trace with and without it is a dose
+    test of whether that garbage is what the collector's sweeps cost.
 - **Entrance observer**: `gpuCoordinator.observeEntrances` for when charts enter.
 
 ## Scripted interactions
@@ -138,7 +150,7 @@ and pasting through the clipboard into a terminal is fragile.
     `start`, `end`), `identityRequests`, preagg `builds`, plus the page's extras (mount time,
     entrances, `drag`, `events`).
   - `dash30-*`: `variant`, `params`, `viewport` (size, DPR), `userAgent`, `events`, the per-phase
-    `summary`, and `probe` (per-frame arrays: `ts`, `work`, `elementDraws`, `phase`; per-submit
+    `summary`, and `probe` (per-frame arrays: `ts`, `work`, `elementDraws`, `created`, `phase`; per-submit
     GPU times; Long Animation Frames with their scripts).
 - Give the file names to whoever analyses them; an agent reads them from `~/Downloads`.
 
@@ -190,6 +202,13 @@ each function's milliseconds and its share of the window's sampled time that was
 production build's function names are minified, so to find WHICH function costs, record both
 traces on the dev server, where names and files survive, and compare shares, not milliseconds.
 The production A/B says how much; the dev trace says where.
+
+`--gc` prints garbage collection as interruptions: per phase, GC time split into Blink's C++ heap
+(`CppGC.*`: DOM nodes and WebGPU wrapper objects) and V8's, the tasks with GC in them, how many of
+those ran longer than a frame (`--frame`, default 8.33 ms), and the most GC in one task. Report
+the largest slice, not only the total: one 30 ms sweep is four dropped frames at 120 Hz. Set it
+beside `dash30.py --created` from a run of the same build, which says what each phase made per
+frame for a sweep to find.
 
 `dash30.py` warns when runs differ in viewport or frame cadence: such runs don't compare. Each
 script's `--help` lists its options. Write ad hoc Python only for what they don't answer, and

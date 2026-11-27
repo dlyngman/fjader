@@ -29,6 +29,12 @@ was not idle. `--match PATTERN` keeps only functions whose name or file matches 
 'lod/|lifecycle'`), and implies --functions. A production build's names are minified: record on
 the dev server to read them, and compare shares there, not milliseconds.
 
+With --gc, garbage collection as interruptions, per window: a collection that takes 30 ms of one
+task drops frames however small the window's total is. Per window: GC self time, split into
+Blink's C++ heap (CppGC.*: DOM nodes and WebGPU wrapper objects) and V8's (the JavaScript heap);
+how many top-level tasks had GC in them, and how many of those ran longer than a frame (--frame,
+default 8.33 ms, a 120 Hz display); and the most GC in one task, with that task's length.
+
 See docs/measuring.md.
 """
 
@@ -127,6 +133,25 @@ class Trace:
         gc = sum(own for s, _, own, n, _ in self.main_events if a <= s < b and GC.search(n))
         gpu = sum(d for s, d, _, _, depth in self.gpu_events if depth == 0 and a <= s < b)
         return {'busy': busy / 1000, 'gc': gc / 1000, 'gpu': gpu / 1000, 'span': (b - a) / 1000}
+
+    def gc_tasks(self, window: tuple[str, float, float]) -> list[tuple[float, float, float]]:
+        """(duration, GC self time, of which CppGC) in ms, per top-level task with GC in it."""
+        _, a, b = window
+        out: list[tuple[float, float, float]] = []
+        task: list[float] | None = None
+        # main_events is in start order, a task before the events nested in it.
+        for start, dur, own, name, depth in self.main_events:
+            if depth == 0:
+                if task and task[1] > 0:
+                    out.append((task[0] / 1000, task[1] / 1000, task[2] / 1000))
+                task = [dur, 0.0, 0.0] if a <= start < b else None
+            if task and GC.search(name):
+                task[1] += own
+                if name.startswith('CppGC'):
+                    task[2] += own
+        if task and task[1] > 0:
+            out.append((task[0] / 1000, task[1] / 1000, task[2] / 1000))
+        return out
 
     def function_times(
         self, window: tuple[str, float, float]
@@ -243,6 +268,16 @@ def main() -> int:
     parser.add_argument('--window', help='the window for the self-time table (default: the busiest)')
     parser.add_argument('--top', type=int, default=15, help='event names to show (default 15)')
     parser.add_argument(
+        '--gc', action='store_true', help='also garbage collection per task: the largest slices'
+    )
+    parser.add_argument(
+        '--frame',
+        type=float,
+        default=8.33,
+        metavar='MS',
+        help='the frame length a task with GC is held against (default 8.33, 120 Hz)',
+    )
+    parser.add_argument(
         '--functions',
         action='store_true',
         help='also JavaScript functions by self and total time, from the CPU profile',
@@ -297,6 +332,29 @@ def main() -> int:
             t = total(label, name)
             cells.append(f'{t["busy"]:.0f} / {t["gc"]:.0f} / {t["gpu"]:.0f} ({t["span"]:.0f})')
         print(f'| {name} | ' + ' | '.join(cells) + ' |')
+
+    if args.gc:
+        for label in labels:
+            print(
+                f'\nGarbage collection per window, `{label}`, ms: GC self time (Blink C++ heap / V8); '
+                f'tasks with GC, and those longer than {args.frame:g} ms; the most GC in one task '
+                '(that task\'s length)\n'
+            )
+            print('| window | GC | CppGC | V8 | tasks | over a frame | largest slice |')
+            print('|---|---|---|---|---|---|---|')
+            for name in order:
+                tasks = [t for w in windows[label].get(name, []) for t in traces[label].gc_tasks(w)]
+                if not tasks:
+                    print(f'| {name} | 0 | 0 | 0 | 0 | 0 | – |')
+                    continue
+                gc = sum(t[1] for t in tasks)
+                cpp = sum(t[2] for t in tasks)
+                over = sum(1 for t in tasks if t[0] > args.frame)
+                worst = max(tasks, key=lambda t: t[1])
+                print(
+                    f'| {name} | {gc:.0f} | {cpp:.0f} | {gc - cpp:.0f} | {len(tasks)} | {over} | '
+                    f'{worst[1]:.1f} ({worst[0]:.1f}) |'
+                )
 
     focus = args.window or max(order, key=lambda n: total(labels[0], n)['busy'])
     print(f'\nSelf time on the page main thread in `{focus}`, ms (top {args.top}):\n')
