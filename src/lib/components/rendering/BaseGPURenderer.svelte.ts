@@ -554,10 +554,29 @@ export class BaseGPURenderer {
 		this.#scheduleBindGroupUpdate();
 	}
 
+	#attributeVersion = 0;
+
+	/**
+	 * Changes whenever an attribute's contents on the GPU do. A buffer is
+	 * overwritten in place when the new rows fit, so a reader that caches what
+	 * it derived from the buffers (the M4 decimator) cannot go by their
+	 * identity. Counts static attributes only: with a morphing channel a
+	 * buffer changes every frame it resolves, with no write (`morphs`).
+	 */
+	get attributeVersion(): number {
+		return this.#attributeVersion;
+	}
+
+	/** Whether any channel is resolved on the GPU: its buffer changes without a write. */
+	get morphs(): boolean {
+		return this.#morphed !== null;
+	}
+
 	/** writeAttribute's upload, whatever a hold defers: what the GPU holds for `binding`. */
 	#writeAttributeNow(binding: number, data: AllowSharedBufferSource): void {
 		if (!this.#device) return;
 		this.#lastStatic.set(binding, data);
+		this.#attributeVersion++;
 
 		// A channel that morphed and does not any more gives its buffers back, and
 		// the binding needs rebinding to the static buffer allocated below.

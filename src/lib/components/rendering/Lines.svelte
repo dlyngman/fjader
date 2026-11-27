@@ -626,20 +626,26 @@
 		m4.setVertexCount(quadVertexCount);
 
 		const chartId = chartContext.chartId;
+		// One object for every frame: the decimator compares its fields.
+		const inputs = { x: null, y: null, series: null, color: null };
 		gpuCoordinator.registerComputeWork(
 			m4ComputeKey,
 			(commandEncoder) => {
-				const xBuf = renderer.getBuffer(BINDINGS.X);
-				const yBuf = renderer.getBuffer(BINDINGS.Y);
-				const seriesBuf = renderer.getBuffer(BINDINGS.SERIES);
-				const colorBuf = renderer.getBuffer(BINDINGS.COLOR);
+				inputs.x = renderer.getBuffer(BINDINGS.X);
+				inputs.y = renderer.getBuffer(BINDINGS.Y);
+				inputs.series = renderer.getBuffer(BINDINGS.SERIES);
+				inputs.color = renderer.getBuffer(BINDINGS.COLOR);
 
-				if (!xBuf || !yBuf || !seriesBuf || !colorBuf) return;
+				if (!inputs.x || !inputs.y || !inputs.series || !inputs.color) return;
 
+				// The contents' version lets a frame that would bin the same rows
+				// through the same scale be skipped. Not with a morphing channel:
+				// its buffer changes on every frame it resolves, with no write.
 				m4.encode(
 					commandEncoder,
-					{ x: xBuf, y: yBuf, series: seriesBuf, color: colorBuf },
-					xData?.length ?? 0
+					inputs,
+					xData?.length ?? 0,
+					renderer.morphs ? NaN : renderer.attributeVersion
 				);
 			},
 			// Only this chart reads the decimated output; M4 is never on a facet grid.

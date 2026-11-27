@@ -2,8 +2,11 @@
  * M4Decimator - GPU compute-based M4 decimation for line charts.
  *
  * Manages compute pipelines, buffers, and bind groups for the M4 algorithm.
- * The GPU decides per-frame whether to decimate or pass through raw data,
- * based on the actual visible point count from the previous frame.
+ * Whether to decimate or pass the raw rows through is decided in JS
+ * (`setDecimationMode`, from the density host) and read from the config by
+ * the first dispatch: an encode's output depends on its inputs, the config
+ * and the x scale only, never on the frame before, which is what lets a frame
+ * with the same be skipped.
  *
  * The decision flag is stored in an extended indirect buffer (20 bytes:
  * 4 drawIndirect args + 1 decision flag). This merges what was previously
@@ -17,7 +20,7 @@
  *   decimator.configure(numBins, numSeries, xScaleId);
  *   decimator.setVertexCount(quadVertexCount);
  *   gpuCoordinator.registerComputeWork(key, (encoder) =>
- *       decimator.encode(encoder, inputBuffers, pointCount));
+ *       decimator.encode(encoder, inputBuffers, pointCount, inputVersion));
  *   passEncoder.setBindGroup(1, decimator.renderBindGroup);
  *   passEncoder.drawIndirect(decimator.indirectBuffer, 0);
  */
@@ -129,6 +132,20 @@ export class M4Decimator {
 	#configData = new Uint32Array(8);
 
 	#lastInputBuffers: M4InputBuffers | null = null;
+
+	/** Built once: a descriptor per encode would be an allocation per frame. */
+	#passDescriptor: GPUComputePassDescriptor = { label: 'm4' };
+	/**
+	 * What the last encode ran with. A frame with the same x scale, the same
+	 * input (its buffers and their contents' version) and the same
+	 * configuration would write the same output, so it encodes nothing: a
+	 * hover or a dim redraws the chart without moving x. `#stale` is everything
+	 * else an output depends on: the dimensions, the mode, the buffers it is
+	 * written to.
+	 */
+	#stale = true;
+	#ranXScale = new Float32Array(X_SCALE_IMMEDIATE_SIZE / 4);
+	#ranInputVersion = NaN;
 	#dummyBuffer: GPUBuffer | null = null;
 
 	// Stored references for rebuilding renderBindGroup after output buffer reallocation
@@ -164,6 +181,7 @@ export class M4Decimator {
 		if (!this.#controlBuffer) return;
 		const data = new Uint32Array([count]);
 		this.#device.queue.writeBuffer(this.#controlBuffer, 0, data);
+		this.#stale = true;
 	}
 
 	/**
@@ -176,6 +194,7 @@ export class M4Decimator {
 		const internalBins = numBins + 2;
 		const dimsChanged = internalBins !== this.#numBins || numSeries !== this.#numSeries;
 
+		if (xScaleId !== this.#xScaleId) this.#stale = true;
 		this.#xScaleId = xScaleId;
 
 		if (!dimsChanged) return;
@@ -207,16 +226,25 @@ export class M4Decimator {
 	}
 
 	/**
-	 * Encode M4 compute passes into the provided command encoder.
-	 * 7 passes: initBins → binPoints → findMinMax → emitOutput → compact → passthroughXY → passthroughSC
+	 * Encode M4 into the provided command encoder: one compute pass of seven
+	 * dispatches, initBins → binPoints → findMinMax → emitOutput → compact →
+	 * passthroughXY → passthroughSC. Dispatches in one pass run in order and
+	 * see each other's writes.
 	 *
 	 * A frame whose x scale is not registered encodes nothing: the output keeps
 	 * what the last dispatch wrote rather than being binned through a guess.
+	 * So does a frame that would write what the last one did (see `#stale`).
+	 *
+	 * @param inputVersion — a number that changes whenever the input buffers'
+	 *   CONTENTS do. The renderer overwrites a buffer in place when the new rows
+	 *   fit, so the buffers being the same ones says nothing about what is in
+	 *   them. Left out (NaN), no frame is skipped.
 	 */
 	encode(
 		commandEncoder: GPUCommandEncoder,
 		inputBuffers: M4InputBuffers,
-		pointCount: number
+		pointCount: number,
+		inputVersion = NaN
 	): void {
 		if (!this.#configured || this.#numBins === 0 || pointCount === 0) return;
 		if (!this.#xScaleId || !this.#scales.writeScaleParams(this.#xScaleId, this.#xScale, 0)) return;
@@ -225,73 +253,89 @@ export class M4Decimator {
 			this.#pointCount = pointCount;
 			this.#updateConfig(pointCount);
 			this.#ensureOutputCapacity(pointCount);
+			this.#stale = true;
 		}
 
+		const last = this.#lastInputBuffers;
+		const sameBuffers =
+			last !== null &&
+			last.x === inputBuffers.x &&
+			last.y === inputBuffers.y &&
+			last.series === inputBuffers.series &&
+			last.color === inputBuffers.color;
 		this.#ensureInputBindGroups(inputBuffers);
 		this.#ensurePassthroughBindGroups(inputBuffers);
+
+		const x = this.#xScale;
+		const ran = this.#ranXScale;
+		if (
+			!this.#stale &&
+			sameBuffers &&
+			inputVersion === this.#ranInputVersion &&
+			x[0] === ran[0] &&
+			x[1] === ran[1] &&
+			x[2] === ran[2] &&
+			x[3] === ran[3]
+		) {
+			return;
+		}
+		ran.set(x);
+		this.#ranInputVersion = inputVersion;
+		this.#stale = false;
 
 		const totalBins = this.#numBins * this.#numSeries;
 		const pointWorkgroups = Math.ceil(pointCount / WORKGROUP_SIZE);
 		const binWorkgroups = Math.ceil(totalBins / WORKGROUP_SIZE);
 
-		// Pass 0: Decision + initialize bins
-		const initPass = commandEncoder.beginComputePass({ label: 'm4-init-bins' });
-		initPass.setPipeline(this.#initBinsPipeline!);
-		initPass.setBindGroup(0, this.#inputBindGroups.get('initBins')!);
-		initPass.setBindGroup(1, this.#controlBindGroup!);
-		initPass.dispatchWorkgroups(binWorkgroups);
-		initPass.end();
+		const pass = commandEncoder.beginComputePass(this.#passDescriptor);
 
-		// Pass 1: Count visible points + bin points (if decimating). Immediates
-		// are pass state and start unset in every pass, so 1 and 2 each push.
-		const binPass = commandEncoder.beginComputePass({ label: 'm4-bin-points' });
-		binPass.setPipeline(this.#binPointsPipeline!);
-		binPass.setBindGroup(0, this.#inputBindGroups.get('binPoints')!);
-		binPass.setBindGroup(1, this.#controlBindGroup!);
-		binPass.setImmediates(0, this.#xScale);
-		binPass.dispatchWorkgroups(pointWorkgroups);
-		binPass.end();
+		// 0: Decision + initialize bins
+		pass.setPipeline(this.#initBinsPipeline!);
+		pass.setBindGroup(0, this.#inputBindGroups.get('initBins')!);
+		pass.setBindGroup(1, this.#controlBindGroup!);
+		pass.dispatchWorkgroups(binWorkgroups);
 
-		// Pass 2: Find min/max indices (skips in passthrough mode)
-		const findPass = commandEncoder.beginComputePass({ label: 'm4-find-minmax' });
-		findPass.setPipeline(this.#findMinMaxPipeline!);
-		findPass.setBindGroup(0, this.#inputBindGroups.get('findMinMax')!);
-		findPass.setBindGroup(1, this.#controlBindGroup!);
-		findPass.setImmediates(0, this.#xScale);
-		findPass.dispatchWorkgroups(pointWorkgroups);
-		findPass.end();
+		// 1: Count visible points + bin points (if decimating). It and the next
+		// read the x scale as immediates; each pushes its own, after its
+		// pipeline, so neither relies on what the other left.
+		pass.setPipeline(this.#binPointsPipeline!);
+		pass.setBindGroup(0, this.#inputBindGroups.get('binPoints')!);
+		pass.setBindGroup(1, this.#controlBindGroup!);
+		pass.setImmediates(0, this.#xScale);
+		pass.dispatchWorkgroups(pointWorkgroups);
 
-		// Pass 3: Emit output (always runs — harmless in passthrough)
-		const emitPass = commandEncoder.beginComputePass({ label: 'm4-emit-output' });
-		emitPass.setPipeline(this.#emitOutputPipeline!);
-		emitPass.setBindGroup(0, this.#inputBindGroups.get('emitOutput')!);
-		emitPass.setBindGroup(1, this.#outputBindGroup!);
-		emitPass.dispatchWorkgroups(binWorkgroups);
-		emitPass.end();
+		// 2: Find min/max indices (skips in passthrough mode)
+		pass.setPipeline(this.#findMinMaxPipeline!);
+		pass.setBindGroup(0, this.#inputBindGroups.get('findMinMax')!);
+		pass.setBindGroup(1, this.#controlBindGroup!);
+		pass.setImmediates(0, this.#xScale);
+		pass.dispatchWorkgroups(pointWorkgroups);
 
-		// Pass 4: Compact + write indirect instance count (skips in passthrough)
-		const compactPass = commandEncoder.beginComputePass({ label: 'm4-compact' });
-		compactPass.setPipeline(this.#compactPipeline!);
-		compactPass.setBindGroup(0, this.#fillBindGroup!);
-		compactPass.setBindGroup(1, this.#controlBindGroup!);
-		compactPass.dispatchWorkgroups(this.#numSeries);
-		compactPass.end();
+		// 3: Emit output (always runs — harmless in passthrough)
+		pass.setPipeline(this.#emitOutputPipeline!);
+		pass.setBindGroup(0, this.#inputBindGroups.get('emitOutput')!);
+		pass.setBindGroup(1, this.#outputBindGroup!);
+		pass.dispatchWorkgroups(binWorkgroups);
 
-		// Pass 5a: Passthrough x,y copy + set indirect count (skips in decimate)
-		const ptXYPass = commandEncoder.beginComputePass({ label: 'm4-passthrough-xy' });
-		ptXYPass.setPipeline(this.#passthroughXYPipeline!);
-		ptXYPass.setBindGroup(0, this.#pass5aInputBindGroup!);
-		ptXYPass.setBindGroup(1, this.#pass5aOutputBindGroup!);
-		ptXYPass.dispatchWorkgroups(pointWorkgroups);
-		ptXYPass.end();
+		// 4: Compact + write indirect instance count (skips in passthrough)
+		pass.setPipeline(this.#compactPipeline!);
+		pass.setBindGroup(0, this.#fillBindGroup!);
+		pass.setBindGroup(1, this.#controlBindGroup!);
+		pass.dispatchWorkgroups(this.#numSeries);
 
-		// Pass 5b: Passthrough series,color copy (skips in decimate)
-		const ptSCPass = commandEncoder.beginComputePass({ label: 'm4-passthrough-sc' });
-		ptSCPass.setPipeline(this.#passthroughSCPipeline!);
-		ptSCPass.setBindGroup(0, this.#pass5bInputBindGroup!);
-		ptSCPass.setBindGroup(1, this.#pass5bOutputBindGroup!);
-		ptSCPass.dispatchWorkgroups(pointWorkgroups);
-		ptSCPass.end();
+		// 5a: Passthrough x,y copy + set indirect count (skips in decimate)
+		pass.setPipeline(this.#passthroughXYPipeline!);
+		pass.setBindGroup(0, this.#pass5aInputBindGroup!);
+		pass.setBindGroup(1, this.#pass5aOutputBindGroup!);
+		pass.dispatchWorkgroups(pointWorkgroups);
+
+		// 5b: Passthrough series,color copy (skips in decimate)
+		pass.setPipeline(this.#passthroughSCPipeline!);
+		pass.setBindGroup(0, this.#pass5bInputBindGroup!);
+		pass.setBindGroup(1, this.#pass5bOutputBindGroup!);
+		pass.dispatchWorkgroups(pointWorkgroups);
+
+		pass.end();
 	}
 
 	/**
@@ -381,6 +425,7 @@ export class M4Decimator {
 		const value = decision === 'decimate' ? 1 : 2;
 		if (this.#configData[7] === value) return; // no-op if unchanged
 		this.#configData[7] = value;
+		this.#stale = true;
 		if (this.#configBuffer) {
 			// Write decimationMode at buffer offset 28 (index 7 * 4 bytes)
 			this.#device.queue.writeBuffer(this.#configBuffer, 28, new Uint32Array([value]));
@@ -388,6 +433,7 @@ export class M4Decimator {
 	}
 
 	#updateConfig(pointCount: number): void {
+		this.#stale = true;
 		this.#configData[0] = pointCount;
 		this.#configData[1] = this.#numBins;
 		this.#configData[2] = this.#numSeries;
@@ -400,6 +446,7 @@ export class M4Decimator {
 	}
 
 	#allocateOutputBuffers(outputCount: number): void {
+		this.#stale = true;
 		const outputByteSize = Math.max(outputCount * 4, 16);
 		this.#outputCapacity = outputCount;
 
