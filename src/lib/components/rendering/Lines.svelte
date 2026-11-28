@@ -574,23 +574,21 @@
 		}
 	});
 
-	// Wire DotsRung render target — lets it write dotRadius directly to GPU buffer
+	// Wire DotsRung render target: its radius, one field of the constants. Through
+	// the renderer, not into a buffer taken here: the rung needs no buffer to
+	// exist when this runs, and never writes to one that has been replaced.
 	$effect(() => {
 		if (!dotsRung || !renderer?.resourcesCreated) {
 			dotsRung?.clearRenderTarget();
 			return;
 		}
 
-		const constantsBuffer = renderer.getBuffer(BINDINGS.CONSTANTS);
-		const device = gpuCoordinator?.device;
-		if (!constantsBuffer || !device) return;
-
 		const r = renderer; // capture for closure
 		const f32Buf = new Float32Array(1); // pre-allocated, reused per frame
 		dotsRung.setRenderTarget(
 			(radius: number) => {
 				f32Buf[0] = radius;
-				device.queue.writeBuffer(constantsBuffer, UNIFORM_OFFSETS.DOT_RADIUS, f32Buf);
+				r.writeBufferAt(BINDINGS.CONSTANTS, UNIFORM_OFFSETS.DOT_RADIUS, f32Buf);
 			},
 			() => r.invalidateLayer()
 		);

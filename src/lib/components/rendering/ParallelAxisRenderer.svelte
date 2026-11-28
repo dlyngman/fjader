@@ -326,11 +326,9 @@
 	export function uploadAxis(d: number): void {
 		if (d < 0 || d >= MAX_AXES || !ticksUploaded) return;
 		const r = renderer;
-		const buffer = r?.getBuffer(BINDINGS.TICKS);
-		if (!r || !buffer) return;
+		if (!r) return;
 		const base = d * AXIS_FLOATS;
-		webGPUContext.getDevice()!.queue.writeBuffer(buffer, base * 4, ticks, base, AXIS_FLOATS);
-		r.invalidateLayer();
+		if (r.writeBufferAt(BINDINGS.TICKS, base * 4, ticks, base, AXIS_FLOATS)) r.invalidateLayer();
 	}
 
 	// --- Constants: one reused buffer, written when any of them changes ---
