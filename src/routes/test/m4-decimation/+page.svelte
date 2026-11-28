@@ -17,6 +17,9 @@
 	 *             does not move
 	 *   pan       3 s, a drag in the x axis margin, there and back
 	 *   zoom      wheel in and out in the same margin
+	 *   pan-y     3 s, a drag in the y axis margin, there and back: the chart
+	 *             redraws on every frame and x does not move, so the
+	 *             decimator has nothing new to bin
 	 *   idle-end  1 s
 	 */
 	import { initFjader } from '$lib';
@@ -149,6 +152,16 @@
 				}
 				await sleep(700);
 			}
+			phase('pan-y');
+			const left = r.left - 10;
+			const up = (f) => r.top + r.height * f;
+			pointer(svg, moveType, left, up(0.4), 0);
+			await sleep(400);
+			pointer(svg, 'pointerdown', left, up(0.4), 1);
+			await sweep((t) => [left, up(0.4 + 0.2 * there(t))], 3000, 1);
+			pointer(svg, 'pointerup', left, up(0.4), 0);
+			await sleep(500);
+
 			pointer(svg, 'pointerleave', r.right + 1, r.top - 1);
 			pointer(svg.closest('.chart-cell') ?? svg, 'pointerleave', r.right + 1, r.top - 1);
 
@@ -236,7 +249,7 @@
 					? 'running…'
 					: done
 						? 'done: saved m4-session.json (reload to rerun)'
-						: 'Run session (12 s)'}
+						: 'Run session (16 s)'}
 			</button>
 			{#if running}<strong>don't move the mouse</strong>{/if}
 		</p>
