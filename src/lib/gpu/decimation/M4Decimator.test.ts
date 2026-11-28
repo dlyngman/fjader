@@ -15,14 +15,22 @@ function setup() {
 	const destroyed: string[] = [];
 	const buffer = (label = '') =>
 		({ label, destroy: () => destroyed.push(label) }) as unknown as GPUBuffer;
+	/** Every call that reaches the GPU's buffers and bind groups, by what it touched. */
+	const gpu: string[] = [];
 	const device = {
-		createBuffer: ({ label }: { label?: string }) => buffer(label),
+		createBuffer: ({ label }: { label?: string }) => {
+			gpu.push(`create ${label}`);
+			return buffer(label);
+		},
 		createShaderModule: () => ({}),
 		createBindGroupLayout: () => ({}),
 		createPipelineLayout: () => ({}),
 		createComputePipeline: ({ label }: { label?: string }) => ({ label }),
-		createBindGroup: () => ({}),
-		queue: { writeBuffer() {} }
+		createBindGroup: ({ label }: { label?: string }) => {
+			gpu.push(`bind ${label}`);
+			return { label };
+		},
+		queue: { writeBuffer: (b: { label: string }) => gpu.push(`write ${b.label}`) }
 	} as unknown as GPUDevice;
 	const encoder = {
 		beginComputePass({ label }: { label?: string }) {
@@ -55,7 +63,7 @@ function setup() {
 		m4.encode(encoder, buffers, points, version);
 		return [...log];
 	};
-	return { m4, scale, inputs, buffer, frame, retired, destroyed };
+	return { m4, scale, inputs, buffer, frame, retired, destroyed, gpu };
 }
 
 describe('M4Decimator.encode', () => {
@@ -150,8 +158,11 @@ describe('M4Decimator.encode', () => {
 	it('retires the buffers it replaces: the coming frame may still hold them', () => {
 		const { m4, frame, retired, destroyed } = setup();
 		frame();
-		// Other dimensions, from an effect: new bins and new outputs.
+		// Other dimensions, from an effect: new bins and new outputs, at the
+		// next encode.
 		m4.configure(900, 3, 'x');
+		expect(retired).toEqual([]);
+		frame();
 		expect(retired.map((b) => b.label).sort()).toEqual([
 			'm4-bins',
 			'm4-output-color',
@@ -169,6 +180,66 @@ describe('M4Decimator.encode', () => {
 			'm4-output-y'
 		]);
 		expect(destroyed).toEqual([]);
+	});
+
+	it('touches the GPU only in an encode: what an effect asks for is kept until then', () => {
+		const { m4, frame, gpu } = setup();
+		frame();
+		gpu.length = 0;
+		// As the mark's effects call them, between frames.
+		m4.configure(900, 4, 'x');
+		m4.setVertexCount(12);
+		m4.setDecimationMode('passthrough');
+		expect(gpu).toEqual([]);
+		// And they answer for what was asked, at once: effects read them.
+		expect(m4.configured).toBe(true);
+		expect(m4.outputSize).toBe(4 * 902 * 4);
+
+		frame();
+		expect(gpu).toContain('write m4-control');
+		expect(gpu).toContain('create m4-bins');
+		expect(gpu).toContain('create m4-output-x');
+		// The config once, with everything that changed in it.
+		expect(gpu.filter((c) => c === 'write m4-config')).toHaveLength(1);
+		gpu.length = 0;
+		frame();
+		expect(gpu).toEqual([]);
+	});
+
+	describe('bindForRender', () => {
+		const layout = {} as GPUBindGroupLayout;
+		const render = (gpu: string[]) => gpu.filter((c) => c === 'bind m4-render-bind-group');
+
+		it('makes the render bind group once the outputs exist, and not again for the same', () => {
+			const { m4, frame, buffer, gpu } = setup();
+			const constants = buffer('constants');
+			// Before the first encode there are no outputs to bind.
+			m4.bindForRender(layout, constants);
+			expect(m4.renderBindGroup).toBeNull();
+			frame();
+			expect(render(gpu)).toHaveLength(1);
+			expect(m4.renderBindGroup).not.toBeNull();
+			// Every frame calls it; the same two objects make nothing.
+			m4.bindForRender(layout, constants);
+			frame();
+			expect(render(gpu)).toHaveLength(1);
+		});
+
+		it('makes it again for another constants buffer, another layout, or other outputs', () => {
+			const { m4, frame, buffer, gpu } = setup();
+			const constants = buffer('constants');
+			m4.bindForRender(layout, constants);
+			frame();
+			// The renderer replaced its constants buffer.
+			m4.bindForRender(layout, buffer('constants-2'));
+			expect(render(gpu)).toHaveLength(2);
+			// The pipeline was rebuilt for other scale types.
+			m4.bindForRender({} as GPUBindGroupLayout, constants);
+			expect(render(gpu)).toHaveLength(3);
+			// More rows than the outputs hold: new outputs, inside the encode.
+			frame(50_000);
+			expect(render(gpu)).toHaveLength(4);
+		});
 	});
 
 	it('skips no frame when the input has no version', () => {

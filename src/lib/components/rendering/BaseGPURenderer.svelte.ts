@@ -327,6 +327,15 @@ export class BaseGPURenderer {
 	get pipeline(): GPURenderPipeline | null {
 		return this.#pipeline;
 	}
+	/**
+	 * The layout of group(1), the mark's own bindings: for a bind group made
+	 * elsewhere to be drawn through this renderer's pipeline (a decimator's
+	 * output). The one object for the pipeline's life: `getBindGroupLayout`
+	 * on the pipeline would make a new one at every call.
+	 */
+	get perDataLayout(): GPUBindGroupLayout | null {
+		return this.#perDataLayout;
+	}
 	get perDataBindGroup(): GPUBindGroup | null {
 		return this.#perDataBindGroup;
 	}
