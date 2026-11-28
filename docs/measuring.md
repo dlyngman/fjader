@@ -60,11 +60,27 @@ Run the same page and session on each, alternating (A, B, A, B, A, B) rather tha
 first, so drift (thermal, background work) spreads over both. Remove the worktree afterwards
 (`git worktree remove ../fjader-main`).
 
+**A port is a site, and a site has a cost of its own.** The browser keeps state per origin
+(storage, caches, what a page left behind), and `localhost:4173` and `localhost:4180` are two
+origins. One build served on each port, six and six, measured 0.1 to 0.15 ms more main-thread
+work per frame on 4173, in every phase, in frames that drew nothing too; with the builds swapped
+between the ports the difference went with the port, not the build. So for a difference of a few
+tenths of a millisecond:
+
+- **swap the ports half way** (A on 4180 and B on 4173, then A on 4173 and B on 4180), and compare
+  by build over both halves; or serve both from ports nothing has used;
+- **suspect the origin first when frames that do no work of yours differ** between the builds.
+  `m4-session.json` and `dash30-*.json` carry each submit's time, so a frame can be split into the
+  part before its submit, the part after, and frames with no submit at all.
+
+A count (statements, objects made, passes) does not have this problem: one run per build is enough.
+
 ## Instruments
 
 | Page                   | What it measures                                                                                                                                          | Options                                                                                                                                                                                                         | Scripted                                                                        | Log file                    |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | --------------------------- |
 | `/test/dashboard-30`   | 30 charts on one selection: per-frame main-thread and GPU time, dropped frames, text atlas uploads, WebGPU objects made, Long Animation Frames, per phase | `?labels=attached\|text\|0`, `?axes=0`, `?charts=N`, `?scale=N`, `?dots=0`, `?mutations=1` (costs time; off for timing runs), `?gputime=0` (no GPU timing: for GC runs), `?stack=js` (counts JS transform runs) | **Run session**: idle, toggle, clear, brush, unbrush, sort, pan, zoom, idle-end | `dash30-<variant>.json`     |
+| `/test/m4-decimation`  | Decimated lines (100K points, three series): per-frame main-thread and GPU time and WebGPU objects made, per phase                                        |                                                                                                                                                                                                                 | **Run session**: idle, hover, pan, zoom, pan-y, idle-end                        | `m4-session.json`           |
 | `/test/query-load`     | Every statement sent to DuckDB at load and during a brush: queue wait, work, connection                                                                   | `?mount=all\|visible\|top`, `?scale=10`, `?dots=0`, `?slow=1`, `?cat=1`, `?share=N`, `?tooltipSort=on\|off`                                                                                                     | **Scripted drag**: one brush sweep                                              | `qlog-<options>.json`       |
 | `/test/entrance`       | When each chart enters, and what held it                                                                                                                  | `?slow=1`                                                                                                                                                                                                       | **Replay**                                                                      | `qlog-entrance[-slow].json` |
 | `/test/click-session`  | Selection clicks: which reach the base table, and their cost                                                                                              | `?rows=N`, `?variant=eager\|patient`                                                                                                                                                                            | **Run session**: hovers, clicks, brush moves                                    | `clog-<tag>-<variant>.json` |
