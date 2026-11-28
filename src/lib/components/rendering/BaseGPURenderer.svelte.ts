@@ -769,6 +769,38 @@ export class BaseGPURenderer {
 	}
 
 	/**
+	 * Write `data` into part of `binding`'s buffer, from byte `offset`: one
+	 * field of a uniform (a radius an LOD rung animates), one axis's region of
+	 * a table. For a writer other than the component that writes the whole
+	 * buffer, so that it does not hold the buffer itself: a buffer is replaced
+	 * when its contents outgrow it, and a held one would then be the old one.
+	 *
+	 * `dataOffset` and `size` are in elements of `data` when it is a typed
+	 * array, as for `queue.writeBuffer`. A write of that moment: a later whole
+	 * write of the binding carries its own value for those bytes. False, and
+	 * nothing written, when the binding has no buffer yet: the whole write that
+	 * makes it brings the bytes.
+	 */
+	writeBufferAt(
+		binding: number,
+		offset: number,
+		data: AllowSharedBufferSource,
+		dataOffset = 0,
+		size?: number
+	): boolean {
+		const buffer = this.#ownedResources.buffers.get(binding);
+		if (!this.#device || !buffer) return false;
+		this.#device.queue.writeBuffer(
+			buffer,
+			offset,
+			data as ArrayBufferView<ArrayBuffer>,
+			dataOffset,
+			size
+		);
+		return true;
+	}
+
+	/**
 	 * Write data to a vertex buffer slot (not part of bind group).
 	 * Used for per-instance data like facet indices that should use
 	 * stepMode: 'instance' instead of storage buffers.
