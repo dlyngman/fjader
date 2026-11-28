@@ -290,12 +290,18 @@ export class M4Decimator {
 		if (!this.#configured || this.#numBins === 0 || pointCount === 0) return;
 		if (!this.#xScaleId || !this.#scales.writeScaleParams(this.#xScaleId, this.#xScale, 0)) return;
 
-		this.#apply();
-		if (pointCount !== this.#pointCount) {
+		// The row count first: buffers allocated for new dimensions are sized
+		// for it too, where sized for the old count they would be replaced at
+		// once (a line's first encode, with more rows than its bins' outputs).
+		const rowsChanged = pointCount !== this.#pointCount;
+		if (rowsChanged) {
 			this.#pointCount = pointCount;
+			this.#stale = true;
+		}
+		this.#apply();
+		if (rowsChanged) {
 			this.#updateConfig(pointCount);
 			this.#ensureOutputCapacity(pointCount);
-			this.#stale = true;
 		}
 		this.#writeConfig();
 

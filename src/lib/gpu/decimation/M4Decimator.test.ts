@@ -206,6 +206,14 @@ describe('M4Decimator.encode', () => {
 		expect(gpu).toEqual([]);
 	});
 
+	it('allocates its outputs once on a first encode with more rows than its bins hold', () => {
+		const { frame, gpu, retired } = setup();
+		// 800 bins of 3 series hold 9 624 points; the line has 100 000.
+		frame(100_000);
+		expect(gpu.filter((c) => c === 'create m4-output-x')).toHaveLength(1);
+		expect(retired).toEqual([]);
+	});
+
 	describe('bindForRender', () => {
 		const layout = {} as GPUBindGroupLayout;
 		const render = (gpu: string[]) => gpu.filter((c) => c === 'bind m4-render-bind-group');
