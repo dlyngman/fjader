@@ -85,7 +85,8 @@ const NO_BINDINGS: readonly number[] = [];
  * It is also the loop an owned clock joins — the clock does that itself.
  */
 export interface MorphHost extends ClockLoop {
-	registerMorphWork(key: string, work: MorphWork): void;
+	/** `charts`: where the work is drawn, asked each frame; it runs when one of them draws. */
+	registerMorphWork(key: string, work: MorphWork, charts: () => readonly string[]): void;
 	removeMorphWork(key: string): void;
 	/** Destroy `buffer` once the next frame is submitted (the coordinator's `retire`). */
 	retire(buffer: GPUBuffer): void;
@@ -513,7 +514,7 @@ export class MorphedChannels implements MorphWork {
 
 		if (!this.#registered) {
 			this.#registered = true;
-			this.#host.registerMorphWork(this.#label, this);
+			this.#host.registerMorphWork(this.#label, this, this.#affectedCharts);
 		}
 		return reallocated;
 	}
@@ -559,7 +560,7 @@ export class MorphedChannels implements MorphWork {
 		if (transitionsObserved()) noteTransition('morph', false, this.#affectedCharts, this.#label);
 		if (!this.#registered) {
 			this.#registered = true;
-			this.#host.registerMorphWork(this.#label, this);
+			this.#host.registerMorphWork(this.#label, this, this.#affectedCharts);
 		}
 	}
 

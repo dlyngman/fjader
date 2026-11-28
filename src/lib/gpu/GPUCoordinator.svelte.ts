@@ -28,6 +28,7 @@ import {
 import { frameUniformIsStale } from './frame-uniform-sync';
 import { immediatesSupported, IMMEDIATES_MISSING_MESSAGE } from './immediates';
 import type { MorphWork } from './MorphedChannels';
+import { drawsThisFrame } from './morph-gate';
 import { htmlInCanvasSupported, HTML_IN_CANVAS_MISSING_MESSAGE } from './text/TextAtlas.svelte';
 import {
 	COLOR_CONFIG_BYTES,
@@ -3268,18 +3269,22 @@ export class GPUCoordinator {
 	// per frame). `#morphStaged` is this frame's, between the two halves.
 	#morphWork = new Map<string, MorphWork>();
 	#morphList: MorphWork[] = [];
+	/** Beside `#morphList`, index for index: the charts each work is drawn in. */
+	#morphCharts: (() => readonly string[])[] = [];
 	#morphStaged: MorphWork[] = [];
 	#morphPassDescriptor: GPUComputePassDescriptor = { label: 'morph' };
 
 	/**
-	 * Register a mark's morph work: its folds, remaps and resolves, on every
-	 * rendered frame (it answers at once when at rest), before placement and
-	 * the render passes, which read what it resolves.
+	 * Register a mark's morph work: its folds, remaps and resolves, before
+	 * placement and the render passes, which read what it resolves. It runs on
+	 * the frames one of `charts` draws (`drawsThisFrame`): `charts` is asked
+	 * each frame and must return a held array.
 	 */
-	registerMorphWork(key: string, work: MorphWork): void {
+	registerMorphWork(key: string, work: MorphWork, charts: () => readonly string[]): void {
 		this.removeMorphWork(key);
 		this.#morphWork.set(key, work);
 		this.#morphList.push(work);
+		this.#morphCharts.push(charts);
 	}
 
 	removeMorphWork(key: string): void {
@@ -3287,7 +3292,9 @@ export class GPUCoordinator {
 		if (!work) return;
 		this.#morphWork.delete(key);
 		const at = this.#morphList.indexOf(work);
-		if (at >= 0) this.#morphList.splice(at, 1);
+		if (at < 0) return;
+		this.#morphList.splice(at, 1);
+		this.#morphCharts.splice(at, 1);
 	}
 
 	/**
@@ -3303,7 +3310,11 @@ export class GPUCoordinator {
 		const staged = this.#morphStaged;
 		// Empty already, unless a frame threw between the halves.
 		staged.length = 0;
+		const charts = this.#morphCharts;
+		const registered = this.#registeredCharts;
+		const frameId = this.#frameId;
 		for (let i = 0; i < list.length; i++) {
+			if (!drawsThisFrame(charts[i](), registered, frameId)) continue;
 			if (list[i].prepare(encoder)) staged.push(list[i]);
 		}
 		if (staged.length === 0) return;
@@ -3460,6 +3471,7 @@ export class GPUCoordinator {
 		this.#pendingLayers.clear();
 		this.#morphWork.clear();
 		this.#morphList.length = 0;
+		this.#morphCharts.length = 0;
 		this.#morphStaged.length = 0;
 		this.#destroyRetired();
 
