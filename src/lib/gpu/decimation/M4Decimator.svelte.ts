@@ -21,6 +21,8 @@
  *   decimator.setVertexCount(quadVertexCount);
  *   gpuCoordinator.registerComputeWork(key, (encoder) =>
  *       decimator.encode(encoder, inputBuffers, pointCount, inputVersion));
+ *   // in the same callback, before encode:
+ *   decimator.bindForRender(renderer.perDataLayout, constantsBuffer);
  *   passEncoder.setBindGroup(1, decimator.renderBindGroup);
  *   passEncoder.drawIndirect(decimator.indirectBuffer, 0);
  */
@@ -178,42 +180,66 @@ export class M4Decimator {
 		return this.#controlBuffer;
 	}
 
+	// What `configure`, `setVertexCount` and `setDecimationMode` ask for is kept
+	// and reaches the GPU at the next encode (`#apply`): they are called from
+	// effects, and the GPU is touched in the frame. `configured` and
+	// `outputSize` answer for what is WANTED, at once: effects read them.
+
+	/** The vertex count for drawIndirect, and whether the control buffer has it yet. */
+	#vertexCount = 0;
+	#vertexCountWritten = true;
+	#vertexCountData = new Uint32Array(1);
+	/** The dimensions the bin and output buffers were allocated for. */
+	#allocatedBins = 0;
+	#allocatedSeries = 0;
+	/** Whether `#configData` has changed since the config buffer was written. */
+	#configDirty = false;
+
 	/**
-	 * Set the vertex count for drawIndirect (curve-dependent).
-	 * Written to control buffer at byte 0 (vertexCount). Called once after renderer creation.
+	 * Set the vertex count for drawIndirect (curve-dependent): byte 0 of the
+	 * control buffer, written at the next encode.
 	 */
 	setVertexCount(count: number): void {
-		if (!this.#controlBuffer) return;
-		const data = new Uint32Array([count]);
-		this.#device.queue.writeBuffer(this.#controlBuffer, 0, data);
+		if (count === this.#vertexCount) return;
+		this.#vertexCount = count;
+		this.#vertexCountWritten = false;
 		this.#stale = true;
 	}
 
 	/**
-	 * Configure dimensions and allocate buffers.
-	 * Call when chart width or series count changes.
+	 * Configure dimensions; the buffers for them are allocated at the next
+	 * encode. Call when chart width or series count changes.
 	 * @param xScaleId — the scale to bin by. Its params are looked up on every
 	 *   dispatch, so they are the ones the chart draws through that frame.
 	 */
 	configure(numBins: number, numSeries: number, xScaleId: string | null): void {
 		const internalBins = numBins + 2;
-		const dimsChanged = internalBins !== this.#numBins || numSeries !== this.#numSeries;
-
 		if (xScaleId !== this.#xScaleId) this.#stale = true;
 		this.#xScaleId = xScaleId;
+		if (internalBins === this.#numBins && numSeries === this.#numSeries) return;
+		this.#numBins = internalBins;
+		this.#numSeries = numSeries;
+		this.#stale = true;
+		this.#configured = true;
+	}
 
-		if (!dimsChanged) return;
+	/**
+	 * Bring the GPU to what was asked for since the last encode. In the frame:
+	 * called at the top of `encode`.
+	 */
+	#apply(): void {
+		if (!this.#vertexCountWritten && this.#controlBuffer) {
+			this.#vertexCountData[0] = this.#vertexCount;
+			this.#device.queue.writeBuffer(this.#controlBuffer, 0, this.#vertexCountData);
+			this.#vertexCountWritten = true;
+		}
+		if (this.#numBins !== this.#allocatedBins || this.#numSeries !== this.#allocatedSeries) {
+			this.#allocatedBins = this.#numBins;
+			this.#allocatedSeries = this.#numSeries;
+			const totalBins = this.#numBins * this.#numSeries;
 
-		if (dimsChanged) {
-			this.#numBins = internalBins;
-			this.#numSeries = numSeries;
-
-			const totalBins = internalBins * numSeries;
-			const m4OutputCount = totalBins * 4;
-			const outputCount = Math.max(m4OutputCount, this.#pointCount);
-
-			// Reallocate bin buffer. The old one is retired, as the outputs are:
-			// a bind group made before this may still be set in the coming frame.
+			// The old buffers are retired, not destroyed: a bind group made before
+			// this may still be set in the frame being built.
 			if (this.#binBuffer) this.#scales.retire(this.#binBuffer);
 			this.#binBuffer = this.#device.createBuffer({
 				size: Math.max(totalBins * M4_BIN_SIZE, 16),
@@ -221,14 +247,23 @@ export class M4Decimator {
 				label: 'm4-bins'
 			});
 
-			this.#allocateOutputBuffers(outputCount);
+			this.#allocateOutputBuffers(Math.max(totalBins * 4, this.#pointCount));
 			this.#inputBindGroups.clear();
 			this.#pass5aInputBindGroup = null;
 			this.#pass5bInputBindGroup = null;
+			this.#updateConfig(this.#pointCount);
 		}
+	}
 
-		this.#updateConfig(this.#pointCount);
-		this.#configured = true;
+	/** The config as the shaders read it, when it changed: after everything that changes it. */
+	#writeConfig(): void {
+		if (!this.#configDirty) return;
+		this.#configDirty = false;
+		this.#device.queue.writeBuffer(
+			this.#configBuffer!,
+			0,
+			this.#configData as Uint32Array<ArrayBuffer>
+		);
 	}
 
 	/**
@@ -255,12 +290,20 @@ export class M4Decimator {
 		if (!this.#configured || this.#numBins === 0 || pointCount === 0) return;
 		if (!this.#xScaleId || !this.#scales.writeScaleParams(this.#xScaleId, this.#xScale, 0)) return;
 
-		if (pointCount !== this.#pointCount) {
+		// The row count first: buffers allocated for new dimensions are sized
+		// for it too, where sized for the old count they would be replaced at
+		// once (a line's first encode, with more rows than its bins' outputs).
+		const rowsChanged = pointCount !== this.#pointCount;
+		if (rowsChanged) {
 			this.#pointCount = pointCount;
-			this.#updateConfig(pointCount);
-			this.#ensureOutputCapacity(pointCount);
 			this.#stale = true;
 		}
+		this.#apply();
+		if (rowsChanged) {
+			this.#updateConfig(pointCount);
+			this.#ensureOutputCapacity(pointCount);
+		}
+		this.#writeConfig();
 
 		const last = this.#lastInputBuffers;
 		const sameBuffers =
@@ -345,12 +388,23 @@ export class M4Decimator {
 	}
 
 	/**
-	 * Create a bind group compatible with the render pipeline's group(1) layout.
-	 * Uses M4 output buffers for data slots (0-3) and the renderer's
-	 * markConstants buffer for slot 4.
-	 * Stores references so the bind group can be auto-rebuilt after output buffer reallocation.
+	 * What the line draws the output through: the render pipeline's group(1)
+	 * layout and the renderer's constants buffer (slot 4, beside the output
+	 * buffers in slots 0-3). Called in the frame, before `encode`, every time:
+	 * the bind group is made again only when one of the two is another object,
+	 * or when the output buffers are (an encode that reallocates them).
+	 *
+	 * In the frame and not from the component's effect, which would have to
+	 * read the constants buffer right after writing it: a write that is applied
+	 * later has made no buffer yet.
 	 */
-	createRenderBindGroup(perDataLayout: GPUBindGroupLayout, markConstantsBuffer: GPUBuffer): void {
+	bindForRender(perDataLayout: GPUBindGroupLayout, markConstantsBuffer: GPUBuffer): void {
+		if (
+			perDataLayout === this.#renderBindGroupLayout &&
+			markConstantsBuffer === this.#renderMarkConstantsBuffer
+		) {
+			return;
+		}
 		this.#renderBindGroupLayout = perDataLayout;
 		this.#renderMarkConstantsBuffer = markConstantsBuffer;
 		this.#rebuildRenderBindGroup();
@@ -372,8 +426,8 @@ export class M4Decimator {
 		});
 	}
 
-	// Reactive — tracked by Lines.svelte drawLines callback
-	renderBindGroup: GPUBindGroup | null = $state(null);
+	/** Read by the line's draw callback, in the frame: plain, nothing reacts to it. */
+	renderBindGroup: GPUBindGroup | null = null;
 
 	destroy(): void {
 		this.#configBuffer?.destroy();
@@ -424,18 +478,15 @@ export class M4Decimator {
 	}
 
 	/**
-	 * Set decimation mode. Writes to config.decimationMode field:
+	 * Set decimation mode: the config's decimationMode field, written at the next encode:
 	 * 'decimate' (1) → M4 decimation active, 'passthrough' (2) → raw data passthrough.
 	 */
 	setDecimationMode(decision: 'decimate' | 'passthrough'): void {
 		const value = decision === 'decimate' ? 1 : 2;
 		if (this.#configData[7] === value) return; // no-op if unchanged
 		this.#configData[7] = value;
+		this.#configDirty = true;
 		this.#stale = true;
-		if (this.#configBuffer) {
-			// Write decimationMode at buffer offset 28 (index 7 * 4 bytes)
-			this.#device.queue.writeBuffer(this.#configBuffer, 28, new Uint32Array([value]));
-		}
 	}
 
 	#updateConfig(pointCount: number): void {
@@ -443,12 +494,9 @@ export class M4Decimator {
 		this.#configData[0] = pointCount;
 		this.#configData[1] = this.#numBins;
 		this.#configData[2] = this.#numSeries;
-		// Indices 3-6 reserved, index 7 = decimationMode (JS decision) preserved
-		this.#device.queue.writeBuffer(
-			this.#configBuffer!,
-			0,
-			this.#configData as Uint32Array<ArrayBuffer>
-		);
+		// Indices 3-6 reserved, index 7 = decimationMode (JS decision) preserved.
+		// Written by `#writeConfig`, once per encode.
+		this.#configDirty = true;
 	}
 
 	#allocateOutputBuffers(outputCount: number): void {
@@ -457,8 +505,8 @@ export class M4Decimator {
 		this.#outputCapacity = outputCount;
 
 		for (const key of ['x', 'y', 'series', 'color'] as const) {
-			// Retired: this runs from an effect and from inside `encode`, where
-			// the frame being encoded may already hold the old buffers.
+			// Retired: this runs inside `encode`, where the frame being encoded
+			// may already hold the old buffers.
 			const old = this.#outputBuffers[key];
 			if (old) this.#scales.retire(old);
 			this.#outputBuffers[key] = this.#device.createBuffer({

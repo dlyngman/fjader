@@ -562,15 +562,6 @@
 			view.setUint32(UNIFORM_OFFSETS.GRID_SERIES, grid?.series ?? 0, LE);
 
 			renderer.writeUniform(BINDINGS.CONSTANTS, new Uint8Array(buffer));
-
-			// Rebuild M4 render bind group (references current output buffers + markConstants)
-			if (decimator?.configured) {
-				const perDataLayout = renderer.pipeline.getBindGroupLayout(1);
-				const markConstantsBuffer = renderer.getBuffer(BINDINGS.CONSTANTS);
-				if (perDataLayout && markConstantsBuffer) {
-					decimator.createRenderBindGroup(perDataLayout, markConstantsBuffer);
-				}
-			}
 		}
 	});
 
@@ -635,6 +626,12 @@
 				inputs.color = renderer.getBuffer(BINDINGS.COLOR);
 
 				if (!inputs.x || !inputs.y || !inputs.series || !inputs.color) return;
+
+				// What the output is drawn through, asked here, in the frame: the
+				// constants buffer exists by now, and is the current one.
+				const layout = renderer.perDataLayout;
+				const constants = renderer.getBuffer(BINDINGS.CONSTANTS);
+				if (layout && constants) m4.bindForRender(layout, constants);
 
 				// The contents' version lets a frame that would bin the same rows
 				// through the same scale be skipped. Not with a morphing channel:
